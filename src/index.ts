@@ -12,3 +12,17 @@ export {
 	NoiseTransport,
 	NoiseXxHandshake,
 } from './crypto/noise.js'
+export {
+	SignalCipher,
+	MemorySignalStorage,
+	createSignalCipher,
+	newIdentityKeyPair,
+	newPreKeys,
+	newSignedPreKey,
+} from './crypto/signal.js'
+export type {
+	SignalStorage,
+	PreKeyBundleInput,
+	EncryptedMessage,
+	DecryptedMessage,
+} from './crypto/signal.js'
