@@ -10,6 +10,7 @@ import {
 	startXxHandshake,
 } from '../crypto/noise.js'
 import type { NoiseXxHandshake } from '../crypto/noise.js'
+import { ensureWasm } from '../wasm-init.js'
 import type { ProtocolLogger } from '../logging/protocol-logger.js'
 
 export const WA_WS_URL = 'wss://web.whatsapp.com/ws/chat'
@@ -60,7 +61,7 @@ export class Connection {
 	#state: 'idle' | 'handshake' | 'open' | 'closed' = 'idle'
 	#hs: NoiseXxHandshake | undefined
 	#transport: NoiseTransport | undefined
-	readonly #decoder = new FrameDecoder()
+	readonly #decoder: FrameDecoder
 	#firstFrameSent = false
 
 	constructor(
@@ -69,7 +70,10 @@ export class Connection {
 		private readonly clientPayload: Uint8Array,
 		private readonly events: ConnectionEvents,
 		private readonly url = WA_WS_URL,
-	) {}
+	) {
+		ensureWasm()
+		this.#decoder = new FrameDecoder()
+	}
 
 	get state() {
 		return this.#state
