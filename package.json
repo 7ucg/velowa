@@ -22,10 +22,13 @@
 		"lint": "tsc --noEmit && eslint src",
 		"format": "prettier --write src",
 		"test": "vitest run",
-		"prepack": "npm run build"
+		"prepack": "npm run build",
+		"pair": "tsc -p tsconfig.json && node dist/cli/pair.js"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",
+		"@types/qrcode-terminal": "^0.12.2",
+		"@types/ws": "^8.18.2",
 		"eslint": "^9",
 		"eslint-config-prettier": "^10.1.8",
 		"prettier": "^3.5.3",
@@ -34,10 +37,13 @@
 		"vitest": "^3.2.0"
 	},
 	"dependencies": {
-		"protobufjs": "^7.6.1"
+		"protobufjs": "^7.6.1",
+		"qrcode-terminal": "^0.12.0",
+		"ws": "^8.22.1"
 	},
 	"files": [
 		"dist",
+		"proto/WAProto.proto",
 		"LICENSE",
 		"README.md"
 	],

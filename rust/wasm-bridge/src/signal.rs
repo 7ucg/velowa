@@ -674,3 +674,21 @@ pub fn generate_pre_keys(start: u32, count: u32) -> Result<js_sys::Array, JsErro
     }
     Ok(arr)
 }
+
+/// XEdDSA signature (64 bytes) over `message` with a raw 32-byte X25519 private key.
+#[wasm_bindgen(js_name = curveSign)]
+pub fn curve_sign(private_key: &[u8], message: &[u8]) -> Result<Vec<u8>, JsError> {
+    let key = PrivateKey::deserialize(private_key).map_err(err)?;
+    Ok(key
+        .calculate_signature(message, &mut rand::rng())
+        .map_err(err)?
+        .to_vec())
+}
+
+/// Verify an XEdDSA signature against a raw 32-byte (or type-prefixed 33-byte) public key.
+#[wasm_bindgen(js_name = curveVerify)]
+pub fn curve_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
+    PublicKey::try_from(with_type_prefix(public_key).as_slice())
+        .map(|k| k.verify_signature(message, signature))
+        .unwrap_or(false)
+}

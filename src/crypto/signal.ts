@@ -10,6 +10,8 @@ import {
 	generateIdentityKeyPair,
 	generatePreKeys,
 	generateSignedPreKey,
+	curveSign,
+	curveVerify,
 } from '../wasm/velowa_wasm_bridge.js'
 import type {
 	DecryptedMessage,
@@ -117,4 +119,20 @@ export class MemorySignalStorage implements SignalStorage {
 		this.#senderKeys.set(key, record.slice())
 		return Promise.resolve()
 	}
+}
+
+/** XEdDSA signature over `message` with a raw 32-byte private key. */
+export function xeddsaSign(privateKey: Uint8Array, message: Uint8Array): Uint8Array {
+	ensureWasm()
+	return curveSign(privateKey, message)
+}
+
+/** Verify an XEdDSA signature (raw 32-byte public key). */
+export function xeddsaVerify(
+	publicKey: Uint8Array,
+	message: Uint8Array,
+	signature: Uint8Array,
+): boolean {
+	ensureWasm()
+	return curveVerify(publicKey, message, signature)
 }
