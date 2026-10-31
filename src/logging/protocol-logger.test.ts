@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -55,5 +55,16 @@ describe('ProtocolLogger', () => {
 		expect(log.sessionDir).toBeUndefined()
 		expect(existsSync(join(dir))).toBe(true)
 		expect(readdirSync(dir)).toEqual([])
+	})
+
+	it('escapes wire data in the XML log and restricts file permissions', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'velowa-log-'))
+		const log = new ProtocolLogger({ dir })
+		log.node('recv', { tag: 'x', attrs: { a: '"><forged/>\n' }, content: '<b>' })
+		const xml = readFileSync(join(log.sessionDir!, 'nodes.xml.log'), 'utf8')
+		expect(xml).not.toContain('<forged/>')
+		expect(xml).toContain('&lt;b&gt;')
+		expect(statSync(log.sessionDir!).mode & 0o077).toBe(0)
+		expect(statSync(join(log.sessionDir!, 'events.jsonl')).mode & 0o077).toBe(0)
 	})
 })

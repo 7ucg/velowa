@@ -1,5 +1,5 @@
 import { randomBytes, randomInt } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { newIdentityKeyPair, newSignedPreKey } from '../crypto/signal.js'
 import type { IdentityKeys } from '../crypto/signal.js'
@@ -57,8 +57,10 @@ function reviver(_k: string, v: unknown): unknown {
 }
 
 export function saveAuthCreds(path: string, creds: AuthCreds): void {
-	mkdirSync(dirname(path), { recursive: true })
+	mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
 	writeFileSync(path, JSON.stringify(creds, replacer, 2), { mode: 0o600 })
+	// `mode` only applies when the file is created; tighten an existing one too.
+	chmodSync(path, 0o600)
 }
 
 export function loadAuthCreds(path: string): AuthCreds | undefined {

@@ -38,7 +38,7 @@ export class ProtocolLogger {
 		if (!this.enabled) return
 		const stamp = new Date().toISOString().replace(/[:.]/g, '-')
 		this.sessionDir = join(options.dir ?? 'logs', `${options.label ?? 'session'}-${stamp}`)
-		mkdirSync(this.sessionDir, { recursive: true })
+		mkdirSync(this.sessionDir, { recursive: true, mode: 0o700 })
 		this.event('logger.start', { pid: process.pid, node: process.version, argv: process.argv })
 	}
 
@@ -100,7 +100,7 @@ export class ProtocolLogger {
 	#append(file: string, line: string): void {
 		if (!this.enabled || !this.sessionDir) return
 		try {
-			appendFileSync(join(this.sessionDir, file), line)
+			appendFileSync(join(this.sessionDir, file), line, { mode: 0o600 })
 		} catch {
 			// Logging must never take the connection down.
 		}
@@ -138,14 +138,25 @@ function printable(bytes: Uint8Array): string | undefined {
 
 export function toXml(node: BinaryNode, indent = ''): string {
 	const attrs = Object.entries(node.attrs)
-		.map(([k, v]) => ` ${k}="${v}"`)
+		.map(([k, v]) => ` ${escapeXml(k)}="${escapeXml(v)}"`)
 		.join('')
 	const c = node.content
 	if (c === undefined) return `${indent}<${node.tag}${attrs}/>`
-	if (typeof c === 'string') return `${indent}<${node.tag}${attrs}>${c}</${node.tag}>`
+	if (typeof c === 'string') return `${indent}<${node.tag}${attrs}>${escapeXml(c)}</${node.tag}>`
 	if (c instanceof Uint8Array) {
 		const text = printable(c)
 		return `${indent}<${node.tag}${attrs}>${text !== undefined && text.length > 0 ? text : `{${c.length} bytes: ${Buffer.from(c).toString('hex')}}`}</${node.tag}>`
 	}
 	return `${indent}<${node.tag}${attrs}>\n${c.map((n) => toXml(n, indent + '  ')).join('\n')}\n${indent}</${node.tag}>`
+}
+
+/** Escape markup and control characters so wire data cannot forge extra log lines or tags. */
+function escapeXml(value: string): string {
+	return value
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, (c) => `&#x${c.charCodeAt(0).toString(16)};`)
+		.replace(/\n/g, '&#xa;')
 }
