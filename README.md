@@ -6,7 +6,7 @@ crypto — are ported once from [`whatsapp-rust`](https://github.com/jlucaso1/wh
 crates and compiled to WebAssembly; everything else is new, properly-typed TypeScript, designed for
 this project rather than ported from anywhere.
 
-**This repo is a skeleton.** For the full brief — what's decided, what's intentionally left to your
+For the full brief — what's decided, what's intentionally left to your
 judgment, the reasoning behind both — read [`prompt.md`](./prompt.md). For the phased task breakdown,
 read [`TODO.md`](./TODO.md).
 
@@ -30,4 +30,25 @@ fresh design rather than a port of `baron-baileys-v2`.
 
 ## Status
 
-Pre-Phase-0. Nothing built yet. See `TODO.md`.
+Rust bindings for all four subsystems exist and are tested offline (WABinary, Noise XX + framing,
+Signal sessions/sender keys, app-state). The client spine (connect, pair, reconnect, send/receive)
+and feature breadth are **not written yet**, and nothing has been verified against a live WhatsApp
+server. See `TODO.md` for exactly what is and is not proven.
+
+## Quick start
+
+```bash
+npm install
+npm run build        # wasm-pack build + tsc (needs Rust 1.94 and wasm-pack)
+npm test
+```
+
+```ts
+import { encodeNode, decodeNode, createSignalCipher, MemorySignalStorage, newIdentityKeyPair } from 'velowa'
+
+const bytes = encodeNode({ tag: 'iq', attrs: { id: '1', type: 'get' } })
+const node = decodeNode(bytes)
+```
+
+Design departures from Baileys and the reasoning behind each binding are in
+[`docs/design-decisions.md`](docs/design-decisions.md).

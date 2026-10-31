@@ -17,11 +17,12 @@
 	"license": "MIT",
 	"scripts": {
 		"build:wasm": "wasm-pack build rust/wasm-bridge --target web --out-dir ../../src/wasm",
-		"build": "npm run build:wasm && tsc -p tsconfig.json && rm -rf dist/wasm && cp -r src/wasm dist/wasm",
+		"build": "npm run build:wasm && tsc -p tsconfig.json && rm -rf dist/wasm && cp -r src/wasm dist/wasm && rm -f dist/wasm/.gitignore dist/wasm/package.json",
 		"typecheck": "tsc --noEmit",
 		"lint": "tsc --noEmit && eslint src",
 		"format": "prettier --write src",
-		"test": "vitest run"
+		"test": "vitest run",
+		"prepack": "npm run build"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",
@@ -34,5 +35,22 @@
 	},
 	"dependencies": {
 		"protobufjs": "^7.6.1"
-	}
+	},
+	"files": [
+		"dist",
+		"LICENSE",
+		"README.md"
+	],
+	"keywords": [
+		"whatsapp",
+		"whatsapp-web",
+		"wasm",
+		"signal-protocol",
+		"typescript"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/7ucg/velowa.git"
+	},
+	"sideEffects": false
 }

@@ -1183,10 +1183,18 @@ dependencies = [
 name = "velowa-wasm-bridge"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "console_error_panic_hook",
  "js-sys",
+ "rand",
+ "serde_json",
+ "wacore-appstate",
  "wacore-binary",
+ "wacore-libsignal",
+ "wacore-noise",
+ "waproto",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
 ]
 
