@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { deflateSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { decodeNode, encodeNode } from './index.js'
@@ -65,5 +66,43 @@ describe('WABinary codec (wasm)', () => {
 		const inner = encodeNode({ tag: 'message', attrs: {}, content: 'receipt' }).subarray(1)
 		const frame = Uint8Array.from([2, ...deflateSync(inner)])
 		expect(decodeNode(frame).tag).toBe('message')
+	})
+})
+
+// Real frames captured from the live WhatsApp Web endpoint (decrypted stanzas, server -> client).
+// Only frames without personal identifiers are committed.
+interface LiveCapture {
+	tag: string
+	hex: string
+}
+const live = JSON.parse(
+	readFileSync(new URL('./fixtures/live-captures.json', import.meta.url), 'utf8'),
+) as LiveCapture[]
+
+describe('live captures', () => {
+	it('decodes every captured frame', () => {
+		expect(live.length).toBeGreaterThan(5)
+		for (const c of live) expect(decodeNode(Buffer.from(c.hex, 'hex')).tag).toBe(c.tag)
+	})
+
+	it('round-trips every captured frame to an identical node', () => {
+		for (const c of live) {
+			const node = decodeNode(Buffer.from(c.hex, 'hex'))
+			expect(decodeNode(encodeNode(node))).toEqual(node)
+		}
+	})
+
+	// Byte equality is deliberately not asserted: the server and our encoder pick different but
+	// equivalent forms (bare server JID as JID_PAIR `fa 00 03` vs token `03`; "515" as raw string vs
+	// nibble-packed). Both decode to the same node, which is what the round trip above checks.
+
+	it('decodes the real pair-device iq and stream:error', () => {
+		const pair = live.find((c) => c.tag === 'iq' && c.hex.length > 1000)!
+		const node = decodeNode(Buffer.from(pair.hex, 'hex'))
+		const pd = (node.content as BinaryNode[])[0]!
+		expect(pd.tag).toBe('pair-device')
+		expect((pd.content as BinaryNode[]).filter((n) => n.tag === 'ref')).toHaveLength(6)
+		const err = decodeNode(Buffer.from(live.find((c) => c.tag === 'stream:error')!.hex, 'hex'))
+		expect(err.attrs).toEqual({ code: '515' })
 	})
 })
