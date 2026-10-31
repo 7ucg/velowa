@@ -1,5 +1,9 @@
 import { readFileSync } from 'node:fs'
-import { decodeNode as wasmDecode, encodeNode as wasmEncode, initSync } from '../wasm/velowa_wasm_bridge.js'
+import {
+	decodeNode as wasmDecode,
+	encodeNode as wasmEncode,
+	initSync,
+} from '../wasm/velowa_wasm_bridge.js'
 import type { BinaryNode } from '../wasm/velowa_wasm_bridge.js'
 
 export type { BinaryNode }

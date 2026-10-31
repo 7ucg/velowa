@@ -1,3 +1,4 @@
+import { deflateSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { decodeNode, encodeNode } from './index.js'
 import type { BinaryNode } from './index.js'
@@ -9,9 +10,13 @@ describe('WABinary codec (wasm)', () => {
 			attrs: { id: 'ABC123', to: '12345678901@s.whatsapp.net', type: 'get', xmlns: 'usync' },
 			content: [
 				{ tag: 'usync', attrs: { mode: 'query' }, content: [{ tag: 'user', attrs: {} }] },
-				{ tag: 'enc', attrs: { v: '2', type: 'msg' }, content: new Uint8Array([0, 1, 2, 250, 255]) },
-				{ tag: 'text', attrs: {}, content: 'hello wörld' }
-			]
+				{
+					tag: 'enc',
+					attrs: { v: '2', type: 'msg' },
+					content: new Uint8Array([0, 1, 2, 250, 255]),
+				},
+				{ tag: 'text', attrs: {}, content: 'hello wörld' },
+			],
 		}
 		const bytes = encodeNode(node)
 		expect(bytes[0]).toBe(0) // plain format byte
@@ -26,7 +31,11 @@ describe('WABinary codec (wasm)', () => {
 	it('re-encodes a decoded node to identical bytes (JIDs stay JIDs)', () => {
 		const node: BinaryNode = {
 			tag: 'message',
-			attrs: { from: '4915112345678:7@s.whatsapp.net', to: '123456789-1600000000@g.us', id: '3EB0A1B2C3' }
+			attrs: {
+				from: '4915112345678:7@s.whatsapp.net',
+				to: '123456789-1600000000@g.us',
+				id: '3EB0A1B2C3',
+			},
 		}
 		const first = encodeNode(node)
 		const second = encodeNode(decodeNode(first))
@@ -36,6 +45,25 @@ describe('WABinary codec (wasm)', () => {
 	it('rejects malformed input with a thrown Error', () => {
 		expect(() => decodeNode(new Uint8Array([]))).toThrow()
 		expect(() => decodeNode(new Uint8Array([0, 0xff, 0xff]))).toThrow()
-		expect(() => encodeNode({ tag: 'x', attrs: { a: 1 as unknown as string } })).toThrow(/must be a string/)
+		expect(() => encodeNode({ tag: 'x', attrs: { a: 1 as unknown as string } })).toThrow(
+			/must be a string/,
+		)
+	})
+
+	// Not a live capture (none available yet, see TODO Phase 1): hand-derived from the
+	// public WABinary spec and node's independent zlib, so they do not just echo our own encoder.
+	it('matches the spec bytes for <message>receipt</message>', () => {
+		// 0 = plain format byte, 248 = LIST_8, 2 = tag + content, 19 = token "message", 7 = token "receipt"
+		const spec = Uint8Array.from([0, 248, 2, 19, 7])
+		expect(Array.from(encodeNode({ tag: 'message', attrs: {}, content: 'receipt' }))).toEqual(
+			Array.from(spec),
+		)
+		expect(decodeNode(spec).tag).toBe('message')
+	})
+
+	it('inflates a zlib-compressed frame produced by node zlib', () => {
+		const inner = encodeNode({ tag: 'message', attrs: {}, content: 'receipt' }).subarray(1)
+		const frame = Uint8Array.from([2, ...deflateSync(inner)])
+		expect(decodeNode(frame).tag).toBe('message')
 	})
 })
