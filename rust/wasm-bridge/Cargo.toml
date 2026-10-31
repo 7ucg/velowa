@@ -1,0 +1,21 @@
+[package]
+name = "velowa-wasm-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Thin wasm-bindgen bridge exposing the vendored wacore-{binary,libsignal,noise,appstate} crates to src/"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Phase 1+ adds path dependencies on the vendored crates as each one is
+# wired in, e.g.:
+# wacore-binary = { path = "../wacore-binary" }
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

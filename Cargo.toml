@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["rust/wasm-bridge"]
+# Phase 0 adds the vendored crates here once they're copied in and compiling
+# standalone (see TODO.md Phase 0 ordering: derive + binary first, then
+# libsignal, then noise + appstate):
+#   "rust/wacore-derive",
+#   "rust/wacore-binary",
+#   "rust/wacore-libsignal",
+#   "rust/wacore-noise",
+#   "rust/wacore-appstate",
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/7ucg/velowa"
+
+# wasm-bindgen output is size-sensitive — optimize for size, not speed.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

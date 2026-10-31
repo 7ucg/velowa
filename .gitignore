@@ -1,0 +1,8 @@
+/target
+/node_modules
+/dist
+/src/wasm
+*.log
+.DS_Store
+/prompt.md
+/TODO.md
