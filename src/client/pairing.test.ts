@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- protobufjs toObject results are untyped in tests */
 import { createHmac } from 'node:crypto'
 import protobuf from 'protobufjs'
 import { describe, expect, it } from 'vitest'
