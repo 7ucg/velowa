@@ -1,12 +1,13 @@
 //! Thin wasm-bindgen bridge over the vendored wacore-{binary,libsignal,noise,
 //! appstate} crates. See `/prompt.md` (repo root) for the architecture this
-//! crate is responsible for, and `/TODO.md` for the phased build-out — modules are added per phase (Phase 1: `binary`).
+//! crate is responsible for, and `/TODO.md` for the phased build-out — modules are added per phase (Phase 1: `binary`, Phase 2: `noise`).
 //!
 //! Keep this crate thin: no protocol orchestration, no state held across
 //! calls unless a wrapped crate's own API requires it. Orchestration stays
 //! in src/Socket (ported from baron-baileys-v2), same as it is today.
 
 pub mod binary;
+pub mod noise;
 
 use wasm_bindgen::prelude::*;
 

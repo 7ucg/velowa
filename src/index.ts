@@ -4,3 +4,11 @@ export { MemoryAuthStore } from './auth/store.js'
 export type { AuthStore } from './auth/store.js'
 export { encodeNode, decodeNode } from './codec/index.js'
 export type { BinaryNode } from './codec/index.js'
+export {
+	startXxHandshake,
+	connHeader,
+	encodeFrame,
+	FrameDecoder,
+	NoiseTransport,
+	NoiseXxHandshake,
+} from './crypto/noise.js'

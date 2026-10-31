@@ -101,7 +101,9 @@ fn node_from_js(v: &JsValue) -> Result<Node, JsError> {
             .collect::<Result<Vec<_>, _>>()?;
         Some(NodeContent::Nodes(children))
     } else {
-        return Err(err("node.content must be string | Uint8Array | BinaryNode[]"));
+        return Err(err(
+            "node.content must be string | Uint8Array | BinaryNode[]",
+        ));
     };
 
     Ok(Node::new(tag, attrs, content))
