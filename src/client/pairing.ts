@@ -1,21 +1,9 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
-import protobuf from 'protobufjs'
 import type { AuthCreds } from '../auth/creds.js'
 import type { BinaryNode } from '../codec/index.js'
 import { xeddsaSign, xeddsaVerify } from '../crypto/signal.js'
 
-// The full WAProto schema (the Rust waproto crate only carries the 35 types it needs).
-let root: protobuf.Root | undefined
-function proto(): protobuf.Root {
-	if (!root) {
-		const r = new protobuf.Root()
-		r.loadSync(new URL('../../proto/WAProto.proto', import.meta.url).pathname)
-		r.resolveAll()
-		root = r
-	}
-	return root
-}
-const T = (name: string) => proto().lookupType(`proto.${name}`)
+import { encodeProto as encode, protoRoot as proto, protoType as T } from './proto.js'
 
 export interface ClientConfig {
 	/** WhatsApp Web client revision, e.g. [2, 3000, 1050701434]. */
@@ -59,11 +47,6 @@ function basePayload(config: ClientConfig) {
 		},
 		webInfo: { webSubPlatform: 'WEB_BROWSER' },
 	}
-}
-
-const encode = (type: string, obj: object): Uint8Array => {
-	const t = T(type)
-	return t.encode(t.fromObject(obj)).finish()
 }
 
 /** ClientPayload for a device that has not been paired yet (shows the QR flow). */
@@ -205,7 +188,13 @@ export function handlePairSuccess(
 		account.accountSignatureKey,
 	])
 	account.deviceSignature = Buffer.from(xeddsaSign(creds.signedIdentityKey.privateKey, deviceMsg))
-	// The account signature key is not sent back.
+	// The pair reply omits the account signature key; retry receipts include it (full account).
+	const fullAccount = encode('ADVSignedDeviceIdentity', {
+		details: account.details,
+		accountSignatureKey: account.accountSignatureKey,
+		accountSignature: account.accountSignature,
+		deviceSignature: account.deviceSignature,
+	})
 	const encoded = encode('ADVSignedDeviceIdentity', {
 		details: account.details,
 		accountSignature: account.accountSignature,
@@ -234,7 +223,7 @@ export function handlePairSuccess(
 	const me: NonNullable<AuthCreds['me']> = { id: deviceNode.attrs['jid'] ?? '' }
 	if (deviceNode.attrs['lid']) me.lid = deviceNode.attrs['lid']
 	if (bizNode?.attrs['name']) me.name = bizNode.attrs['name']
-	const update: Pick<AuthCreds, 'me' | 'account' | 'platform'> = { me, account: encoded }
+	const update: Pick<AuthCreds, 'me' | 'account' | 'platform'> = { me, account: fullAccount }
 	if (platformNode?.attrs['name']) update.platform = platformNode.attrs['name']
 	return { reply, update }
 }

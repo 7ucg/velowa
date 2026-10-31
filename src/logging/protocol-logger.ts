@@ -137,17 +137,18 @@ function printable(bytes: Uint8Array): string | undefined {
 }
 
 export function toXml(node: BinaryNode, indent = ''): string {
+	const tag = escapeXml(node.tag)
 	const attrs = Object.entries(node.attrs)
 		.map(([k, v]) => ` ${escapeXml(k)}="${escapeXml(v)}"`)
 		.join('')
 	const c = node.content
-	if (c === undefined) return `${indent}<${node.tag}${attrs}/>`
-	if (typeof c === 'string') return `${indent}<${node.tag}${attrs}>${escapeXml(c)}</${node.tag}>`
+	if (c === undefined) return `${indent}<${tag}${attrs}/>`
+	if (typeof c === 'string') return `${indent}<${tag}${attrs}>${escapeXml(c)}</${tag}>`
 	if (c instanceof Uint8Array) {
 		const text = printable(c)
-		return `${indent}<${node.tag}${attrs}>${text !== undefined && text.length > 0 ? text : `{${c.length} bytes: ${Buffer.from(c).toString('hex')}}`}</${node.tag}>`
+		return `${indent}<${tag}${attrs}>${text !== undefined && text.length > 0 ? escapeXml(text) : `{${c.length} bytes: ${Buffer.from(c).toString('hex')}}`}</${tag}>`
 	}
-	return `${indent}<${node.tag}${attrs}>\n${c.map((n) => toXml(n, indent + '  ')).join('\n')}\n${indent}</${node.tag}>`
+	return `${indent}<${tag}${attrs}>\n${c.map((n) => toXml(n, indent + '  ')).join('\n')}\n${indent}</${tag}>`
 }
 
 /** Escape markup and control characters so wire data cannot forge extra log lines or tags. */

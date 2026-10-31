@@ -4,7 +4,10 @@ import qrcode from 'qrcode-terminal'
 import { initAuthCreds, loadAuthCreds, saveAuthCreds } from '../auth/creds.js'
 import type { AuthCreds } from '../auth/creds.js'
 import type { BinaryNode } from '../codec/index.js'
+import { FileSignalStorage } from '../auth/file-signal-storage.js'
 import { Connection, loggedFetch } from '../client/connection.js'
+import { Receiver } from '../client/receiver.js'
+import { createSignalCipher } from '../crypto/signal.js'
 import {
 	DEFAULT_CONFIG,
 	handlePairSuccess,
@@ -35,8 +38,7 @@ let config: ClientConfig = DEFAULT_CONFIG
 let qrTimer: NodeJS.Timeout | undefined
 let keepAlive: NodeJS.Timeout | undefined
 let shuttingDown = false
-let idCounter = 0
-const nextId = () => `velowa-${Date.now().toString(36)}-${idCounter++}`
+let receiver: Receiver | undefined
 
 const child = (n: BinaryNode, tag: string) =>
 	Array.isArray(n.content) ? n.content.find((c) => c.tag === tag) : undefined
@@ -72,6 +74,7 @@ function start(): void {
 		onClose: ({ code, reason, error }) => {
 			clearTimeout(qrTimer)
 			clearInterval(keepAlive)
+			receiver = undefined
 			console.log(
 				`Connection closed (code=${code ?? '-'}, reason=${reason})`,
 				error ? String(error) : '',
@@ -91,7 +94,50 @@ function start(): void {
 	conn.connect()
 }
 
+async function onLoggedIn(conn: Connection): Promise<void> {
+	const storage = new FileSignalStorage(
+		arg('signal-dir', 'auth/signal'),
+		creds.signedIdentityKey,
+		creds.registrationId,
+	)
+	await storage.storeSignedPreKey(creds.signedPreKey.keyId, creds.signedPreKey.record)
+	const r = new Receiver({
+		creds,
+		saveCreds: () => saveAuthCreds(authPath, creds),
+		storage,
+		cipher: createSignalCipher(storage),
+		logger,
+		send: (n) => conn.send(n),
+		onMessage: (m) =>
+			console.log(
+				`Message ${m.id} from ${m.participant ?? m.from}:`,
+				JSON.stringify(m.message).slice(0, 300),
+			),
+	})
+	receiver = r
+	try {
+		await r.request({
+			tag: 'iq',
+			attrs: { to: 's.whatsapp.net', type: 'set', xmlns: 'passive' },
+			content: [{ tag: 'active', attrs: {} }],
+		})
+		await r.ensurePreKeys()
+		console.log('Pre-keys are in place; incoming messages are decrypted, acked and logged.')
+	} catch (error) {
+		logger.event('login.setup-failed', error)
+		console.error('Login setup failed:', error)
+	}
+	keepAlive = setInterval(() => {
+		if (conn.state === 'open')
+			conn.send({
+				tag: 'iq',
+				attrs: { id: r.nextId(), to: 's.whatsapp.net', type: 'get', xmlns: 'w:p' },
+			})
+	}, 30_000)
+}
+
 function handle(conn: Connection, node: BinaryNode): void {
+	if (receiver?.handle(node)) return
 	const pairDevice = node.tag === 'iq' && child(node, 'pair-device')
 	if (pairDevice) {
 		conn.send({
@@ -136,18 +182,7 @@ function handle(conn: Connection, node: BinaryNode): void {
 	}
 	if (node.tag === 'success') {
 		console.log('Logged in. Session stays open and is logged until disconnect (Ctrl+C to stop).')
-		conn.send({
-			tag: 'iq',
-			attrs: { to: 's.whatsapp.net', type: 'set', xmlns: 'passive', id: nextId() },
-			content: [{ tag: 'active', attrs: {} }],
-		})
-		keepAlive = setInterval(() => {
-			if (conn.state === 'open')
-				conn.send({
-					tag: 'iq',
-					attrs: { id: nextId(), to: 's.whatsapp.net', type: 'get', xmlns: 'w:p' },
-				})
-		}, 30_000)
+		void onLoggedIn(conn)
 		return
 	}
 	if (

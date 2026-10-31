@@ -61,8 +61,15 @@ describe('ProtocolLogger', () => {
 		const dir = mkdtempSync(join(tmpdir(), 'velowa-log-'))
 		const log = new ProtocolLogger({ dir })
 		log.node('recv', { tag: 'x', attrs: { a: '"><forged/>\n' }, content: '<b>' })
+		log.node('recv', {
+			tag: 'y<z>',
+			attrs: {},
+			content: new TextEncoder().encode('</y><forged2/>'),
+		})
 		const xml = readFileSync(join(log.sessionDir!, 'nodes.xml.log'), 'utf8')
 		expect(xml).not.toContain('<forged/>')
+		expect(xml).not.toContain('<forged2/>')
+		expect(xml).not.toContain('<z>')
 		expect(xml).toContain('&lt;b&gt;')
 		expect(statSync(log.sessionDir!).mode & 0o077).toBe(0)
 		expect(statSync(join(log.sessionDir!, 'events.jsonl')).mode & 0o077).toBe(0)

@@ -21,9 +21,11 @@ export interface AuthCreds {
 	advSecretKey: string
 	/** Set once pairing succeeded. */
 	me?: { id: string; lid?: string; name?: string }
-	/** Encoded ADVSignedDeviceIdentity (without the account signature key). */
+	/** Encoded ADVSignedDeviceIdentity incl. account signature key and our device signature. */
 	account?: Uint8Array
 	platform?: string
+	/** Next unused one-time pre-key id (ids are never reused). */
+	nextPreKeyId: number
 }
 
 export function initAuthCreds(): AuthCreds {
@@ -40,19 +42,30 @@ export function initAuthCreds(): AuthCreds {
 		},
 		registrationId: randomInt(1, 16380),
 		advSecretKey: randomBytes(32).toString('base64'),
+		nextPreKeyId: 1,
 	}
 }
 
 const BYTES = '$bytes'
 
+// JSON.stringify applies Buffer#toJSON before the replacer runs, so a Buffer arrives here already
+// as { type: 'Buffer', data: number[] }; treat both shapes as bytes.
+const isBufferJson = (v: unknown): v is { type: 'Buffer'; data: number[] } =>
+	typeof v === 'object' &&
+	v !== null &&
+	(v as { type?: unknown }).type === 'Buffer' &&
+	Array.isArray((v as { data?: unknown }).data)
+
 function replacer(_k: string, v: unknown): unknown {
 	if (v instanceof Uint8Array) return { [BYTES]: Buffer.from(v).toString('base64') }
+	if (isBufferJson(v)) return { [BYTES]: Buffer.from(v.data).toString('base64') }
 	return v
 }
 
 function reviver(_k: string, v: unknown): unknown {
 	if (v && typeof v === 'object' && BYTES in v)
 		return new Uint8Array(Buffer.from((v as Record<string, string>)[BYTES]!, 'base64'))
+	if (isBufferJson(v)) return new Uint8Array(v.data) // files written before the fix above
 	return v
 }
 
@@ -65,5 +78,7 @@ export function saveAuthCreds(path: string, creds: AuthCreds): void {
 
 export function loadAuthCreds(path: string): AuthCreds | undefined {
 	if (!existsSync(path)) return undefined
-	return JSON.parse(readFileSync(path, 'utf8'), reviver) as AuthCreds
+	const creds = JSON.parse(readFileSync(path, 'utf8'), reviver) as AuthCreds
+	creds.nextPreKeyId ??= 1
+	return creds
 }
