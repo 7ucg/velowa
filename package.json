@@ -17,7 +17,7 @@
 	"license": "MIT",
 	"scripts": {
 		"build:wasm": "wasm-pack build rust/wasm-bridge --target web --out-dir ../../src/wasm",
-		"build": "npm run build:wasm && tsc -p tsconfig.json",
+		"build": "npm run build:wasm && tsc -p tsconfig.json && rm -rf dist/wasm && cp -r src/wasm dist/wasm",
 		"typecheck": "tsc --noEmit",
 		"lint": "tsc --noEmit && eslint src",
 		"format": "prettier --write src",
