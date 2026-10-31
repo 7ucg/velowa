@@ -174,6 +174,18 @@ pub mod codec {
     }
 
     #[inline(never)]
+    pub fn syncd_snapshot_decode(
+        bytes: &[u8],
+    ) -> Result<whatsapp::SyncdSnapshot, buffa::DecodeError> {
+        whatsapp::SyncdSnapshot::decode_from_slice(bytes)
+    }
+
+    #[inline(never)]
+    pub fn sync_action_value_to_vec(value: &whatsapp::SyncActionValue) -> Vec<u8> {
+        value.encode_to_vec()
+    }
+
+    #[inline(never)]
     pub fn external_blob_reference_decode(
         bytes: &[u8],
     ) -> Result<whatsapp::ExternalBlobReference, buffa::DecodeError> {
@@ -305,7 +317,6 @@ pub mod codec {
     ) -> Result<whatsapp::cert_chain::noise_certificate::Details, buffa::DecodeError> {
         whatsapp::cert_chain::noise_certificate::Details::decode_from_slice(bytes)
     }
-
 }
 
 #[cfg(test)]

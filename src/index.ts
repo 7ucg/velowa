@@ -26,3 +26,14 @@ export type {
 	EncryptedMessage,
 	DecryptedMessage,
 } from './crypto/signal.js'
+export {
+	AppStateCollection,
+	newAppStateCollection,
+	restoreAppStateCollection,
+} from './crypto/appstate.js'
+export type {
+	AppStateKeyLookup,
+	AppStateMac,
+	AppStateMutation,
+	AppStateResult,
+} from './crypto/appstate.js'
