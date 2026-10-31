@@ -176,6 +176,20 @@ describe('Receiver: failures', () => {
 	})
 })
 
+describe('Receiver: unsupported envelopes', () => {
+	it('acks an msmsg without asking for a retry', async () => {
+		const { receiver, sent, messages } = await setup()
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'g@g.us', participant: 'bot@bot', id: 'B1', type: 'reaction' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: 'msmsg' }, content: new Uint8Array(20) }],
+		})
+		await receiver.idle()
+		expect(messages).toHaveLength(0)
+		expect(sent.map((n) => n.tag)).toEqual(['ack'])
+	})
+})
+
 describe('Receiver: pre-keys', () => {
 	it('uploads a batch when the server count is low and persists the id counter', async () => {
 		const creds = initAuthCreds()

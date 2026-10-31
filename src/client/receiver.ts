@@ -11,6 +11,8 @@ const MIN_PREKEY_COUNT = 5
 const UPLOAD_PREKEY_COUNT = 30
 const MAX_RETRIES = 5
 const REQUEST_TIMEOUT_MS = 20_000
+/** Envelope types we deliberately do not decrypt (a retry cannot help): acked and logged only. */
+const UNSUPPORTED_ENC = new Set(['msmsg'])
 
 export interface ReceiverDeps {
 	creds: AuthCreds
@@ -208,9 +210,15 @@ export class Receiver {
 		const ordered = [...encs.filter((e) => !isGroupEnc(e)), ...encs.filter(isGroupEnc)]
 
 		let decrypted = 0
+		let skipped = 0
 		const failures: string[] = []
 		for (const enc of ordered) {
 			const type = enc.attrs['type'] ?? ''
+			if (UNSUPPORTED_ENC.has(type)) {
+				skipped++
+				logger.event('message.unsupported', { id, from, participant, type })
+				continue
+			}
 			try {
 				const plain = await this.#decryptEnc(from, author, type, enc.content as Uint8Array)
 				const msg = await this.#decodeAndApply(plain, author)
@@ -228,7 +236,7 @@ export class Receiver {
 			}
 		}
 
-		if (failures.length > 0 && decrypted === 0) await this.#sendRetry(node)
+		if (failures.length > 0 && decrypted === 0 && skipped === 0) await this.#sendRetry(node)
 		else if (decrypted > 0 && node.attrs['type'] !== 'peer_msg') {
 			const attrs: Record<string, string> = { id, to: from }
 			if (participant) attrs['participant'] = participant
