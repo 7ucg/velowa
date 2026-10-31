@@ -191,6 +191,14 @@ impl AppStateCollection {
     ) -> Result<JsAppStateResult, JsError> {
         let snapshot = waproto::codec::syncd_snapshot_decode(snapshot).map_err(err)?;
         let get_key: JsValue = get_key.into();
+        // Never roll a collection back: a replayed older snapshot would silently discard newer state.
+        let snapshot_version = snapshot.version.version.unwrap_or(0);
+        if snapshot_version < self.state.version {
+            return Err(err(format!(
+                "snapshot version {snapshot_version} is older than local version {}",
+                self.state.version
+            )));
+        }
         let mut next = HashState::default();
         let out = process_snapshot(
             &snapshot,
@@ -224,6 +232,19 @@ impl AppStateCollection {
         let patch = waproto::codec::syncd_patch_decode(patch).map_err(err)?;
         let get_key: JsValue = get_key.into();
         let get_prev: JsValue = get_previous_value_mac.into();
+        // Fail closed: without a top-level key id `process_patch` would skip both aggregate MACs.
+        if patch.key_id.id.as_deref().is_none() {
+            return Err(err(AppStateError::MissingKeyId));
+        }
+        // A patch cannot anchor the ltHash of a never-synced collection unless it is the genesis
+        // patch; anything else needs a snapshot bootstrap first (and must not latch
+        // `mac_mismatch_fatal` on an empty baseline).
+        let patch_version = patch.version.version.unwrap_or(0);
+        if self.state.version == 0 && self.state.hash == [0u8; 128] && patch_version != 1 {
+            return Err(err(
+                "collection has no baseline: apply a snapshot before non-genesis patches",
+            ));
+        }
         let mut next = self.state.clone();
         let out = process_patch(
             &patch,

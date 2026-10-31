@@ -160,4 +160,22 @@ describe('AppStateCollection', () => {
 		const c = newAppStateCollection('critical_block')
 		expect(() => c.applyPatch(patch, lookup, () => undefined)).toThrow()
 	})
+
+	it('refuses a patch without a top-level key id (aggregate MACs would be skipped)', () => {
+		const { patch } = buildGenesisPatch(master, keyId, 'regular', ['x'], 1)
+		// Drop the trailing keyId field (tag 0x32 = field 6, length-delimited, 2 + len bytes).
+		const stripped = patch.slice(0, patch.length - (2 + 2 + keyId.length))
+		const c = newAppStateCollection('regular')
+		expect(() => c.applyPatch(stripped, lookup, () => undefined)).toThrow()
+		expect(c.version).toBe(0)
+	})
+
+	it('refuses a non-genesis patch on an empty collection', () => {
+		const c = newAppStateCollection('regular')
+		const { patch } = buildGenesisPatch(master, keyId, 'regular', ['x'], 1)
+		// version field is the first message: 0x0a 0x02 0x08 0x01 -> bump to 5
+		const bumped = patch.slice()
+		bumped[3] = 5
+		expect(() => c.applyPatch(bumped, lookup, () => undefined)).toThrow(/baseline/)
+	})
 })
