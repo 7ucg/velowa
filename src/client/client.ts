@@ -983,16 +983,14 @@ export class Client {
 			}
 			if (u !== ownUser && !users.includes(u)) users.push(u)
 		}
-		const devices = await sender.getDevices(users)
-		// The roster lists every device of every participant, ours included (the server checks it against its own).
-		const ownDevices = (await sender.getDevices([ownUser])).map((d) => d.jid)
+		// Cloud-API "hosted" devices (id 99) are not part of a call roster.
+		const isHosted = (jid: string) => /:99@/.test(jid)
+		const devices = (await sender.getDevices(users)).filter((d) => !isHosted(d.jid))
+		// The roster lists every device of the other participants, but only the calling device of ours (as the app does).
 		const participants = [
 			{
 				jid: ownUser,
-				devices: [
-					{ jid: own, capability: [...callSig.CAPABILITY_STANDARD_OPUS_OFFER] },
-					...ownDevices.filter((j) => j !== own).map((jid) => ({ jid })),
-				],
+				devices: [{ jid: own, capability: [...callSig.CAPABILITY_STANDARD_OPUS_OFFER] }],
 			},
 			...users.map((u) => ({
 				jid: u,
