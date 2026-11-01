@@ -188,13 +188,14 @@ export class Sender {
 		const { creds } = this.d
 		const meUser = jidDecode(creds.me!.id).user
 		const ownBare = `${meUser}@${S_WHATSAPP_NET}`
-		const devices = await this.getDevices([ownBare, to])
+		const selfChat = jidDecode(to).user === meUser
+		const devices = await this.getDevices([...new Set([ownBare, to])])
 		const toUser = jidDecode(to).user
 		const mine = devices.filter(
 			(d) => d.user === meUser || d.user === (creds.me?.lid ? jidDecode(creds.me.lid).user : '#'),
 		)
 		const others = devices.filter((d) => !mine.includes(d))
-		if (!others.length) throw new Error(`no devices found for ${to} (user ${toUser})`)
+		if (!others.length && !selfChat) throw new Error(`no devices found for ${to} (user ${toUser})`)
 		await this.assertSessions([...mine, ...others].map((d) => d.jid))
 
 		const dsm = { deviceSentMessage: { destinationJid: to, message } }

@@ -229,6 +229,19 @@ describe('Sender: 1:1', () => {
 		expect(texts).toEqual(['one', 'two'])
 	})
 
+	it('sends to our own number: only our other devices, wrapped as deviceSentMessage', async () => {
+		const { sender, stanzas, phone } = await world()
+		await sender.sendText('4915600000000@s.whatsapp.net', 'note to self')
+		const parts = kids(kids(stanzas[0]!, 'participants')[0]!, 'to')
+		expect(parts.map((p) => p.attrs['jid'])).toEqual(['4915600000000@s.whatsapp.net'])
+		const enc = kids(parts[0]!, 'enc')[0]!
+		const msg = decodeMsg(
+			(await phone.cipher.decrypt('4915600000000', 23, 'pkmsg', enc.content as Uint8Array))
+				.plaintext,
+		)
+		expect(msg['deviceSentMessage'].message.conversation).toBe('note to self')
+	})
+
 	it('rejects when the server answers with an ack error', async () => {
 		const { sender } = await world({ ackError: '479' })
 		await expect(sender.sendText('4915611111111@s.whatsapp.net', 'x')).rejects.toThrow(/479/)
