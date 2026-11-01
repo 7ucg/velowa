@@ -1076,6 +1076,9 @@ export class Client {
 				...(o.recordTo && { recordTo: o.recordTo }),
 			})
 			state.media = media
+			media.on('connected', () => {
+				if (state.status !== 'ended') state.status = 'connected'
+			})
 			media.start()
 		}
 		await this.#groupEpoch(state, summary)
