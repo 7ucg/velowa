@@ -429,6 +429,25 @@ export class Receiver {
 		this.#sendSafe(buildAck(node, this.d.creds.me?.id))
 	}
 
+	/**
+	 * The call key from an offer's `<enc>` (a Signal message from the caller's device carrying `Message.call.callKey`).
+	 * Returns undefined when the envelope holds no call key.
+	 */
+	async decryptCallKey(
+		author: string,
+		type: string,
+		data: Uint8Array,
+	): Promise<Uint8Array | undefined> {
+		const plain = await this.#decryptEnc(author, author, type, data)
+		const msg = protoType('Message').toObject(protoType('Message').decode(plain), {
+			bytes: Buffer,
+		}) as {
+			call?: { callKey?: Uint8Array }
+		}
+		const key = msg.call?.callKey
+		return key && key.length >= 32 ? key : undefined
+	}
+
 	async #decryptEnc(
 		from: string,
 		author: string,

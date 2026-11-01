@@ -713,7 +713,7 @@ export class Client {
 		return state
 	}
 
-	#trackCall(c: extras.CallEvent): void {
+	#trackCall(c: extras.CallEvent, node?: BinaryNode): void {
 		const userOf = (jid: string): string => jid.split('@')[0]!.replace(/[:.]\d+$/, '')
 		const st = this.#calls.get(c.callId)
 		if (st) {
@@ -753,6 +753,7 @@ export class Client {
 			status: 'ringing',
 			startedAt: Date.now(),
 			...(c.isGroup && { group: c.from }),
+			...(node && { offer: node, offerFrom: c.from }),
 		})
 		this.#pruneCalls()
 	}
@@ -775,6 +776,62 @@ export class Client {
 			if (this.#calls.size <= 200) return
 		}
 		while (this.#calls.size > 200) this.#calls.delete(this.#calls.keys().next().value!)
+	}
+
+	/**
+	 * Answer an incoming call: decrypt the call key from the offer, tell the caller we are ringing and answering, and
+	 * connect the media. `audioIn` is spoken into the call, `recordTo` saves what the caller says (16 kHz mono WAV).
+	 */
+	async acceptCall(
+		callId: string,
+		o: { audioIn?: Int16Array; recordTo?: string } = {},
+	): Promise<callSig.CallState> {
+		const c = this.#calls.get(callId)
+		if (!c || c.direction !== 'incoming' || !c.offer) throw new Error(`no incoming call ${callId}`)
+		if (c.group) throw new Error('group calls are not supported yet')
+		const { receiver } = await this.#live()
+		const own = this.#creds.me
+		if (!own?.lid) throw new Error('no own LID yet')
+		const inner = (Array.isArray(c.offer.content) ? c.offer.content[0] : undefined) as BinaryNode
+		const kids = Array.isArray(inner?.content) ? inner.content : []
+		// Our copy of the call key: a bare <enc>, or the one addressed to this device inside <destination>.
+		const ours = (n: BinaryNode) => [own.lid, own.id].includes(n.attrs['jid'] ?? '')
+		let enc = kids.find((k) => k.tag === 'enc')
+		if (!enc) {
+			const dest = kids.find((k) => k.tag === 'destination')
+			const to = (Array.isArray(dest?.content) ? dest.content : []).find(ours)
+			enc = (Array.isArray(to?.content) ? to.content : []).find((k) => k.tag === 'enc')
+		}
+		if (!enc || !(enc.content instanceof Uint8Array))
+			throw new Error('the offer carries no call key for this device')
+		const relay = kids.find((k) => k.tag === 'relay')
+		if (!relay) throw new Error('the offer carries no relay')
+		const target = c.offerFrom ?? c.creator
+		// Ringing first, before the (possibly slow) decrypt, as the app does.
+		receiver.sendNode(callSig.buildPreaccept(callId, target, c.creator, receiver.nextId(), c.video))
+		const callKey = await receiver.decryptCallKey(
+			c.creator,
+			enc.attrs['type'] ?? 'msg',
+			enc.content,
+		)
+		if (!callKey) throw new Error('could not read the call key')
+		c.callKey = callKey
+		const media = new MediaSession({
+			callId,
+			direction: 'incoming',
+			selfLid: own.lid,
+			peerLid: c.creator,
+			callKey,
+			relay,
+			codec: 'opus',
+			...(o.audioIn && { audioIn: o.audioIn }),
+			...(o.recordTo && { recordTo: o.recordTo }),
+		})
+		c.media = media
+		media.start()
+		receiver.sendNode(callSig.buildAccept(callId, target, c.creator, receiver.nextId(), c.video))
+		c.status = 'connected'
+		return c
 	}
 
 	/** Hang up a call we placed or answered (also cancels one that is still ringing). */
@@ -1328,7 +1385,7 @@ export class Client {
 			},
 			onCall: (node) => {
 				const c = extras.parseCall(node)
-				if (c) this.#trackCall(c)
+				if (c) this.#trackCall(c, node)
 				if (c) this.#events.emit('call', c)
 			},
 			onReceipt: (node) => {

@@ -123,6 +123,32 @@ export const buildReject = (callId: string, to: string, creator: string, id: str
 		attrs: { 'call-id': callId, 'call-creator': creator, count: '0' },
 	})
 
+const VOIP_SETTINGS_OPUS_16K = new TextEncoder().encode(
+	'{"encode":{"use_mlow_codec_v1":"false"},"options":{"enable_48khz_rtp_clock":"false"}}',
+)
+
+/** Answer a call (standard Opus): audio, [video], net, encopt, capability, voip_settings. */
+export function buildAccept(
+	callId: string,
+	to: string,
+	creator: string,
+	id: string,
+	video = false,
+): BinaryNode {
+	return wrap(to, id, {
+		tag: 'accept',
+		attrs: { 'call-id': callId, 'call-creator': creator },
+		content: [
+			audio('16000'),
+			...(video ? [{ tag: 'video', attrs: { dec: 'H264', device_orientation: '0' } }] : []),
+			{ tag: 'net', attrs: { medium: '2' } },
+			encopt,
+			...(video ? [] : [capabilityNode(CAPABILITY_STANDARD_OPUS_OFFER)]),
+			{ tag: 'voip_settings', attrs: { uncompressed: '1' }, content: VOIP_SETTINGS_OPUS_16K },
+		],
+	})
+}
+
 /** The callee device is ringing / ready. */
 export const buildPreaccept = (
 	callId: string,
@@ -136,9 +162,21 @@ export const buildPreaccept = (
 		attrs: { 'call-id': callId, 'call-creator': creator },
 		content: [
 			audio('16000'),
-			...(video ? [videoOffer] : []),
+			...(video
+				? [
+						{
+							tag: 'video',
+							attrs: {
+								dec: 'H264',
+								device_orientation: '0',
+								screen_width: '0',
+								screen_height: '0',
+							},
+						},
+					]
+				: []),
 			{ tag: 'encopt', attrs: { keygen: '2' } },
-			capabilityNode(CAPABILITY_STANDARD_OPUS_PREACCEPT),
+			capabilityNode(video ? CAPABILITY_STANDARD_OPUS_OFFER : CAPABILITY_STANDARD_OPUS_PREACCEPT),
 		],
 	})
 
@@ -157,6 +195,10 @@ export interface CallState {
 	startedAt: number
 	/** The 32-byte call key (end-to-end media key). */
 	callKey?: Uint8Array
+	/** The offer stanza as received (incoming calls): its `<enc>` holds the call key. */
+	offer?: BinaryNode
+	/** The `<call>` wrapper id of the offer, and the device it came from. */
+	offerFrom?: string
 	/** The server's `<relay>` block from the offer ack (outgoing) or the offer (incoming). */
 	relay?: BinaryNode
 	/** The media path (relay socket + engine) once the call has a relay. */

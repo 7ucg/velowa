@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, expect, it } from 'vitest'
 import {
+	buildAccept,
 	buildOffer,
+	buildPreaccept,
 	buildReject,
 	buildTerminate,
 	CAPABILITY_OFFER,
@@ -82,5 +84,28 @@ describe('call signaling builders', () => {
 			content: [{ tag: 'terminate', attrs: { 'call-id': 'c', 'call-creator': 'me@lid' } }],
 		})
 		expect((buildReject('c', 'd@lid', 'me@lid', 'i').content as any[])[0].attrs.count).toBe('0')
+	})
+
+	it('builds accept and preaccept with the children the app sends', () => {
+		const a = (buildAccept('c', 'd@lid', 'me@lid', 'i').content as any[])[0]
+		expect(a.content.map((c: any) => c.tag)).toEqual([
+			'audio',
+			'net',
+			'encopt',
+			'capability',
+			'voip_settings',
+		])
+		expect(a.content[1].attrs.medium).toBe('2')
+		expect(a.content[4].attrs.uncompressed).toBe('1')
+		const v = (buildAccept('c', 'd@lid', 'me@lid', 'i', true).content as any[])[0]
+		expect(v.content.map((c: any) => c.tag)).toEqual([
+			'audio',
+			'video',
+			'net',
+			'encopt',
+			'voip_settings',
+		])
+		const p = (buildPreaccept('c', 'd@lid', 'me@lid', 'i').content as any[])[0]
+		expect(p.content.map((c: any) => c.tag)).toEqual(['audio', 'encopt', 'capability'])
 	})
 })
