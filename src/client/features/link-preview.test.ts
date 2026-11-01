@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { createServer } from 'node:http'
 import {
+	guardedFetch,
 	fetchLinkPreview,
 	findUrl,
 	isPrivateAddress,
@@ -100,5 +102,21 @@ describe('link previews', () => {
 		expect(
 			await fetchLinkPreview('https://example.com:8443/x', { fetch: f, resolve }),
 		).toBeUndefined()
+	})
+})
+
+describe('connect-time guard (DNS rebinding)', () => {
+	it('refuses to connect when the name resolves to a loopback address', async () => {
+		let hit = false
+		const server = createServer((_, res) => {
+			hit = true
+			res.end('secret')
+		})
+		await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+		const port = (server.address() as { port: number }).port
+		// "localhost" passes no string check here: only the lookup at connect time can stop it.
+		await expect(guardedFetch(2000)(`http://localhost:${port}/`)).rejects.toThrow(/private address/)
+		expect(hit).toBe(false)
+		server.close()
 	})
 })

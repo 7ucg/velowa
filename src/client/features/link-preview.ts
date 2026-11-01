@@ -1,4 +1,7 @@
-import { lookup } from 'node:dns/promises'
+import { lookup } from 'node:dns'
+import { lookup as lookupAll } from 'node:dns/promises'
+import http from 'node:http'
+import https from 'node:https'
 import { isIP } from 'node:net'
 
 export interface LinkPreview {
@@ -62,7 +65,66 @@ export function isPrivateAddress(ip: string): boolean {
 
 async function resolveAll(host: string): Promise<string[]> {
 	if (isIP(host)) return [host]
-	return (await lookup(host, { all: true })).map((a) => a.address)
+	return (await lookupAll(host, { all: true })).map((a) => a.address)
+}
+
+/**
+ * Default transport: Node's http(s) with a `lookup` that refuses private addresses at connect time. The address
+ * that was checked is the one the socket uses, so a DNS answer that changes between check and connect (rebinding)
+ * cannot reach an internal host.
+ */
+export function guardedFetch(timeoutMs: number): typeof fetch {
+	return ((input: string | URL, init?: { headers?: Record<string, string> }) =>
+		new Promise<Response>((resolve, reject) => {
+			const u = new URL(String(input))
+			const mod = u.protocol === 'https:' ? https : http
+			const req = mod.request(
+				u,
+				{
+					method: 'GET',
+					headers: init?.headers,
+					timeout: timeoutMs,
+					lookup: (host, options, cb) =>
+						lookup(host, { ...options, all: true }, (err, addrs) => {
+							if (err) return cb(err, '', 4)
+							const list = addrs as { address: string; family: number }[]
+							if (!list.length || list.some((a) => isPrivateAddress(a.address)))
+								return cb(new Error('refusing private address'), '', 4)
+							const a = list[0]!
+							cb(null, a.address, a.family)
+						}),
+				},
+				(res) => {
+					const headers = new Headers()
+					for (const [k, v] of Object.entries(res.headers))
+						if (typeof v === 'string') headers.set(k, v)
+						else if (Array.isArray(v)) headers.set(k, v.join(', '))
+					const body = new ReadableStream<Uint8Array>({
+						start(controller) {
+							res.on('data', (c: Buffer) => controller.enqueue(new Uint8Array(c)))
+							res.on('end', () => controller.close())
+							res.on('error', (e) => controller.error(e))
+						},
+						cancel() {
+							res.destroy()
+						},
+					})
+					const status = res.statusCode ?? 0
+					resolve(
+						new Response(
+							status === 204 || status === 304 || (status >= 300 && status < 400) ? null : body,
+							{
+								status: status < 200 ? 200 : status,
+								headers,
+							},
+						),
+					)
+				},
+			)
+			req.on('timeout', () => req.destroy(new Error('timeout')))
+			req.on('error', reject)
+			req.end()
+		})) as unknown as typeof fetch
 }
 
 /** Fetch with a deadline, a manual redirect loop that re-checks every hop, and a byte cap. */
@@ -72,7 +134,7 @@ async function safeGet(
 	maxBytes: number,
 	accept: string,
 ): Promise<{ body: Uint8Array; finalUrl: string; type: string } | undefined> {
-	const doFetch = o.fetch ?? fetch
+	const doFetch = o.fetch ?? guardedFetch(o.timeoutMs)
 	const resolve = o.resolve ?? resolveAll
 	let current = url
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
