@@ -38,6 +38,16 @@ export function participantHash(jids: string[]): string {
 	return '2:' + createHash('sha256').update(sorted.join('')).digest('base64').slice(0, 6)
 }
 
+/** Extras for one outgoing message. */
+export interface SendOptions {
+	/** Extra attributes on the `<message>` stanza, e.g. `{ edit: '1' }` for an edit, `{ edit: '7' }` for a revoke. */
+	stanzaAttrs?: Record<string, string>
+	/** Attributes added to every `<enc>` node, e.g. `{ mediatype: 'image' }` or `{ 'decrypt-fail': 'hide' }`. */
+	encAttrs?: Record<string, string>
+	/** Extra child nodes of `<message>` (e.g. `<meta .../>`). */
+	extraNodes?: BinaryNode[]
+}
+
 export interface DeviceTarget {
 	jid: string
 	user: string
@@ -75,15 +85,19 @@ export class Sender {
 	}
 
 	/** Send an arbitrary WAProto `Message` (plain object form). */
-	async sendMessage(to: string, message: Record<string, unknown>): Promise<string> {
+	async sendMessage(
+		to: string,
+		message: Record<string, unknown>,
+		opts: SendOptions = {},
+	): Promise<string> {
 		const { creds } = this.d
 		if (!creds.me) throw new Error('not paired')
 		const id = generateMessageId(creds.me.id)
 		// WhatsApp Web gives every message (except reactions etc.) a random secret; reply keys and the reporting token derive from it.
 		const withSecret = withMessageSecret(message)
 		const stanza = to.endsWith('@g.us')
-			? await this.#groupStanza(id, to, withSecret)
-			: await this.#directStanza(id, to, withSecret)
+			? await this.#groupStanza(id, to, withSecret, opts)
+			: await this.#directStanza(id, to, withSecret, opts)
 		this.d.logger.event('send.message', { id, to })
 		await this.d.receiver.sendAndWaitAck(stanza)
 		this.d.logger.event('send.acked', { id, to })
@@ -188,6 +202,7 @@ export class Sender {
 		id: string,
 		to: string,
 		message: Record<string, unknown>,
+		opts: SendOptions,
 	): Promise<BinaryNode> {
 		const { creds } = this.d
 		const meUser = jidDecode(creds.me!.id).user
@@ -222,7 +237,13 @@ export class Sender {
 				participants.push({
 					tag: 'to',
 					attrs: { jid: t.jid },
-					content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
+					content: [
+						{
+							tag: 'enc',
+							attrs: { v: '2', type: enc.type, ...opts.encAttrs },
+							content: enc.ciphertext,
+						},
+					],
 				})
 			}
 		}
@@ -233,7 +254,12 @@ export class Sender {
 		if (reporting) content.push(reporting)
 		// WA Web marks 1:1 sends to phone-number JIDs with <bot biz_bot="1"/>.
 		if (to.endsWith('@s.whatsapp.net')) content.push({ tag: 'bot', attrs: { biz_bot: '1' } })
-		return { tag: 'message', attrs: { id, to, type: messageType(message) }, content }
+		content.push(...(opts.extraNodes ?? []))
+		return {
+			tag: 'message',
+			attrs: { id, to, type: messageType(message), ...opts.stanzaAttrs },
+			content,
+		}
 	}
 
 	// ---- groups --------------------------------------------------------------------------------
@@ -261,6 +287,7 @@ export class Sender {
 		id: string,
 		group: string,
 		message: Record<string, unknown>,
+		opts: SendOptions,
 	): Promise<BinaryNode> {
 		const { creds } = this.d
 		const { participants, addressingMode } = await this.groupParticipants(group)
@@ -296,20 +323,35 @@ export class Sender {
 				nodes.push({
 					tag: 'to',
 					attrs: { jid: t.jid },
-					content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
+					content: [
+						{
+							tag: 'enc',
+							attrs: { v: '2', type: enc.type, ...opts.encAttrs },
+							content: enc.ciphertext,
+						},
+					],
 				})
 				known.add(t.jid)
 			}
 			this.#memory[group] = [...known]
 			this.#saveMemory()
 		}
-		const content: BinaryNode[] = [{ tag: 'enc', attrs: { v: '2', type: 'skmsg' }, content: skmsg }]
+		const content: BinaryNode[] = [
+			{ tag: 'enc', attrs: { v: '2', type: 'skmsg', ...opts.encAttrs }, content: skmsg },
+		]
 		if (nodes.length) content.unshift({ tag: 'participants', attrs: {}, content: nodes })
 		if (needsIdentity && creds.account)
 			content.push({ tag: 'device-identity', attrs: {}, content: creds.account })
+		content.push(...(opts.extraNodes ?? []))
 		return {
 			tag: 'message',
-			attrs: { id, to: group, type: messageType(message), addressing_mode: addressingMode },
+			attrs: {
+				id,
+				to: group,
+				type: messageType(message),
+				addressing_mode: addressingMode,
+				...opts.stanzaAttrs,
+			},
 			content,
 		}
 	}

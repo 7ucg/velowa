@@ -18,6 +18,8 @@ import type { ClientConfig } from './pairing.js'
 import { Receiver } from './receiver.js'
 import type { DecodedMessage } from './receiver.js'
 import { Sender } from './sender.js'
+import * as msg from './features/messages.js'
+import type { ChatState, MessageKey, ReceiptType, TextOptions } from './features/messages.js'
 
 export interface ClientOptions {
 	/** Directory for credentials and Signal state. Default `./auth`. */
@@ -108,16 +110,78 @@ export class Client {
 		})
 	}
 
-	async sendText(to: string, text: string): Promise<string> {
+	async #live(): Promise<{ sender: Sender; receiver: Receiver; meId: string }> {
 		await this.#ready
-		if (!this.#sender) throw new Error('not connected')
-		return this.#sender.sendText(to, text)
+		if (!this.#sender || !this.#receiver || !this.#creds.me) throw new Error('not connected')
+		return { sender: this.#sender, receiver: this.#receiver, meId: this.#creds.me.id }
 	}
 
+	/** Send text, optionally as a reply (`quoted`) and/or with @mentions. Returns the message id. */
+	async sendText(to: string, text: string, opts: TextOptions = {}): Promise<string> {
+		const { sender, meId } = await this.#live()
+		return sender.sendMessage(to, msg.withContext(msg.textMessage(text), to, opts, meId))
+	}
+
+	/** Send a raw WAProto `Message` object. */
 	async sendMessage(to: string, message: Record<string, unknown>): Promise<string> {
-		await this.#ready
-		if (!this.#sender) throw new Error('not connected')
-		return this.#sender.sendMessage(to, message)
+		const { sender } = await this.#live()
+		return sender.sendMessage(to, message)
+	}
+
+	/** React to a message with an emoji (empty string removes the reaction). */
+	async react(key: MessageKey, emoji: string): Promise<string> {
+		const { sender } = await this.#live()
+		const r = msg.reaction(key, emoji)
+		return sender.sendMessage(key.remoteJid, r.message, r.opts)
+	}
+
+	/** Edit the text of one of our own messages. */
+	async edit(key: MessageKey, newText: string): Promise<string> {
+		const { sender } = await this.#live()
+		const r = msg.edit(key, newText)
+		return sender.sendMessage(key.remoteJid, r.message, r.opts)
+	}
+
+	/** Delete a message for everyone. */
+	async revoke(key: MessageKey): Promise<string> {
+		const { sender } = await this.#live()
+		const r = msg.revoke(key)
+		return sender.sendMessage(key.remoteJid, r.message, r.opts)
+	}
+
+	/** Mark messages as read (`read-self` keeps read receipts private). */
+	async markRead(keys: MessageKey[], type: ReceiptType = 'read'): Promise<void> {
+		const { receiver } = await this.#live()
+		for (const node of msg.buildReceipts(keys, type, Math.floor(Date.now() / 1000)))
+			receiver.sendNode(node)
+	}
+
+	/** Show "typing…" / "recording…" / stop in a chat. */
+	async sendChatState(to: string, state: ChatState): Promise<void> {
+		const { receiver, meId } = await this.#live()
+		const me = to.endsWith('@lid') && this.#creds.me?.lid ? this.#creds.me.lid : meId
+		receiver.sendNode(msg.chatState(me, to, state))
+	}
+
+	/** Go online/offline. Needs the account's display name (`setName`). */
+	async sendPresence(type: 'available' | 'unavailable'): Promise<void> {
+		const { receiver } = await this.#live()
+		const name = this.#creds.me?.name
+		if (!name) throw new Error('set a display name first: client.setName(...)')
+		receiver.sendNode(msg.presence(name, type))
+	}
+
+	/** Remember the account's display name (used for presence). */
+	setName(name: string): void {
+		if (!this.#creds.me) throw new Error('not paired')
+		this.#creds.me.name = name
+		saveAuthCreds(this.#credsPath, this.#creds)
+	}
+
+	/** Get presence updates for a contact. */
+	async subscribePresence(jid: string): Promise<void> {
+		const { receiver } = await this.#live()
+		receiver.sendNode(msg.presenceSubscribe(jid, receiver.nextId()))
 	}
 
 	/** Close the connection and stop reconnecting. */

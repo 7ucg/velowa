@@ -112,6 +112,11 @@ export class Receiver {
 		return false
 	}
 
+	/** Send a stanza as-is (fire and forget). */
+	sendNode(node: BinaryNode): void {
+		this.d.send(node)
+	}
+
 	/** Wait for everything queued so far (used by tests). */
 	idle(): Promise<void> {
 		return this.#queue
