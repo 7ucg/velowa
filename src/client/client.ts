@@ -478,6 +478,28 @@ export class Client {
 		const p = extras.poll(name, values, selectableCount)
 		return sender.sendMessage(to, p.message, p.opts)
 	}
+	/**
+	 * Post to a channel and optionally label the post ("AI content", "paid partnership").
+	 * Returns the message id and the post's server number.
+	 */
+	async postToChannel(
+		channel: string,
+		message: Record<string, unknown> | string,
+		labels: { aiContent?: boolean; paidPartnership?: boolean } = {},
+		opts: SendOptions = {},
+	): Promise<{ id: string; serverId?: string }> {
+		const { sender } = await this.#live()
+		let serverId: string | undefined
+		const id = await sender.sendMessage(
+			channel,
+			typeof message === 'string' ? msg.textMessage(message) : message,
+			{ ...opts, onAck: (ack) => (serverId = ack.attrs['server_id']) },
+		)
+		if (serverId && labels.aiContent) await this.newsletters.labelAiContent(channel, serverId)
+		if (serverId && labels.paidPartnership)
+			await this.newsletters.labelPaidPartnership(channel, serverId)
+		return { id, ...(serverId && { serverId }) }
+	}
 	/** Send a quiz: a single-choice poll with a right answer (`correctAnswer` must be one of `values`). */
 	async sendQuiz(
 		to: string,

@@ -16,3 +16,4 @@
 - Channel image quizzes/polls: option images are posted first (MEDIA_POLL association), then the poll with the same pre-chosen id (`sendImagePoll`); music posts carry `annotations` on the video; confirmed on the phone.
 - Music posts: the song has to be mixed into the video's audio track; `sendMusic` only adds the music card. Verified on the phone.
 - Channel post labels: `client.newsletters.labelAiContent(jid, serverId)` and `labelPaidPartnership(jid, serverId)` (mex mutations on existing posts, seen in the phone's notifications; accepted live).
+- `client.postToChannel(channel, message, {aiContent, paidPartnership})` posts and labels in one call, returns `{id, serverId}`.

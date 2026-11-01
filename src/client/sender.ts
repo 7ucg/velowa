@@ -55,6 +55,8 @@ export interface SendOptions {
 	extraNodes?: BinaryNode[]
 	/** Use this message id instead of a fresh one (when another message has to point at it). */
 	messageId?: string
+	/** Called with the server's ack (channels: `server_id` is the post's number, needed for labels). */
+	onAck?: (ack: BinaryNode) => void
 }
 
 export interface DeviceTarget {
@@ -149,7 +151,8 @@ export class Sender {
 				],
 			}
 			this.d.logger.event('send.message', { id, to })
-			await this.d.receiver.sendAndWaitAck(stanza)
+			const ack = await this.d.receiver.sendAndWaitAck(stanza)
+			opts.onAck?.(ack)
 			this.d.logger.event('send.acked', { id, to })
 			return id
 		}
