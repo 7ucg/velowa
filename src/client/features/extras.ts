@@ -78,6 +78,9 @@ export function question(inner: Record<string, unknown>): {
 	}
 }
 
+/**
+ * The song itself must already be in the video's audio track; the music card (title, cover) comes from `catalog`.
+ */
 export interface MusicInfo {
 	title: string
 	author: string

@@ -14,3 +14,4 @@
 - `examples/example-manage.js`: group management and status posting verified live (16/16).
 - Channel posts in the phone's wire format (captured from the app): images/videos upload raw to `/newsletter/...` with `mediatype` on the plaintext node, quizzes as `pollCreationMessageV5` + `polltype=quiz_creation`, image polls/quizzes (`sendImagePoll`), questions as `questionMessage` + `questiontype=question` (text and image), music as a video with MUSIC attribution (`sendMusic`). All acked live.
 - Channel image quizzes/polls: option images are posted first (MEDIA_POLL association), then the poll with the same pre-chosen id (`sendImagePoll`); music posts carry `annotations` on the video; confirmed on the phone.
+- Music posts: the song has to be mixed into the video's audio track; `sendMusic` only adds the music card. Verified on the phone.
