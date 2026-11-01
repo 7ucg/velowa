@@ -74,7 +74,14 @@ export interface SenderDeps {
  */
 export class Sender {
 	/** Recently sent messages, kept so a device that could not decrypt one can be answered (retry receipts). */
-	readonly #sent = new Map<string, { to: string; message: Record<string, unknown> }>()
+	readonly #sent = new Map<
+		string,
+		{ to: string; message: Record<string, unknown>; audience?: Set<string> }
+	>()
+	/** phone-number user -> LID user, learned from usync, so an answer from either identity counts as the same person. */
+	readonly #lidAlias = new Map<string, string>()
+	/** Resends done per message+device (we do not trust the count in the receipt). */
+	readonly #resends = new Map<string, number>()
 	readonly #memory: Record<string, string[]>
 
 	constructor(private readonly d: SenderDeps) {
@@ -127,6 +134,18 @@ export class Sender {
 		return id
 	}
 
+	/** Record who a message was actually sent to: only they may later ask for a resend. */
+	#setAudience(id: string, devices: DeviceTarget[]): void {
+		const entry = this.#sent.get(id)
+		if (!entry) return
+		const users = new Set(devices.map((d) => d.user))
+		for (const u of [...users]) {
+			const alias = this.#lidAlias.get(u)
+			if (alias) users.add(alias)
+		}
+		entry.audience = users
+	}
+
 	#remember(id: string, to: string, message: Record<string, unknown>): void {
 		this.#sent.set(id, { to, message })
 		if (this.#sent.size > SENT_CACHE_SIZE) this.#sent.delete(this.#sent.keys().next().value!)
@@ -145,9 +164,26 @@ export class Sender {
 			logger.event('retry.unknown-message', { id, target })
 			return false
 		}
+		if (!receipt.attrs['from']) return false
+		// Only someone the message was really sent to may ask for it again, and only from the chat it went to.
+		const targetUser = jidDecode(target).user
+		const chatOk = cached.to.endsWith('@g.us')
+			? receipt.attrs['from'] === cached.to && !!receipt.attrs['participant']
+			: true
+		if (!chatOk || !cached.audience?.has(targetUser)) {
+			logger.event('retry.rejected', { id, target, reason: 'not an original recipient' })
+			return false
+		}
 		const retry = children(receipt, 'retry')[0]
-		const count = Number(retry?.attrs['count'] ?? 1)
-		if (!(count >= 1 && count <= MAX_RESEND_COUNT)) return false
+		const claimed = Number(retry?.attrs['count'] ?? 1)
+		const resendKey = `${id}|${target}`
+		const done = this.#resends.get(resendKey) ?? 0
+		if (!(claimed >= 1) || done >= MAX_RESEND_COUNT) return false
+		this.#resends.set(resendKey, done + 1)
+		if (this.#resends.size > SENT_CACHE_SIZE * 4)
+			this.#resends.delete(this.#resends.keys().next().value!)
+		// Use the peer's own attempt number (it drives the enc `count`), but never more than we allow.
+		const count = Math.min(Math.max(claimed, done + 1), MAX_RESEND_COUNT)
 
 		const keys = children(receipt, 'keys')[0]
 		if (keys) {
@@ -254,6 +290,8 @@ export class Sender {
 		for (const user of list) {
 			const jid = user.attrs['jid'] ?? ''
 			const { user: u, server } = jidDecode(jid)
+			const lid = children(user, 'lid')[0]?.attrs['val']
+			if (lid && server !== 'lid') this.#lidAlias.set(u, jidDecode(lid).user)
 			const deviceList = children(
 				children(children(user, 'devices')[0] ?? user, 'device-list')[0] ?? user,
 				'device',
@@ -323,6 +361,7 @@ export class Sender {
 		const others = devices.filter((d) => !mine.includes(d))
 		if (!others.length && !selfChat) throw new Error(`no devices found for ${to} (user ${toUser})`)
 		await this.assertSessions([...mine, ...others].map((d) => d.jid))
+		this.#setAudience(id, [...mine, ...others])
 
 		const dsm = {
 			deviceSentMessage: { destinationJid: to, message },
@@ -399,6 +438,7 @@ export class Sender {
 		const { creds } = this.d
 		const { participants, addressingMode } = await this.groupParticipants(group)
 		const devices = await this.getDevices(participants)
+		this.#setAudience(id, devices)
 		const senderId = addressingMode === 'lid' && creds.me?.lid ? creds.me.lid : creds.me!.id
 		const senderKeyId = signalAddressString(senderId)
 

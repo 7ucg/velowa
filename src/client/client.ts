@@ -575,7 +575,7 @@ export class Client {
 			onReceipt: (node) => {
 				// Receipts are keyed by (chat, id): a bare id is not unique across chats.
 				if (node.attrs['from']) this.#events.emit('receipt', parseReceipt(node))
-				if (node.attrs['type'] === 'retry')
+				if (node.attrs['type'] === 'retry' && node.attrs['from'])
 					void this.#sender
 						?.handleRetryReceipt(node)
 						.catch((e) => this.logger.event('retry.error', e))

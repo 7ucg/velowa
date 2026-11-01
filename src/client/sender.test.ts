@@ -161,6 +161,61 @@ describe('Sender: retry receipts', () => {
 		expect(out['extendedTextMessage'].text).toBe('please resend')
 	})
 
+	it('refuses retries from someone the message was never sent to (no plaintext leak)', async () => {
+		const { sender, stanzas, bob0 } = await world()
+		const id = await sender.sendText('4915611111111@s.whatsapp.net', 'secret for bob only')
+		const before = stanzas.length
+		const mallory = '4915699999999:1@s.whatsapp.net'
+		const bundle = bob0.userNode.content as BinaryNode[]
+		const ok = await sender.handleRetryReceipt({
+			tag: 'receipt',
+			attrs: { from: mallory, id, type: 'retry' },
+			content: [
+				{ tag: 'retry', attrs: { count: '1' } },
+				bundle.find((c) => c.tag === 'registration')!,
+				{ tag: 'keys', attrs: {}, content: bundle.filter((c) => c.tag !== 'registration') },
+			],
+		})
+		expect(ok).toBe(false)
+		expect(stanzas).toHaveLength(before)
+	})
+
+	it('requires a group retry to come from that group and name a participant', async () => {
+		const { sender, stanzas, bob0 } = await world()
+		const group = '120363000000000001@g.us'
+		const id = await sender.sendText(group, 'g')
+		const n = stanzas.length
+		expect(
+			await sender.handleRetryReceipt({
+				tag: 'receipt',
+				attrs: { from: '120363999@g.us', participant: bob0.jid, id, type: 'retry' },
+				content: [{ tag: 'retry', attrs: { count: '1' } }],
+			}),
+		).toBe(false)
+		expect(
+			await sender.handleRetryReceipt({
+				tag: 'receipt',
+				attrs: { from: group, id, type: 'retry' },
+				content: [{ tag: 'retry', attrs: { count: '1' } }],
+			}),
+		).toBe(false)
+		expect(stanzas).toHaveLength(n)
+	})
+
+	it('counts resends itself instead of trusting the receipt', async () => {
+		const { sender, bob0 } = await world()
+		const id = await sender.sendText('4915611111111@s.whatsapp.net', 'x')
+		const r = (): BinaryNode => ({
+			tag: 'receipt',
+			attrs: { from: bob0.jid, id, type: 'retry' },
+			content: [{ tag: 'retry', attrs: { count: '1' } }],
+		})
+		const results: boolean[] = []
+		for (let i = 0; i < 7; i++) results.push(await sender.handleRetryReceipt(r()))
+		expect(results.filter(Boolean)).toHaveLength(5)
+		expect(results.slice(5)).toEqual([false, false])
+	})
+
 	it('ignores retries for messages it never sent and absurd counts', async () => {
 		const { sender, bob0 } = await world()
 		expect(
@@ -177,7 +232,7 @@ describe('Sender: retry receipts', () => {
 				attrs: { from: bob0.jid, id, type: 'retry' },
 				content: [{ tag: 'retry', attrs: { count: '99' } }],
 			}),
-		).toBe(false)
+		).toBe(true) // the claimed count is only a hint; we cap resends ourselves (see the counting test)
 	})
 
 	it('addresses a group member by participant', async () => {
