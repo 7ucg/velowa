@@ -125,3 +125,20 @@ describe('Signal group sender keys', () => {
 		await expect(carol.cipher.groupDecrypt('g', 'alice.1', m)).rejects.toThrow()
 	})
 })
+
+describe('serialized cipher', () => {
+	it('survives many overlapping calls (no re-entrancy error, every message decrypts in order)', async () => {
+		const alice = await makeDevice(1)
+		const bob = await makeDevice(2)
+		await alice.cipher.processPreKeyBundle('bob', 1, bob.bundle)
+		const encs = await Promise.all(
+			Array.from({ length: 20 }, (_, i) => alice.cipher.encrypt('bob', 1, enc.encode(`m${i}`))),
+		)
+		const plain = await Promise.all(
+			encs.map((m) => bob.cipher.decrypt('alice', 1, m.type, m.ciphertext)),
+		)
+		expect(plain.map((p) => dec.decode(p.plaintext))).toEqual(
+			Array.from({ length: 20 }, (_, i) => `m${i}`),
+		)
+	})
+})

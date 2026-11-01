@@ -56,9 +56,26 @@ export function newPreKeys(start: number, count: number): GeneratedPreKey[] {
 	return generatePreKeys(start, count) as GeneratedPreKey[]
 }
 
+/**
+ * The wasm `SignalCipher` borrows itself mutably across `await`s, so two overlapping calls (a decrypt while a
+ * resend encrypts, ...) trip Rust's re-entrancy guard and could interleave ratchet updates. Every call goes
+ * through one queue, which also gives the ordering Double-Ratchet state needs.
+ */
 export function createSignalCipher(storage: SignalStorage): SignalCipher {
 	ensureWasm()
-	return new SignalCipher(storage)
+	const raw = new SignalCipher(storage)
+	let tail: Promise<unknown> = Promise.resolve()
+	return new Proxy(raw, {
+		get(target, prop, receiver) {
+			const value = Reflect.get(target, prop, receiver) as unknown
+			if (typeof value !== 'function') return value
+			return (...args: unknown[]) => {
+				const run = tail.then(() => (value as (...a: unknown[]) => unknown).apply(target, args))
+				tail = run.catch(() => undefined)
+				return run
+			}
+		},
+	})
 }
 
 /** Volatile storage: fine for tests and throwaway sessions, never for a real account. */

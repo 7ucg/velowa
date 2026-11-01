@@ -80,7 +80,14 @@ export class Sender {
 	/** Recently sent messages, kept so a device that could not decrypt one can be answered (retry receipts). */
 	readonly #sent = new Map<
 		string,
-		{ to: string; message: Record<string, unknown>; audience?: Set<string> }
+		{
+			to: string
+			message: Record<string, unknown>
+			audience?: Set<string>
+			/** Extra stanza attributes / nodes to repeat on a resend (peer messages). */
+			stanzaAttrs?: Record<string, string>
+			extraNodes?: BinaryNode[]
+		}
 	>()
 	/** phone-number user -> LID user, learned from usync, so an answer from either identity counts as the same person. */
 	readonly #lidAlias = new Map<string, string>()
@@ -148,6 +155,16 @@ export class Sender {
 		if (!creds.me) throw new Error('not paired')
 		const meBare = `${jidDecode(creds.me.id).user}@${S_WHATSAPP_NET}`
 		const id = generateMessageId(creds.me.id)
+		this.#sent.set(id, {
+			to: meBare,
+			message,
+			audience: new Set([
+				jidDecode(creds.me.id).user,
+				...(creds.me.lid ? [jidDecode(creds.me.lid).user] : []),
+			]),
+			stanzaAttrs: { category: 'peer', push_priority: 'high_force' },
+			extraNodes: [{ tag: 'meta', attrs: { appdata: 'default' } }],
+		})
 		await this.assertSessions([meBare])
 		const a = signalAddress(meBare)
 		const body = { deviceSentMessage: { destinationJid: meBare, message } }
@@ -261,7 +278,11 @@ export class Sender {
 			padRandomMax16(encodeProto('Message', body)),
 		)
 		const isGroup = cached.to.endsWith('@g.us')
-		const attrs: Record<string, string> = { id, type: messageType(cached.message) }
+		const attrs: Record<string, string> = {
+			id,
+			type: messageType(cached.message),
+			...cached.stanzaAttrs,
+		}
 		if (isGroup) {
 			attrs['to'] = cached.to
 			attrs['participant'] = target
@@ -279,6 +300,7 @@ export class Sender {
 		]
 		if (creds.account) content.push({ tag: 'device-identity', attrs: {}, content: creds.account })
 		if (cached.to.endsWith('@s.whatsapp.net')) content.push({ tag: 'bot', attrs: { biz_bot: '1' } })
+		content.push(...(cached.extraNodes ?? []))
 		await this.d.receiver.sendAndWaitAck({ tag: 'message', attrs, content })
 		logger.event('retry.resent', { id, target, count })
 		return true

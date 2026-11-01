@@ -320,6 +320,34 @@ describe('Sender: peer messages', () => {
 	})
 })
 
+describe('Sender: peer message retries', () => {
+	it('resends a peer message to the phone that asked, keeping category=peer and the meta node', async () => {
+		const { sender, stanzas, phone } = await world()
+		const id = await sender.sendPeerMessage({
+			protocolMessage: {
+				type: 'APP_STATE_SYNC_KEY_REQUEST',
+				appStateSyncKeyRequest: { keyIds: [{ keyId: Buffer.from([1]) }] },
+			},
+		})
+		const ok = await sender.handleRetryReceipt({
+			tag: 'receipt',
+			attrs: { from: phone.jid, id, type: 'retry', category: 'peer' },
+			content: [{ tag: 'retry', attrs: { count: '1' } }],
+		})
+		expect(ok).toBe(true)
+		const st = stanzas.at(-1)!
+		expect(st.attrs).toMatchObject({
+			id,
+			category: 'peer',
+			push_priority: 'high_force',
+			to: phone.jid,
+			recipient: '4915600000000@s.whatsapp.net',
+		})
+		expect(kids(st, 'meta')[0]!.attrs).toEqual({ appdata: 'default' })
+		expect(kids(st, 'enc')[0]!.attrs['count']).toBe('1')
+	})
+})
+
 describe('Sender: channels', () => {
 	it('posts plain protobuf in a <plaintext> node and waits for the ack', async () => {
 		const { sender, stanzas } = await world()
