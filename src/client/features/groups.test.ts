@@ -204,11 +204,11 @@ describe('group permissions and member tag', () => {
 			(async (...a: unknown[]) => (calls.push(a), {})) as never,
 			'g@g.us',
 			'member_share_group_history_mode',
-			'all_member_share',
+			'ALL_MEMBER_SHARE',
 		)
 		expect(calls[0]).toEqual([
 			GROUP_SET_PROPERTY_QUERY,
-			{ group_id: 'g@g.us', member_share_group_history_mode: 'all_member_share' },
+			{ group_id: 'g@g.us', update: { member_share_group_history_mode: 'ALL_MEMBER_SHARE' } },
 			'xwa2_group_update_property',
 		])
 	})

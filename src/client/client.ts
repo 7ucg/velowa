@@ -18,6 +18,7 @@ import type { ClientConfig } from './pairing.js'
 import { Receiver } from './receiver.js'
 import type { DecodedMessage } from './receiver.js'
 import { Sender } from './sender.js'
+import type { SendOptions } from './sender.js'
 import { AppStateSync, interpret } from './features/appstate-sync.js'
 import * as act from './features/chat-actions.js'
 import type { RangeMessage } from './features/chat-actions.js'
@@ -179,6 +180,10 @@ export class Client {
 		return this.sendMessage(to, msg.forward(message, score))
 	}
 
+	/** Send a raw stanza (an `iq`) and wait for its answer: the escape hatch for anything not wrapped yet. */
+	request = async (node: BinaryNode): Promise<BinaryNode> =>
+		(await this.#live()).receiver.request(node)
+
 	/** Run any WhatsApp Web GraphQL (`w:mex`) query by id, e.g. the ones listed in baron-baileys-v2. */
 	mex = <T = unknown>(queryId: string, variables: unknown, dataPath?: string): Promise<T> =>
 		mexFor(
@@ -187,9 +192,13 @@ export class Client {
 		)<T>(queryId, variables, dataPath)
 
 	/** Send a raw WAProto `Message` object. */
-	async sendMessage(to: string, message: Record<string, unknown>): Promise<string> {
+	async sendMessage(
+		to: string,
+		message: Record<string, unknown>,
+		opts: SendOptions = {},
+	): Promise<string> {
 		const { sender } = await this.#live()
-		return sender.sendMessage(to, message)
+		return sender.sendMessage(to, message, opts)
 	}
 
 	/** React to a message with an emoji (empty string removes the reaction). */
@@ -425,7 +434,7 @@ export class Client {
 		this.groups.setMemberAddMode(jid, mode)
 	/** Group permission "Send message history" (members may send past messages to new members). */
 	setGroupShareHistory = (jid: string, mode: 'all_member_share' | 'admin_share') =>
-		setGroupProperty(this.mex, jid, 'member_share_group_history_mode', mode)
+		setGroupProperty(this.mex, jid, 'member_share_group_history_mode', mode.toUpperCase())
 	/** Our "member tag" in a group (shown next to the name; empty string removes it). */
 	async setMemberLabel(groupJid: string, label: string): Promise<string> {
 		const { sender } = await this.#live()

@@ -127,19 +127,12 @@ export class Sender {
 			// Channels render a plain `conversation`; an extendedTextMessage (and the secret we add to other chats)
 			// shows up as "your version of WhatsApp doesn't support it" on the phone.
 			const post = channelPost(message)
-			const isPoll = Boolean(
-				post['pollCreationMessage'] ??
-				post['pollCreationMessageV2'] ??
-				post['pollCreationMessageV3'],
-			)
+			// Only the plaintext: extra nodes (e.g. the poll creation meta used in chats) are rejected here (479).
 			const stanza: BinaryNode = {
 				tag: 'message',
 				attrs: { id, to, type: messageType(post), ...opts.stanzaAttrs },
 				content: [
 					{ tag: 'plaintext', attrs: {}, content: encodeProto('Message', post) },
-					...(isPoll
-						? [{ tag: 'meta', attrs: { polltype: 'creation', contenttype: 'text' } }]
-						: []),
 					...(opts.extraNodes ?? []),
 				],
 			}

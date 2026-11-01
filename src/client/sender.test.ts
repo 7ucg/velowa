@@ -126,7 +126,7 @@ describe('Sender: groups', () => {
 })
 
 describe('Sender: channel polls and rich posts', () => {
-	it('keeps extended text with a link preview/context as is, and marks polls with the creation meta', async () => {
+	it('keeps rich text as is and passes the poll meta node through on polls', async () => {
 		const { sender, stanzas } = await world()
 		await sender.sendMessage('1203630000@newsletter', {
 			extendedTextMessage: { text: 'link', matchedText: 'https://x' },
@@ -136,18 +136,19 @@ describe('Sender: channel polls and rich posts', () => {
 				Uint8Array.from([...(kids(stanzas[0]!, 'plaintext')[0]!.content as Uint8Array), 1]),
 			)['extendedTextMessage'].matchedText,
 		).toBe('https://x')
-		await sender.sendMessage('1203630000@newsletter', {
-			pollCreationMessageV3: {
-				name: 'q',
-				options: [{ optionName: 'a' }, { optionName: 'b' }],
-				selectableOptionsCount: 1,
+		await sender.sendMessage(
+			'1203630000@newsletter',
+			{
+				pollCreationMessageV3: {
+					name: 'q',
+					options: [{ optionName: 'a' }, { optionName: 'b' }],
+					selectableOptionsCount: 1,
+				},
 			},
-		})
+			{ type: 'poll', extraNodes: [{ tag: 'meta', attrs: { polltype: 'creation' } }] },
+		)
 		expect(stanzas[1]!.attrs['type']).toBe('poll')
-		expect(kids(stanzas[1]!, 'meta')[0]!.attrs).toEqual({
-			polltype: 'creation',
-			contenttype: 'text',
-		})
+		expect(kids(stanzas[1]!, 'meta')[0]!.attrs).toEqual({ polltype: 'creation' }) // the server answers 479 without it
 	})
 })
 

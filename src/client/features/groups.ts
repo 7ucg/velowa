@@ -316,14 +316,18 @@ export function parseGroupNotification(node: BinaryNode): GroupNotification[] {
 
 export const GROUP_SET_PROPERTY_QUERY = '9418211574894172'
 
-/** "Send message history" permission and similar properties, via `w:mex` (`member_share_group_history_mode`, ...). */
+/** "Send message history" permission and similar properties, via `w:mex`; enum values are UPPER_CASE (`ADMIN_SHARE`, `ALL_MEMBER_SHARE`). */
 export const setGroupProperty = (
 	mex: <T>(queryId: string, variables: unknown, path?: string) => Promise<T>,
 	jid: string,
 	property: string,
 	value: unknown,
 ) =>
-	mex(GROUP_SET_PROPERTY_QUERY, { group_id: jid, [property]: value }, 'xwa2_group_update_property')
+	mex(
+		GROUP_SET_PROPERTY_QUERY,
+		{ group_id: jid, update: { [property]: value } },
+		'xwa2_group_update_property',
+	)
 
 /** Message that sets our own "member tag" (label) in a group (max 30 characters). */
 export function memberLabelMessage(
