@@ -42,6 +42,14 @@ export type { ClientOptions, ClientEvents } from './client/client.js'
 export { ProtocolLogger } from './logging/protocol-logger.js'
 export type { ProtocolLoggerOptions } from './logging/protocol-logger.js'
 export {
+	compressSession,
+	listSessions,
+	migrateFlatSessions,
+	pruneSessions,
+	type RetentionOptions,
+	type SessionInfo,
+} from './logging/storage.js'
+export {
 	quickReply,
 	urlButton,
 	callButton,

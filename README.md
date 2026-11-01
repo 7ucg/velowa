@@ -73,5 +73,11 @@ A scripted end-to-end check against your own account, no CLI involved (`npm run 
 A dev console that exercises everything (`help` lists the commands) and logs every frame, stanza and HTTP call:
 `npm run pair` (logs go to `logs/`, credentials to `auth/`; both are git-ignored and contain account secrets).
 
+Logs are kept as `logs/<day>/<time>-<label>/` (one folder per run, with a `session.json` that says when it ran and
+how big each file got); `logs/latest` and `logs/latest-<label>` point at the newest run. Big files continue in
+`name.0001.ext`, runs older than a day are gzipped, and runs older than 30 days (or beyond 1 GB in total) are
+deleted when the next logger starts. Change it with `new ProtocolLogger({ rotateMB, retention, compressAfterHours,
+keep })`, or look after it by hand: `npm run logs -- list | migrate | compress | prune --dry | keep <run>`.
+
 Design departures from Baileys and the reasoning behind each binding are in
 [`docs/design-decisions.md`](docs/design-decisions.md).

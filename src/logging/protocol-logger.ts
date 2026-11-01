@@ -1,14 +1,38 @@
-import { appendFileSync, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import {
+	closeSync,
+	mkdirSync,
+	openSync,
+	renameSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+	writeSync,
+} from 'node:fs'
+import { join, relative } from 'node:path'
 import type { BinaryNode } from '../codec/index.js'
+import {
+	dayAndTime,
+	housekeeping,
+	KEEP_FILE,
+	SESSION_FILE,
+	type RetentionOptions,
+} from './storage.js'
 
 export interface ProtocolLoggerOptions {
 	/** Master switch. Default true. When false every method is a no-op. */
 	enabled?: boolean
-	/** Base directory; one sub-directory per session is created inside. Default `./logs`. */
+	/** Base directory; one sub-directory per run is created inside, grouped by day. Default `./logs`. */
 	dir?: string
-	/** Label prepended to the session directory name. */
+	/** Label added to the run's directory name. */
 	label?: string
+	/** Start a new part of a log file after this many megabytes (`frames.0001.jsonl`, ...). Default 32; 0 turns it off. */
+	rotateMB?: number
+	/** Delete old runs by age / total size when a logger starts. `false` keeps everything. Default 30 days and 1 GB. */
+	retention?: RetentionOptions | false
+	/** Compress runs older than this many hours when a logger starts. Default 24; 0 turns it off. */
+	compressAfterHours?: number
+	/** Never delete this run (adds a `.keep` file to it). */
+	keep?: boolean
 }
 
 export type Direction = 'send' | 'recv'
@@ -16,30 +40,108 @@ export type Direction = 'send' | 'recv'
 /**
  * Records everything a connection does, unfiltered, from the first byte until disconnect or
  * server stop: raw wire frames, decoded stanzas, HTTP requests, socket lifecycle and free-form
- * protocol events. Every entry is appended synchronously, so nothing is lost if the process dies.
+ * protocol events. Every entry is written straight to the file (no buffering in this process), so nothing is
+ * lost if the process dies.
  *
- * Files in `<dir>/<session>/`:
+ * Layout (see `storage.ts`): `<dir>/<YYYY-MM-DD>/<HH-MM-SS>-<label>/` holds
+ *   - `session.json`  label, start/end, reason, sizes and line counts
  *   - `events.jsonl`  every entry in order (the complete timeline)
  *   - `frames.jsonl`  raw WebSocket payloads (hex) in both directions, before decrypt / after encrypt
  *   - `nodes.jsonl`   decoded stanzas (JSON) in both directions
  *   - `nodes.xml.log` the same stanzas as readable XML
  *   - `http.jsonl`    HTTP requests and responses (headers + body)
+ * A file that grows past `rotateMB` continues in `name.0001.ext`. `<dir>/latest` and `<dir>/latest-<label>` link
+ * to the newest run. When a logger starts, runs older than a day are compressed and old ones are deleted by age and
+ * total size (30 days / 1 GB by default; `retention: false` keeps everything, a `.keep` file pins one run).
  *
  * Logs contain account data (identifiers, later message content). Keep them private.
  */
 export class ProtocolLogger {
 	readonly enabled: boolean
 	readonly sessionDir: string | undefined
+	readonly #baseDir: string
+	readonly #label: string
+	readonly #rotateBytes: number
+	readonly #startedAt = new Date()
+	readonly #files = new Map<string, { fd: number; bytes: number; lines: number; part: number }>()
+	readonly #totals = new Map<string, { bytes: number; lines: number }>()
 	#seq = 0
 	#closed = false
 
 	constructor(options: ProtocolLoggerOptions = {}) {
 		this.enabled = options.enabled ?? true
+		this.#baseDir = options.dir ?? 'logs'
+		this.#label = (options.label ?? 'session').replace(/[^A-Za-z0-9._-]/g, '_')
+		this.#rotateBytes = (options.rotateMB ?? 32) * 1024 * 1024
 		if (!this.enabled) return
-		const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-		this.sessionDir = join(options.dir ?? 'logs', `${options.label ?? 'session'}-${stamp}`)
+		const { day, time } = dayAndTime(this.#startedAt)
+		this.sessionDir = join(this.#baseDir, day, `${time}-${this.#label}`)
 		mkdirSync(this.sessionDir, { recursive: true, mode: 0o700 })
+		this.#writeSession()
+		if (options.keep) this.#tryWrite(join(this.sessionDir, KEEP_FILE), '')
+		this.#linkLatest()
 		this.event('logger.start', { pid: process.pid, node: process.version, argv: process.argv })
+		// Old runs: compress and prune in the background; never delay or break the connection.
+		const dir = this.#baseDir
+		const current = this.sessionDir
+		setImmediate(() => {
+			housekeeping(dir, {
+				retention: options.retention ?? {},
+				compressAfterHours: options.compressAfterHours ?? 24,
+				current,
+			}).catch(() => undefined)
+		}).unref()
+	}
+
+	/** What `session.json` says about this run so far. */
+	#writeSession(end?: { reason: string; detail?: unknown }): void {
+		if (!this.sessionDir) return
+		const files: Record<string, { bytes: number; lines: number }> = {}
+		for (const [name, t] of this.#totals) files[name] = t
+		this.#tryWrite(
+			join(this.sessionDir, SESSION_FILE),
+			JSON.stringify(
+				{
+					version: 1,
+					label: this.#label,
+					startedAt: this.#startedAt.toISOString(),
+					...(end && { endedAt: new Date().toISOString(), reason: end.reason }),
+					pid: process.pid,
+					node: process.version,
+					argv: process.argv,
+					files,
+				},
+				jsonReplacer,
+				2,
+			) + '\n',
+		)
+	}
+
+	/** `<dir>/latest` and `<dir>/latest-<label>` point at this run (best effort: not every system allows links). */
+	#linkLatest(): void {
+		if (!this.sessionDir) return
+		for (const name of ['latest', `latest-${this.#label}`]) {
+			const link = join(this.#baseDir, name)
+			const tmp = `${link}.${process.pid}.tmp`
+			try {
+				symlinkSync(relative(this.#baseDir, this.sessionDir), tmp, 'dir')
+				renameSync(tmp, link)
+			} catch {
+				try {
+					unlinkSync(tmp)
+				} catch {
+					/* no link was made */
+				}
+			}
+		}
+	}
+
+	#tryWrite(path: string, data: string): void {
+		try {
+			writeFileSync(path, data, { mode: 0o600 })
+		} catch {
+			// Logging must never take the connection down.
+		}
 	}
 
 	/** Free-form protocol/lifecycle event. */
@@ -86,6 +188,15 @@ export class ProtocolLogger {
 		if (!this.enabled || this.#closed) return
 		this.event('logger.end', { reason, detail })
 		this.#closed = true
+		this.#writeSession({ reason, detail })
+		for (const f of this.#files.values()) {
+			try {
+				closeSync(f.fd)
+			} catch {
+				/* already closed */
+			}
+		}
+		this.#files.clear()
 	}
 
 	#write(file: string, entry: Record<string, unknown>): void {
@@ -100,7 +211,33 @@ export class ProtocolLogger {
 	#append(file: string, line: string): void {
 		if (!this.enabled || !this.sessionDir) return
 		try {
-			appendFileSync(join(this.sessionDir, file), line, { mode: 0o600 })
+			const data = Buffer.from(line)
+			let f = this.#files.get(file)
+			if (f && this.#rotateBytes > 0 && f.bytes > 0 && f.bytes + data.length > this.#rotateBytes) {
+				closeSync(f.fd)
+				f.part++
+				const dot = file.lastIndexOf('.')
+				const part = `${file.slice(0, dot)}.${String(f.part).padStart(4, '0')}${file.slice(dot)}`
+				renameSync(join(this.sessionDir, file), join(this.sessionDir, part))
+				f = {
+					fd: openSync(join(this.sessionDir, file), 'a', 0o600),
+					bytes: 0,
+					lines: 0,
+					part: f.part,
+				}
+				this.#files.set(file, f)
+			}
+			if (!f) {
+				f = { fd: openSync(join(this.sessionDir, file), 'a', 0o600), bytes: 0, lines: 0, part: 0 }
+				this.#files.set(file, f)
+			}
+			writeSync(f.fd, data)
+			f.bytes += data.length
+			f.lines++
+			const t = this.#totals.get(file) ?? { bytes: 0, lines: 0 }
+			t.bytes += data.length
+			t.lines++
+			this.#totals.set(file, t)
 		} catch {
 			// Logging must never take the connection down.
 		}

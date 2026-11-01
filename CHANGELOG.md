@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Log storage: runs are grouped by day with a `session.json` each and `logs/latest` links, big files rotate, runs older than a day are gzipped, old runs are pruned by age and total size (`ProtocolLoggerOptions.retention`), `npm run logs` lists/migrates/compresses/prunes/pins them, and the logger keeps its files open instead of reopening them per entry.
 - Release build: `tsup` produces ESM (`dist/index.js`) and CommonJS (`dist/index.cjs`) with matching type files and no source maps; `exports` map with `import`/`require`; `npm run check:package` (publint + attw) is clean.
 - In-call actions: `enableCamera`/`disableCamera`/`acceptVideoUpgrade`/`rejectVideoUpgrade` (video upgrade handshake, `video` call events carry `videoState`), `raiseHand`, `sendReaction` (group calls; `user_action` events carry `handRaised`, reactions arrive as media events `Reaction` with `detail`).
 - Files as call media: `audioFile` (mp3, ogg, wav, m4a, ...) and `videoFile` (mp4, ... with its sound) on `startCall`, `acceptCall`, `startGroupCall` and `joinCallLink`, decoded with ffmpeg (`decodeAudioFile`, `decodeVideoFile`).
