@@ -81,8 +81,13 @@ export interface RichResponseOptions {
 		title?: string
 		annotations?: unknown[]
 	}
-	/** Raw HTML shown in the answer (an experimental surface WhatsApp ships under an internal name). */
+	/**
+	 * Raw HTML shown in the answer (an experimental surface WhatsApp ships under an internal name). It is rendered as
+	 * markup, scripts and handlers included, and is NOT sanitised here: never build it from received messages, user
+	 * input or model output. Needs `allowRawHtml: true`; capped at 64 KiB.
+	 */
 	html?: string
+	allowRawHtml?: boolean
 	imageUrl?: string
 	imageUrls?: string[]
 	/** The bot the answer is attributed to (default: Meta AI). */
@@ -141,6 +146,12 @@ export function richResponse(o: RichResponseOptions): {
 				'GenAIMapUXPrimitive',
 			),
 		)
+	if (o.html !== undefined && !o.allowRawHtml)
+		throw new Error(
+			'html is rendered as raw markup; pass allowRawHtml: true to confirm it is trusted',
+		)
+	if (o.html !== undefined && Buffer.byteLength(o.html) > 64 * 1024)
+		throw new Error('html is limited to 64 KiB')
 	if (o.html !== undefined)
 		sections.push(
 			section({ trusted_sources: [], payload: o.html.trim() }, 'FOAHtmlPrimitiveDemoDONOTUSE'),

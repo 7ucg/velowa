@@ -658,8 +658,11 @@ export class Client {
 		return sender.sendMessage(to, m.message, m.opts)
 	}
 
-	/** Raw HTML as a Meta AI answer (experimental on WhatsApp's side). */
-	sendHtml = (to: string, html: string) => this.sendRichResponse(to, { html })
+	/**
+	 * Raw HTML as a Meta AI answer (experimental on WhatsApp's side). Rendered as markup and not sanitised: pass only
+	 * HTML you wrote, never received or generated text. Calling this method is the opt-in.
+	 */
+	sendHtml = (to: string, html: string) => this.sendRichResponse(to, { html, allowRawHtml: true })
 
 	// ---- reports ----------------------------------------------------------------------------
 

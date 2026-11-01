@@ -21,6 +21,7 @@ describe('rich response', () => {
 			latex: 'x^2',
 			map: { latitude: 1, longitude: 2 },
 			html: '<b>hi</b>',
+			allowRawHtml: true,
 			imageUrl: 'https://example.com/a.png',
 		})
 		const rich = (r.message['botForwardedMessage'] as { message: { richResponseMessage: any } })
@@ -39,5 +40,12 @@ describe('rich response', () => {
 		expect(
 			(r.message['messageContextInfo'] as { messageSecret: Buffer }).messageSecret,
 		).toHaveLength(32)
+	})
+
+	it('refuses raw HTML unless it is explicitly allowed, and caps its size', () => {
+		expect(() => richResponse({ html: '<b>x</b>' })).toThrow(/allowRawHtml/)
+		expect(() => richResponse({ html: 'x'.repeat(65 * 1024), allowRawHtml: true })).toThrow(
+			/64 KiB/,
+		)
 	})
 })
