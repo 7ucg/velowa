@@ -652,11 +652,15 @@ function withMessageSecret(message: Record<string, unknown>): Record<string, unk
 }
 
 function messageType(message: Record<string, unknown>): string {
+	const q = (message['questionMessage'] as { message?: Record<string, unknown> } | undefined)
+		?.message
+	if (q) return messageType(q)
 	if (message['reactionMessage']) return 'reaction'
 	if (
 		message['pollCreationMessage'] ||
 		message['pollCreationMessageV2'] ||
-		message['pollCreationMessageV3']
+		message['pollCreationMessageV3'] ||
+		message['pollCreationMessageV5']
 	)
 		return 'poll'
 	if (

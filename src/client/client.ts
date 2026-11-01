@@ -245,11 +245,25 @@ export class Client {
 		const uploaded = await media.uploadMedia(await this.#getMediaConn(), type, enc, fetch, channel)
 		const built = media.mediaMessage(type, enc, uploaded, opts)
 		if (channel) media.stripMediaKeys(built.message)
-		const message = msg.withContext(built.message, to, opts, meId)
+		let message = msg.withContext(built.message, to, opts, meId)
+		const field = Object.keys(message).find((k) => k !== 'messageContextInfo')!
+		const extraContext = {
+			...opts.contextInfo,
+			...(channel && { mediaDomainInfo: { mediaKeyDomain: 'MEDIA_KEY_DOMAIN_NON_E2EE' } }),
+		}
+		if (Object.keys(extraContext).length) {
+			const body = message[field] as Record<string, unknown>
+			message = {
+				...message,
+				[field]: { ...body, contextInfo: { ...(body['contextInfo'] as object), ...extraContext } },
+			}
+		}
 		const wire = opts.viewOnce ? extras.viewOnce(message) : message
-		return sender.sendMessage(to, wire, {
+		const q = opts.isQuestion ? extras.question(wire) : undefined
+		// Channel media carries its kind on the plaintext node, not on the stanza.
+		return sender.sendMessage(to, q ? q.message : wire, {
 			encAttrs: { mediatype: built.mediaType },
-			...(channel && { stanzaAttrs: { mediatype: built.mediaType } }),
+			extraNodes: [...(q?.opts.extraNodes ?? []), ...(opts.extraNodes ?? [])],
 		})
 	}
 
@@ -466,14 +480,43 @@ export class Client {
 		const p = extras.poll(name, values, 1, { correctAnswer })
 		return sender.sendMessage(to, p.message, p.opts)
 	}
-	/** Send a question (text, or an image with the question as caption via `sendQuestionImage`). */
-	sendQuestion = (to: string, text: string) =>
-		this.sendMessage(to, msg.withContext(msg.textMessage(text), to, { isQuestion: true }, ''))
+	/** Channel poll or quiz whose options are images (`images[i]` belongs to `values[i]`). */
+	async sendImagePoll(
+		to: string,
+		name: string,
+		values: string[],
+		images: Uint8Array[],
+		o: { correctAnswer?: string } = {},
+	): Promise<string> {
+		if (images.length !== values.length) throw new Error('one image per option')
+		const { sender } = await this.#live()
+		const conn = await this.#getMediaConn()
+		const hashes: string[] = []
+		for (const img of images) {
+			const raw = media.rawMedia(img)
+			await media.uploadMedia(conn, 'image', raw, fetch, true)
+			hashes.push(Buffer.from(raw.fileSha256).toString('hex'))
+		}
+		const p = extras.poll(name, values, 1, { ...o, optionImageHashes: hashes })
+		return sender.sendMessage(to, p.message, p.opts)
+	}
+	/** Send a question (the audience answers in a box). */
+	async sendQuestion(to: string, text: string): Promise<string> {
+		const { sender } = await this.#live()
+		const q = extras.question({
+			extendedTextMessage: { text, previewType: 'NONE', contextInfo: { isQuestion: true } },
+		})
+		return sender.sendMessage(to, q.message, q.opts)
+	}
 	sendQuestionImage = (to: string, data: Uint8Array, question: string, opts: MediaOptions = {}) =>
 		this.sendMedia(to, 'image', data, { ...opts, caption: question, isQuestion: true })
-	/** Send a text post with a song attached. */
-	sendMusic = (to: string, text: string, music: extras.MusicInfo) =>
-		this.sendMessage(to, extras.musicMessage(text, music))
+	/** Send a video with a song attached (the app's "music" post; the video is what plays). */
+	sendMusic = (to: string, video: Uint8Array, music: extras.MusicInfo, opts: MediaOptions = {}) =>
+		this.sendMedia(to, 'video', video, {
+			...opts,
+			contextInfo: { ...opts.contextInfo, ...extras.musicContext(music) },
+			extraNodes: [{ tag: 'meta', attrs: { contenttype: 'song' } }],
+		})
 	async sendLocation(
 		to: string,
 		latitude: number,

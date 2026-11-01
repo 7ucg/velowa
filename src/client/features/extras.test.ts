@@ -5,7 +5,8 @@ import {
 	location,
 	parseCall,
 	poll,
-	musicMessage,
+	musicContext,
+	question,
 	rejectCall,
 	vcardFor,
 	viewOnce,
@@ -30,7 +31,7 @@ describe('extras', () => {
 
 	it('builds quizzes with the right answer and rejects bad ones', () => {
 		const q = poll('2+2?', ['3', '4'], 1, { correctAnswer: '4' })
-		expect(q.message['pollCreationMessageV3']).toMatchObject({
+		expect(q.message['pollCreationMessageV5']).toMatchObject({
 			pollType: 'QUIZ',
 			correctAnswer: { optionName: '4' },
 		})
@@ -38,13 +39,33 @@ describe('extras', () => {
 		expect(() => poll('x', ['a', 'b'], 2, { correctAnswer: 'a' })).toThrow()
 	})
 
-	it('builds a music post', () => {
-		expect(musicMessage('hi', { title: 'T', author: 'A' })).toEqual({
-			extendedTextMessage: {
-				text: 'hi',
-				musicMetadata: { title: 'T', author: 'A', isExplicit: false, musicSongStartTimeInMs: 0 },
-			},
+	it('uses quiz_creation meta, image hashes and the question wrapper', () => {
+		const q = poll('x', ['a', 'b'], 1, {
+			correctAnswer: 'b',
+			optionImageHashes: ['aa', 'bb'],
 		})
+		expect(q.opts.extraNodes).toEqual([
+			{ tag: 'meta', attrs: { polltype: 'quiz_creation', contenttype: 'image' } },
+		])
+		expect(q.message['pollCreationMessageV5']).toMatchObject({
+			pollContentType: 'IMAGE',
+			options: [
+				{ optionName: 'a', optionHash: 'aa' },
+				{ optionName: 'b', optionHash: 'bb' },
+			],
+			correctAnswer: { optionName: 'b', optionHash: 'bb' },
+		})
+		expect(question({ extendedTextMessage: { text: 'q' } })).toEqual({
+			message: { questionMessage: { message: { extendedTextMessage: { text: 'q' } } } },
+			opts: { extraNodes: [{ tag: 'meta', attrs: { questiontype: 'question' } }] },
+		})
+	})
+
+	it('builds the music context', () => {
+		const c = musicContext({ title: 'T', author: 'A' }) as { statusAttributions: unknown[] }
+		expect(c['statusAttributions']).toEqual([
+			{ type: 'MUSIC', music: expect.objectContaining({ title: 'T', author: 'A' }) },
+		])
 	})
 
 	it('rejects invalid polls', () => {

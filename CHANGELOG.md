@@ -12,4 +12,4 @@
 - LID addressing for Signal sessions (fixes the phone not decrypting our own-device copies), serialized cipher calls, app-state key request to the phone, `examples/example.js` live check (31/31).
 - Username lookup; `examples/example-others.js` live check against a second account, a group and a channel.
 - `examples/example-manage.js`: group management and status posting verified live (16/16).
-- Channel quiz (`sendQuiz`), question (`sendQuestion`, `sendQuestionImage`), music posts (`sendMusic`) accepted live; channel image upload uses the newsletter path but the server still answers 479 (open).
+- Channel posts in the phone's wire format (captured from the app): images/videos upload raw to `/newsletter/...` with `mediatype` on the plaintext node, quizzes as `pollCreationMessageV5` + `polltype=quiz_creation`, image polls/quizzes (`sendImagePoll`), questions as `questionMessage` + `questiontype=question` (text and image), music as a video with MUSIC attribution (`sendMusic`). All acked live.

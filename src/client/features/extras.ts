@@ -20,24 +20,42 @@ export function poll(
 	if (quiz && !values.includes(o.correctAnswer!))
 		throw new Error('correctAnswer must be one of the options')
 	if (quiz && selectableCount !== 1) throw new Error('a quiz has exactly one selectable answer')
+	if (o.optionImageHashes && o.optionImageHashes.length !== values.length)
+		throw new Error('optionImageHashes needs one hash per option')
+	const image = !!o.optionImageHashes
+	const option = (optionName: string) => ({
+		optionName,
+		...(o.optionImageHashes && { optionHash: o.optionImageHashes[values.indexOf(optionName)] }),
+	})
 	const creation = {
 		name,
 		selectableOptionsCount: selectableCount,
-		options: values.map((optionName) => ({ optionName })),
+		options: values.map(option),
+		...(image && { pollContentType: 'IMAGE' }),
 		pollType: quiz ? 'QUIZ' : 'POLL',
-		...(quiz && { correctAnswer: { optionName: o.correctAnswer } }),
+		...(quiz && { correctAnswer: option(o.correctAnswer!) }),
 	}
+	// Quizzes and image polls use the V5 field (what the phone sends); plain single-choice polls the V3 field,
+	// multiple choice the original one (as WhatsApp Web does).
+	const field =
+		quiz || image
+			? 'pollCreationMessageV5'
+			: selectableCount === 1
+				? 'pollCreationMessageV3'
+				: 'pollCreationMessage'
 	return {
-		// Single-choice polls use the V3 field, multiple choice the original one (as WhatsApp Web does).
-		message: {
-			messageContextInfo: { messageSecret: randomBytes(32) },
-			...(selectableCount === 1
-				? { pollCreationMessageV3: creation }
-				: { pollCreationMessage: creation }),
-		},
+		message: { messageContextInfo: { messageSecret: randomBytes(32) }, [field]: creation },
 		// `contenttype` is only read for channel posts; chats ignore it.
 		opts: {
-			extraNodes: [{ tag: 'meta', attrs: { polltype: 'creation', contenttype: 'text' } }],
+			extraNodes: [
+				{
+					tag: 'meta',
+					attrs: {
+						polltype: quiz ? 'quiz_creation' : 'creation',
+						contenttype: image ? 'image' : 'text',
+					},
+				},
+			],
 		},
 	}
 }
@@ -45,6 +63,19 @@ export function poll(
 export interface PollOptions {
 	/** Turns the poll into a quiz: this option is the right answer. */
 	correctAnswer?: string
+	/** Image polls: hex SHA-256 of each option's (already uploaded) image, in option order. */
+	optionImageHashes?: string[]
+}
+
+/** A question post (the audience answers in a box). `inner` is a text or image message. */
+export function question(inner: Record<string, unknown>): {
+	message: Record<string, unknown>
+	opts: SendOptions
+} {
+	return {
+		message: { questionMessage: { message: inner } },
+		opts: { extraNodes: [{ tag: 'meta', attrs: { questiontype: 'question' } }] },
+	}
 }
 
 export interface MusicInfo {
@@ -57,20 +88,29 @@ export interface MusicInfo {
 	startTimeMs?: number
 }
 
-/** A text post that carries a song (shown with the music card). */
-export const musicMessage = (text: string, m: MusicInfo): Record<string, unknown> => ({
-	extendedTextMessage: {
-		text,
-		musicMetadata: {
-			title: m.title,
-			author: m.author,
-			...(m.songId && { songId: m.songId }),
-			...(m.artistAttribution && { artistAttribution: m.artistAttribution }),
-			isExplicit: m.isExplicit ?? false,
-			musicSongStartTimeInMs: m.startTimeMs ?? 0,
-		},
-	},
-})
+/** Context for a video that carries a song (what the app's "music" post looks like). */
+export function musicContext(m: MusicInfo): Record<string, unknown> {
+	const music = {
+		songId: m.songId,
+		title: m.title,
+		author: m.author,
+		artistAttribution: m.artistAttribution,
+		isExplicit: m.isExplicit ?? false,
+	}
+	return {
+		statusSourceType: 'MUSIC_STANDALONE',
+		statusAttributions: [{ type: 'MUSIC', music }],
+		annotations: [
+			{
+				shouldSkipConfirmation: true,
+				embeddedContent: {
+					embeddedMusic: { ...music, musicSongStartTimeInMs: m.startTimeMs ?? 0 },
+				},
+				embeddedAction: true,
+			},
+		],
+	}
+}
 
 /** Wrap a message so it can be opened once (`v2` is what current clients send). */
 export const viewOnce = (message: Record<string, unknown>): Record<string, unknown> => ({
