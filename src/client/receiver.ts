@@ -4,7 +4,7 @@ import { newPreKeys } from '../crypto/signal.js'
 import type { SignalCipher, SignalStorage } from '../crypto/signal.js'
 import { jidDecode, signalAddress, signalAddressString } from '../jid.js'
 import type { ProtocolLogger } from '../logging/protocol-logger.js'
-import { callAck } from './features/extras.js'
+import { callAck, decryptPollVote, pollOptionHash } from './features/extras.js'
 import { MessageSecrets, decryptMsmsg, extractMetaAiText } from './meta-ai.js'
 import { protoType } from './proto.js'
 
@@ -57,6 +57,10 @@ export interface DecodedMessage {
 	message: Record<string, unknown>
 }
 
+/** Decoded protobuf JSON of unknown shape (poll votes, secrets, ...). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Loose = Record<string, any>
+
 const children = (n: BinaryNode, tag?: string): BinaryNode[] =>
 	Array.isArray(n.content) ? n.content.filter((c) => tag === undefined || c.tag === tag) : []
 
@@ -98,6 +102,7 @@ export class Receiver {
 	readonly #acks = new Map<string, { resolve(n: BinaryNode): void; reject(e: Error): void }>()
 	readonly #retryCounts = new Map<string, number>()
 	readonly #secrets = new MessageSecrets()
+	readonly #polls = new Map<string, string[]>()
 	#queue: Promise<void> = Promise.resolve()
 	#idCounter = 0
 
@@ -139,6 +144,27 @@ export class Receiver {
 			return true
 		}
 		return false
+	}
+
+	/** Remember what we sent: its secret (replies, votes) and, for polls, the option texts. */
+	rememberOwn(id: string, chat: string, message: Loose): void {
+		const secret = message['messageContextInfo']?.messageSecret
+		if (secret) this.#secrets.set(id, secret, chat)
+		this.#notePoll(id, message)
+	}
+
+	#notePoll(id: string, message: Loose): void {
+		const poll =
+			message['pollCreationMessage'] ??
+			message['pollCreationMessageV2'] ??
+			message['pollCreationMessageV3']
+		if (poll?.options) {
+			this.#polls.set(
+				id,
+				poll.options.map((o: { optionName: string }) => o.optionName),
+			)
+			if (this.#polls.size > 500) this.#polls.delete(this.#polls.keys().next().value!)
+		}
 	}
 
 	/** Send a stanza as-is (fire and forget). */
@@ -343,6 +369,33 @@ export class Receiver {
 		return unpadRandomMax16(res.plaintext)
 	}
 
+	#pollVote(raw: Loose, voter: string, chat: string) {
+		const upd = raw['pollUpdateMessage']
+		const key = upd?.pollCreationMessageKey
+		const vote = upd?.vote
+		if (!key?.id || !vote?.encPayload || !vote?.encIv) return undefined
+		const secret = this.#secrets.candidates([key.id], chat)[0]
+		const known = this.#polls.get(key.id)
+		if (!secret) return { pollId: key.id, error: 'poll secret unknown' }
+		try {
+			const creator = key.fromMe
+				? (this.d.creds.me?.id ?? '')
+				: (key.participant ?? key.remoteJid ?? chat)
+			const hashes = decryptPollVote(
+				{ encPayload: new Uint8Array(vote.encPayload), encIv: new Uint8Array(vote.encIv) },
+				{ pollCreatorJid: creator, pollMsgId: key.id, pollSecret: secret, voterJid: voter },
+			)
+			const names = known
+				? hashes
+						.map((h) => known.find((n) => pollOptionHash(n) === h))
+						.filter((n): n is string => !!n)
+				: undefined
+			return { pollId: key.id, selected: hashes, ...(names && { options: names }) }
+		} catch (e) {
+			return { pollId: key.id, error: (e as Error).message }
+		}
+	}
+
 	/** A peer-category stanza (the phone talking to its linked devices) from our own account. */
 	#isOwnPeer(node: BinaryNode, author: string): boolean {
 		return node.attrs['category'] === 'peer' && this.#isOwnAccount(author)
@@ -498,6 +551,9 @@ export class Receiver {
 			)
 			this.d.logger.event('sender-key.installed', { group: skdm.groupId, author })
 		}
+		this.#notePoll(id, asJson as Loose)
+		const vote = this.#pollVote(raw, author, chat)
+		if (vote) asJson['pollVote'] = vote
 		const text = lenient ? extractMetaAiText(asJson) : undefined
 		return { json: text !== undefined ? { ...asJson, metaAiText: text } : asJson }
 	}

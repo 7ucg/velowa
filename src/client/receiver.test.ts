@@ -1,4 +1,4 @@
-import { createCipheriv, hkdfSync } from 'node:crypto'
+import { createCipheriv, createHash, createHmac, hkdfSync } from 'node:crypto'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -431,5 +431,100 @@ describe('Receiver: channel posts', () => {
 		})
 		await receiver.idle()
 		expect(sent.some((n) => n.attrs['type'] === 'retry')).toBe(false)
+	})
+})
+
+describe('Receiver: poll votes', () => {
+	// Independent oracle: the HMAC form of the key derivation, written out as the reference does it.
+	function encryptVote(
+		secret: Buffer,
+		pollId: string,
+		creator: string,
+		voter: string,
+		hashes: Buffer[],
+	) {
+		const sign = Buffer.concat([
+			Buffer.from(pollId),
+			Buffer.from(creator),
+			Buffer.from(voter),
+			Buffer.from('Poll Vote'),
+			Buffer.from([1]),
+		])
+		const key0 = createHmac('sha256', Buffer.alloc(32)).update(secret).digest()
+		const key = createHmac('sha256', key0).update(sign).digest()
+		const iv = Buffer.alloc(12, 4)
+		const c = createCipheriv('aes-256-gcm', key, iv)
+		c.setAAD(Buffer.from(`${pollId}\0${voter}`))
+		const plain = Buffer.concat(
+			hashes.map((h) => Buffer.concat([Buffer.from([0x0a, h.length]), h])),
+		)
+		return { encPayload: Buffer.concat([c.update(plain), c.final(), c.getAuthTag()]), encIv: iv }
+	}
+
+	it('decrypts a vote on a poll we sent and maps hashes to option names', async () => {
+		const { receiver, messages, alice } = await setup()
+		const secret = Buffer.alloc(32, 8)
+		const pollId = '3EB0POLL1'
+		receiver.rememberOwn(pollId, 'alice:2@s.whatsapp.net', {
+			messageContextInfo: { messageSecret: secret },
+			pollCreationMessageV3: {
+				name: 'Pizza?',
+				options: [{ optionName: 'Ja' }, { optionName: 'Nein' }],
+			},
+		})
+		const voter = 'alice:2@s.whatsapp.net'
+		const vote = encryptVote(secret, pollId, '4915600000000:23@s.whatsapp.net', voter, [
+			createHash('sha256').update('Nein').digest(),
+		])
+		const enc = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					pollUpdateMessage: {
+						pollCreationMessageKey: { id: pollId, fromMe: true, remoteJid: voter },
+						vote,
+						senderTimestampMs: Date.now(),
+					},
+				}),
+			),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: voter, id: 'V1', type: 'poll' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
+		})
+		await receiver.idle()
+		expect(messages[0]!.message['pollVote']).toEqual({
+			pollId,
+			selected: [createHash('sha256').update('Nein').digest('hex')],
+			options: ['Nein'],
+		})
+	})
+
+	it('reports a vote whose poll secret is unknown instead of failing the message', async () => {
+		const { receiver, messages, alice } = await setup()
+		const enc = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					pollUpdateMessage: {
+						pollCreationMessageKey: { id: 'UNKNOWN', remoteJid: 'x' },
+						vote: { encPayload: Buffer.alloc(40), encIv: Buffer.alloc(12) },
+					},
+				}),
+			),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: 'V2', type: 'poll' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
+		})
+		await receiver.idle()
+		expect(messages[0]!.message['pollVote']).toMatchObject({
+			pollId: 'UNKNOWN',
+			error: expect.stringContaining('unknown'),
+		})
 	})
 })

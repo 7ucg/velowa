@@ -64,6 +64,8 @@ export interface SenderDeps {
 	logger: ProtocolLogger
 	/** Where the per-group "already distributed our sender key to" memory lives (JSON). */
 	senderKeyMemoryPath?: string
+	/** Called with every message we send (to remember secrets / poll options). */
+	onSent?(id: string, to: string, message: Record<string, unknown>): void
 }
 
 /**
@@ -115,6 +117,7 @@ export class Sender {
 			return id
 		}
 		this.#remember(id, to, withSecret)
+		this.d.onSent?.(id, to, withSecret)
 		const stanza = to.endsWith('@g.us')
 			? await this.#groupStanza(id, to, withSecret, opts)
 			: await this.#directStanza(id, to, withSecret, opts)

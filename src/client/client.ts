@@ -612,6 +612,7 @@ export class Client {
 			receiver,
 			logger: this.logger,
 			senderKeyMemoryPath: join(this.#signalDir, 'sender-key-memory.json'),
+			onSent: (id, to, m) => receiver.rememberOwn(id, to, m),
 		})
 		try {
 			await receiver.request({

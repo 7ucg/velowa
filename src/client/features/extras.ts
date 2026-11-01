@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
 import type { BinaryNode } from '../../codec/index.js'
 import type { SendOptions } from '../sender.js'
 
@@ -113,4 +113,58 @@ export function callAck(node: BinaryNode): BinaryNode {
 			...(first && { type: first.tag }),
 		},
 	}
+}
+
+// ---- poll votes -------------------------------------------------------------------------------
+
+/** WhatsApp identifies poll options by the SHA-256 of their text. */
+export const pollOptionHash = (name: string): string =>
+	createHash('sha256').update(name).digest('hex')
+
+/**
+ * Decrypt a poll vote (`pollUpdateMessage.vote`): AES-256-GCM with
+ * `key = HKDF(pollSecret, salt = 0x00*32, info = pollId || creator || voter || "Poll Vote")`,
+ * `aad = pollId || 0x00 || voter`. Returns the selected options as lowercase hex SHA-256 hashes.
+ */
+export function decryptPollVote(
+	vote: { encPayload: Uint8Array; encIv: Uint8Array },
+	ctx: { pollCreatorJid: string; pollMsgId: string; pollSecret: Uint8Array; voterJid: string },
+): string[] {
+	if (vote.encPayload.length < 17) throw new Error('poll vote too short')
+	const info = Buffer.concat([
+		Buffer.from(ctx.pollMsgId),
+		Buffer.from(ctx.pollCreatorJid),
+		Buffer.from(ctx.voterJid),
+		Buffer.from('Poll Vote'),
+	])
+	const key = Buffer.from(hkdfSync('sha256', ctx.pollSecret, Buffer.alloc(32), info, 32))
+	const d = createDecipheriv('aes-256-gcm', key, vote.encIv)
+	d.setAAD(Buffer.from(`${ctx.pollMsgId}\u0000${ctx.voterJid}`))
+	d.setAuthTag(Buffer.from(vote.encPayload.subarray(vote.encPayload.length - 16)))
+	const plain = Buffer.concat([
+		d.update(vote.encPayload.subarray(0, vote.encPayload.length - 16)),
+		d.final(),
+	])
+	return decodePollVote(plain)
+}
+
+/** `PollVoteMessage { repeated bytes selectedOptions = 1 }` without needing the schema. */
+function decodePollVote(buf: Buffer): string[] {
+	const out: string[] = []
+	let i = 0
+	while (i < buf.length) {
+		const tag = buf[i++]!
+		if (tag !== 0x0a) throw new Error('unexpected field in poll vote')
+		let len = 0
+		let shift = 0
+		for (;;) {
+			const b = buf[i++]!
+			len |= (b & 0x7f) << shift
+			if ((b & 0x80) === 0) break
+			shift += 7
+		}
+		out.push(buf.subarray(i, i + len).toString('hex'))
+		i += len
+	}
+	return out
 }
