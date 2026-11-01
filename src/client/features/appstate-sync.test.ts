@@ -147,6 +147,30 @@ describe('AppStateSync', () => {
 	})
 })
 
+describe('AppStateSync key requests', () => {
+	it('asks the phone for the key a patch needs, once, and not when it already has it', async () => {
+		const { patch } = buildGenesisPatch(master, keyId, 'regular', ['star', 'c'], 1)
+		const asked: Uint8Array[][] = []
+		const dir = mkdtempSync(join(tmpdir(), 'velowa-as-'))
+		const sync = new AppStateSync({
+			dir,
+			request: async () => collectionAnswer('regular', [patch]),
+			logger: new ProtocolLogger({ enabled: false }),
+			onEvent: () => {},
+			onMissingKeys: (ids) => asked.push(ids),
+		})
+		await sync.sync(['regular'])
+		await sync.sync(['regular']) // throttled: no second request within a minute
+		expect(asked).toHaveLength(1)
+		expect(Buffer.from(asked[0]![0]!).equals(keyId)).toBe(true)
+
+		const withKey = harness(() => collectionAnswer('regular', [patch]))
+		withKey.sync.addKeys([{ keyId, keyData: master }])
+		await withKey.sync.sync(['regular'])
+		expect(withKey.events).toHaveLength(1)
+	})
+})
+
 describe('AppStateSync hardening', () => {
 	it('ignores collection names the server invents (they end up in file names)', async () => {
 		const { patch } = buildGenesisPatch(master, keyId, 'regular', ['star', 'c'], 1)

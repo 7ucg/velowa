@@ -272,6 +272,16 @@ export class Client {
 		receiver.sendNode(msg.presence(name, type))
 	}
 
+	/** Resolve once the phone has shared the app-state keys (needed for chat actions); false on timeout. */
+	async waitForAppState(timeoutMs = 30_000): Promise<boolean> {
+		const t0 = Date.now()
+		while (Date.now() - t0 < timeoutMs) {
+			if ((this.#appState?.keyCount ?? 0) > 0) return true
+			await new Promise((r) => setTimeout(r, 500))
+		}
+		return false
+	}
+
 	/** Group management: `client.groups.create(...)`, `.updateParticipants(...)`, `.metadata(...)`, ... */
 	readonly groups: Groups = new Groups(async (node) => (await this.#live()).receiver.request(node))
 
@@ -716,6 +726,16 @@ export class Client {
 			request: (n) => receiver.request(n),
 			logger: this.logger,
 			onEvent: (e) => this.#onAppState(e),
+			onMissingKeys: (ids) => {
+				void this.#sender
+					?.sendPeerMessage({
+						protocolMessage: {
+							type: 'APP_STATE_SYNC_KEY_REQUEST',
+							appStateSyncKeyRequest: { keyIds: ids.map((keyId) => ({ keyId })) },
+						},
+					})
+					.catch((e) => this.logger.event('appstate.key-request-failed', e))
+			},
 		})
 		this.#sender = new Sender({
 			creds,
@@ -733,7 +753,8 @@ export class Client {
 				content: [{ tag: 'active', attrs: {} }],
 			})
 			await receiver.ensurePreKeys()
-			if (this.#appState.keyCount > 0) void this.#appState.sync()
+			// Always try: with no key yet this only discovers which keys to ask the phone for.
+			void this.#appState.sync()
 		} catch (error) {
 			this.logger.event('login.setup-failed', error)
 		}

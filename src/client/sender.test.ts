@@ -293,6 +293,33 @@ describe('Sender: group stanza details and statuses', () => {
 	})
 })
 
+describe('Sender: peer messages', () => {
+	it('sends a flat enc to our own phone (device 0) as category=peer, wrapped as deviceSentMessage', async () => {
+		const { sender, stanzas, phone } = await world()
+		await sender.sendPeerMessage({
+			protocolMessage: {
+				type: 'APP_STATE_SYNC_KEY_REQUEST',
+				appStateSyncKeyRequest: { keyIds: [{ keyId: Buffer.from([1, 2]) }] },
+			},
+		})
+		const st = stanzas[0]!
+		expect(st.attrs).toMatchObject({
+			to: '4915600000000@s.whatsapp.net',
+			category: 'peer',
+			push_priority: 'high_force',
+			type: 'text',
+		})
+		expect(kids(st, 'participants')).toHaveLength(0)
+		expect(kids(st, 'meta')[0]!.attrs).toEqual({ appdata: 'default' })
+		const enc = kids(st, 'enc')[0]!
+		const out = decodeMsg(
+			(await phone.cipher.decrypt('4915600000000', 23, 'pkmsg', enc.content as Uint8Array))
+				.plaintext,
+		)
+		expect(out['deviceSentMessage'].message.protocolMessage.type).toBe(7)
+	})
+})
+
 describe('Sender: channels', () => {
 	it('posts plain protobuf in a <plaintext> node and waits for the ack', async () => {
 		const { sender, stanzas } = await world()

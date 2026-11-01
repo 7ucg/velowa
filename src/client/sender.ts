@@ -139,6 +139,38 @@ export class Sender {
 		return id
 	}
 
+	/**
+	 * Send a "peer" message to our own primary phone (device 0): app-state key requests and similar
+	 * device-to-device traffic. Wrapped as a deviceSentMessage like every message to our own devices.
+	 */
+	async sendPeerMessage(message: Record<string, unknown>): Promise<string> {
+		const { creds, logger } = this.d
+		if (!creds.me) throw new Error('not paired')
+		const meBare = `${jidDecode(creds.me.id).user}@${S_WHATSAPP_NET}`
+		const id = generateMessageId(creds.me.id)
+		await this.assertSessions([meBare])
+		const a = signalAddress(meBare)
+		const body = { deviceSentMessage: { destinationJid: meBare, message } }
+		const enc = await this.d.cipher.encrypt(
+			a.name,
+			a.device,
+			padRandomMax16(encodeProto('Message', body)),
+		)
+		const content: BinaryNode[] = [
+			{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext },
+			{ tag: 'meta', attrs: { appdata: 'default' } },
+		]
+		if (enc.type === 'pkmsg' && creds.account)
+			content.push({ tag: 'device-identity', attrs: {}, content: creds.account })
+		logger.event('send.peer', { id, kind: Object.keys(message)[0] })
+		await this.d.receiver.sendAndWaitAck({
+			tag: 'message',
+			attrs: { id, to: meBare, type: 'text', category: 'peer', push_priority: 'high_force' },
+			content,
+		})
+		return id
+	}
+
 	/** Record who a message was actually sent to: only they may later ask for a resend. */
 	#setAudience(id: string, devices: DeviceTarget[]): void {
 		const entry = this.#sent.get(id)

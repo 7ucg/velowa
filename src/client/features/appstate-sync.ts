@@ -56,6 +56,8 @@ export interface SyncDeps {
 	request(node: BinaryNode): Promise<BinaryNode>
 	logger: ProtocolLogger
 	onEvent(e: AppStateEvent): void
+	/** Keys the patches need but we do not have: ask the phone for them (it answers with an `appStateSyncKeyShare`). */
+	onMissingKeys?(keyIds: Uint8Array[]): void
 	/** Download hook (injectable for tests). */
 	download?: typeof downloadMedia
 }
@@ -222,9 +224,37 @@ export class AppStateSync {
 		renameSync(`${path}.tmp`, path)
 	}
 
-	#lookupKey = (id: Uint8Array): Uint8Array | undefined => this.#keys.get(b64(id))
+	readonly #missing = new Map<string, Uint8Array>()
+	readonly #requestedAt = new Map<string, number>()
+
+	#lookupKey = (id: Uint8Array): Uint8Array | undefined => {
+		const k = this.#keys.get(b64(id))
+		if (!k) this.#missing.set(b64(id), new Uint8Array(id))
+		return k
+	}
+
+	/** Ask for missing keys, at most once a minute per key. */
+	#requestMissing(): void {
+		const now = Date.now()
+		const ids = [...this.#missing.entries()].filter(
+			([k]) => now - (this.#requestedAt.get(k) ?? 0) > 60_000,
+		)
+		this.#missing.clear()
+		if (!ids.length || !this.d.onMissingKeys) return
+		for (const [k] of ids) this.#requestedAt.set(k, now)
+		this.d.logger.event('appstate.keys-requested', { count: ids.length })
+		this.d.onMissingKeys(ids.map(([, v]) => v))
+	}
 
 	async #sync(names: readonly string[]): Promise<void> {
+		try {
+			await this.#syncInner(names)
+		} finally {
+			this.#requestMissing()
+		}
+	}
+
+	async #syncInner(names: readonly string[]): Promise<void> {
 		const todo = new Set(names)
 		const attempts = new Map<string, number>()
 		const forceSnapshot = new Set<string>()
