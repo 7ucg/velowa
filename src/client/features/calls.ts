@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto'
 import type { BinaryNode } from '../../codec/index.js'
 import type { MediaSession } from '../call-media.js'
+import type { GroupSession } from '../../voip-wasm.js'
+import type { CallEngine } from '../../voip-wasm.js'
 
 // Call signaling (`<call>` stanzas). Builders follow wacore's stanza/call.rs; child order and attributes matter:
 // the server answers 439 for an offer whose children are out of order.
@@ -201,6 +203,11 @@ export interface CallState {
 	offerFrom?: string
 	/** The server's `<relay>` block from the offer ack (outgoing) or the offer (incoming). */
 	relay?: BinaryNode
+	/** Group calls: the roster the server holds, and the engine the roster feeds. */
+	groupSession?: GroupSession
+	groupEngine?: CallEngine
+	/** The newest shared-epoch transaction we installed. */
+	epochTx?: number
 	/** The media path (relay socket + engine) once the call has a relay. */
 	media?: MediaSession
 }
@@ -222,8 +229,40 @@ const service = (id: string, action: BinaryNode): BinaryNode => ({
 export const buildLinkCreate = (media: CallLinkMedia, id: string): BinaryNode =>
 	service(id, { tag: 'link_create', attrs: { media } })
 
-export const buildLinkQuery = (token: string, media: CallLinkMedia, id: string): BinaryNode =>
-	service(id, { tag: 'link_query', attrs: { token, media } })
+/** Call-link tokens are short URL-safe strings (22 characters in practice). */
+const TOKEN = /^[A-Za-z0-9_-]{4,64}$/
+
+/**
+ * The token of a call link: either the bare token or a `https://call.whatsapp.com/{voice|video}/{token}` URL.
+ * Anything else (another host, extra path parts, odd characters) is refused instead of being guessed at.
+ */
+export function parseCallLinkToken(link: string): string {
+	let token = link.trim()
+	if (/^[a-z][a-z0-9+.-]*:/i.test(token)) {
+		let u: URL
+		try {
+			u = new URL(token)
+		} catch {
+			throw new Error('not a call link')
+		}
+		const segs = u.pathname.split('/').filter(Boolean)
+		if (
+			u.protocol !== 'https:' ||
+			u.hostname !== 'call.whatsapp.com' ||
+			segs.length !== 2 ||
+			!['voice', 'video'].includes(segs[0]!)
+		)
+			throw new Error('not a WhatsApp call link')
+		token = segs[1]!
+	}
+	if (!TOKEN.test(token)) throw new Error('invalid call-link token')
+	return token
+}
+
+export const buildLinkQuery = (token: string, media: CallLinkMedia, id: string): BinaryNode => {
+	if (!TOKEN.test(token)) throw new Error('invalid call-link token')
+	return service(id, { tag: 'link_query', attrs: { token, media } })
+}
 
 export const buildWaitingRoomToggle = (
 	callId: string,

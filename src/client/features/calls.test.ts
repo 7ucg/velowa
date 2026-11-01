@@ -5,6 +5,7 @@ import {
 	buildLinkCreate,
 	buildLinkQuery,
 	callLinkUrl,
+	parseCallLinkToken,
 	parseLinkCreateAck,
 	parseLinkQueryAck,
 	buildOffer,
@@ -120,8 +121,8 @@ describe('call signaling builders', () => {
 			attrs: { to: '@call', id: 'i' },
 			content: [{ tag: 'link_create', attrs: { media: 'video' } }],
 		})
-		expect((buildLinkQuery('T', 'audio', 'i').content as any[])[0].attrs).toEqual({
-			token: 'T',
+		expect((buildLinkQuery('TOKEN123', 'audio', 'i').content as any[])[0].attrs).toEqual({
+			token: 'TOKEN123',
 			media: 'audio',
 		})
 		const created = parseLinkCreateAck({
@@ -148,5 +149,24 @@ describe('call signaling builders', () => {
 		})
 		expect(q).toMatchObject({ creator: 'u@lid', waitingRoomEnabled: true, isAdmin: true })
 		expect(() => parseLinkCreateAck({ tag: 'ack', attrs: {} })).toThrow()
+	})
+
+	it('accepts bare tokens and WhatsApp call-link URLs and nothing else', () => {
+		expect(parseCallLinkToken('Dyf0xzBaRWkMCJdv2rdkSU')).toBe('Dyf0xzBaRWkMCJdv2rdkSU')
+		expect(parseCallLinkToken('https://call.whatsapp.com/voice/abcd1234?x=1')).toBe('abcd1234')
+		expect(parseCallLinkToken('https://call.whatsapp.com/video/abcd1234')).toBe('abcd1234')
+		for (const bad of [
+			'http://call.whatsapp.com/voice/abcd1234',
+			'https://evil.example/voice/abcd1234',
+			'https://call.whatsapp.com/voice/abcd1234/extra',
+			'https://call.whatsapp.com/other/abcd1234',
+			'https://call.whatsapp.com.evil.example/voice/abcd1234',
+			'ab',
+			'a b c d',
+			'',
+			'javascript:alert(1)',
+		])
+			expect(() => parseCallLinkToken(bad), bad).toThrow()
+		expect(() => buildLinkQuery('', 'audio', 'i')).toThrow()
 	})
 })

@@ -81,7 +81,9 @@ export interface MediaSessionOptions {
 	peerLid: string
 	callKey: Uint8Array
 	/** The `<relay>` block of the offer ack (outgoing) or the offer (incoming). */
-	relay: BinaryNode
+	relay?: BinaryNode
+	/** Group calls: an engine already built from the roster snapshot, and where the shared relay is. */
+	group?: { engine: CallEngine; relay: { ip: string; port: number } }
 	/** 16 kHz mono signed 16-bit PCM to speak into the call, played once from the start. */
 	audioIn?: Int16Array
 	/** Audio codec on the wire: standard Opus (default) or MLow. Must match what the offer announced. */
@@ -100,6 +102,8 @@ type MediaEvents = {
 	connected: undefined
 	/** One access unit (Annex-B) of the peer's video. */
 	video: Uint8Array
+	/** Group calls: who is speaking in the chunk of the last `audio` event. */
+	speaker: string
 	/** A 60 ms chunk of the peer's audio (16 kHz mono PCM). */
 	audio: Int16Array
 	/** Engine events by name (`RelayAllocated`, `MediaConnected`, ...). */
@@ -129,29 +133,43 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 	constructor(o: MediaSessionOptions) {
 		super()
 		ensureVoipWasm()
-		const bytes = encodeNode({ tag: 'ack', attrs: {}, content: [o.relay] })
-		this.#relay = parseRelayFromNode(bytes) as RelayConfig
-		const ssrc = deriveCallParticipantSsrc(o.callId, o.selfLid, 0)
-		this.#engine = CallEngine.create(
-			JSON.stringify({
-				call_id: o.callId,
-				direction: o.direction,
-				self_lid: o.selfLid,
-				peer_lid: o.peerLid,
-				call_key: [...o.callKey],
-				ssrc,
-				relay_token: this.#relay.relay_token,
-				auth_token: this.#relay.auth_token,
-				relay_ip: this.#relay.relay_ip,
-				relay_port: this.#relay.relay_port,
-				integrity_key: this.#relay.integrity_key,
-				warp_mi_tag_len: this.#relay.warp_mi_tag_len,
-				enable_media: true,
-				enable_video: !!o.enableVideo,
-				enable_sframe: true,
-				audio: o.codec === 'mlow' ? 'mlow' : 'opus',
-			}),
-		)
+		if (o.group) {
+			this.#relay = {
+				relay_ip: o.group.relay.ip,
+				relay_port: o.group.relay.port,
+				relay_token: [],
+				auth_token: [],
+				integrity_key: [],
+				warp_mi_tag_len: 4,
+			}
+		} else {
+			if (!o.relay) throw new Error('a call needs a relay')
+			const bytes = encodeNode({ tag: 'ack', attrs: {}, content: [o.relay] })
+			this.#relay = parseRelayFromNode(bytes) as RelayConfig
+		}
+		const ssrc = o.group ? 0 : deriveCallParticipantSsrc(o.callId, o.selfLid, 0)
+		this.#engine =
+			o.group?.engine ??
+			CallEngine.create(
+				JSON.stringify({
+					call_id: o.callId,
+					direction: o.direction,
+					self_lid: o.selfLid,
+					peer_lid: o.peerLid,
+					call_key: [...o.callKey],
+					ssrc,
+					relay_token: this.#relay.relay_token,
+					auth_token: this.#relay.auth_token,
+					relay_ip: this.#relay.relay_ip,
+					relay_port: this.#relay.relay_port,
+					integrity_key: this.#relay.integrity_key,
+					warp_mi_tag_len: this.#relay.warp_mi_tag_len,
+					enable_media: true,
+					enable_video: !!o.enableVideo,
+					enable_sframe: true,
+					audio: o.codec === 'mlow' ? 'mlow' : 'opus',
+				}),
+			)
 		this.#audioIn = o.audioIn
 		if (o.codec !== 'mlow') this.#opus = newOpus()
 		this.#recordTo = o.recordTo
@@ -182,6 +200,8 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 
 	#started = false
 	#opus: OpusCodec | undefined
+	/** Group calls: one Opus decoder per speaking device. */
+	readonly #decoders = new Map<string, OpusCodec>()
 	#videoOut: Uint8Array[] | undefined
 	#videoFps = 15
 	#videoPos = 0
@@ -248,7 +268,14 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 						const pkt = this.#engine.takeEncodedAudio()
 						if (pkt) {
 							try {
-								const raw = this.#opus.decode(Buffer.from(pkt))
+								const who = this.#engine.encodedSender()
+								let dec = this.#opus
+								if (who) {
+									dec = this.#decoders.get(who) ?? newOpus()
+									this.#decoders.set(who, dec)
+								}
+								if (who) this.emit('speaker', who)
+								const raw = dec.decode(Buffer.from(pkt))
 								this.#heard(new Int16Array(raw.buffer, raw.byteOffset, raw.byteLength >> 1).slice())
 							} catch {
 								/* one undecodable packet is a gap, not a failure */
@@ -361,6 +388,7 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		if (this.#videoTimer) clearInterval(this.#videoTimer)
 		if (this.#recordVideoTo && this.#videoIn.length)
 			writeFileSync(this.#recordVideoTo, Buffer.concat(this.#videoIn))
+		for (const d of this.#decoders.values()) d.delete()
 		this.#opus?.delete()
 		if (this.#timer) clearTimeout(this.#timer)
 		if (this.#mic) clearInterval(this.#mic)

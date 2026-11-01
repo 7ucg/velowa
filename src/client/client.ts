@@ -53,6 +53,14 @@ import * as media from './features/media.js'
 import type { MediaOptions, MediaType } from './features/media.js'
 import * as msg from './features/messages.js'
 import { MediaSession } from './call-media.js'
+import {
+	GroupSession,
+	buildGroupEncRekey,
+	buildGroupOffer,
+	ensureVoipWasm,
+	parseGroupEncRekey,
+} from '../voip-wasm.js'
+import { encodeNode } from '../codec/index.js'
 import * as callSig from './features/calls.js'
 import * as buttons from './features/buttons.js'
 import { richResponse } from './features/rich-response.js'
@@ -139,6 +147,18 @@ export type ClientEvents = {
  * await client.sendText('4915...@s.whatsapp.net', 'hi')
  * ```
  */
+export interface GroupSummary {
+	applied: string
+	transaction_id: number
+	media: string
+	rekey_requested: boolean
+	rekey_owed: boolean
+	has_relay: boolean
+	relay_endpoint?: [string, number]
+	epoch_recipients: string[]
+	participants: unknown
+}
+
 export class Client {
 	readonly logger: ProtocolLogger
 	readonly #events = new TypedEmitter<ClientEvents>()
@@ -723,7 +743,47 @@ export class Client {
 		return state
 	}
 
+	/** The roster and key traffic of a group call (`group_update`, `enc_rekey`) from the call's creator. */
+	#groupCallTraffic(c: extras.CallEvent, node: BinaryNode): void {
+		const st = this.#calls.get(c.callId)
+		const action = Array.isArray(node.content) ? node.content[0] : undefined
+		if (!st?.groupSession || !action) return
+		if (c.status === 'group_update') {
+			try {
+				const summary = st.groupSession.applyUpdate(encodeNode(action)) as GroupSummary
+				if (summary.applied === 'applied') {
+					if (st.groupEngine) st.groupSession.pushToEngine(st.groupEngine, performance.now())
+					void this.#startGroupMedia(st, summary, {}).catch((e: unknown) =>
+						this.logger.event('call.group-error', e),
+					)
+				}
+			} catch (e) {
+				this.logger.event('call.group-update-failed', e)
+			}
+		} else if (c.status === 'enc_rekey' && st.direction === 'incoming') {
+			void this.#installEpoch(st, action).catch((e: unknown) =>
+				this.logger.event('call.epoch-failed', e),
+			)
+		}
+	}
+
+	/** Decrypt a shared key delivered to us and give it to the engine. */
+	async #installEpoch(st: callSig.CallState, action: BinaryNode): Promise<void> {
+		const { receiver } = await this.#live()
+		const r = parseGroupEncRekey(encodeNode(action)) as {
+			transaction_id: number
+			enc_type: string
+			ciphertext: number[]
+		}
+		const raw = await receiver.decryptCallKey(st.creator, r.enc_type, Uint8Array.from(r.ciphertext))
+		if (!raw) throw new Error('the epoch envelope holds no key')
+		st.groupEngine?.applyGroupEpoch(r.transaction_id, raw)
+		st.epochTx = r.transaction_id
+	}
+
 	#trackCall(c: extras.CallEvent, node?: BinaryNode): void {
+		if (node && (c.status === 'group_update' || c.status === 'enc_rekey'))
+			this.#groupCallTraffic(c, node)
 		const userOf = (jid: string): string => jid.split('@')[0]!.replace(/[:.]\d+$/, '')
 		const st = this.#calls.get(c.callId)
 		if (st) {
@@ -864,12 +924,158 @@ export class Client {
 		link: string,
 		media: callSig.CallLinkMedia = 'audio',
 	): Promise<callSig.CallLinkPreview> {
-		const token = link.split('/').filter(Boolean).pop()!.split('?')[0]!
+		const token = callSig.parseCallLinkToken(link)
 		const { receiver } = await this.#live()
 		const ack = await receiver.sendCallAndWait(
 			callSig.buildLinkQuery(token, media, receiver.nextId()),
 		)
 		return callSig.parseLinkQueryAck(ack)
+	}
+
+	/**
+	 * Start a group call: an ad-hoc call with at least two other people, or one bound to an existing group
+	 * (`o.group`, at least one other member). Everyone's devices ring. The shared media key is generated here and sent
+	 * to every device that connects.
+	 */
+	async startGroupCall(
+		targets: string[],
+		o: {
+			group?: string
+			video?: boolean
+			audioIn?: Int16Array
+			recordTo?: string
+		} = {},
+	): Promise<callSig.CallState> {
+		const { sender, receiver } = await this.#live()
+		const own = this.#creds.me?.lid
+		if (!own) throw new Error('no own LID yet; wait for the login to finish')
+		ensureVoipWasm()
+		const ownUser = own.replace(/:\d+@/, '@')
+		const users: string[] = []
+		for (const t of targets) {
+			let u = t.replace(/:\d+@/, '@')
+			if (!u.endsWith('@lid')) {
+				const found = (await this.lidsFor(u)).find((x) => x.pn === u)
+				if (!found) throw new Error(`no LID known for ${u}`)
+				u = found.lid
+			}
+			if (u !== ownUser && !users.includes(u)) users.push(u)
+		}
+		const devices = await sender.getDevices(users)
+		const participants = [
+			{
+				jid: ownUser,
+				devices: [{ jid: own, capability: [...callSig.CAPABILITY_STANDARD_OPUS_OFFER] }],
+			},
+			...users.map((u) => ({
+				jid: u,
+				devices: devices
+					.filter((d) => d.jid.replace(/:\d+@/, '@') === u)
+					.map((d) => ({ jid: d.jid })),
+			})),
+		]
+		if (participants.slice(1).some((p) => !p.devices.length))
+			throw new Error('a participant has no devices')
+		const callId = callSig.newCallId()
+		const id = receiver.nextId()
+		const offer = buildGroupOffer(
+			JSON.stringify({
+				call_id: callId,
+				id,
+				creator: own,
+				...(o.group && { group_jid: o.group }),
+				participants,
+				audio_rate: 16000,
+				video: !!o.video,
+			}),
+		) as BinaryNode
+		const session = new GroupSession(callId, own, own)
+		const state: callSig.CallState = {
+			callId,
+			peer: o.group ?? users[0]!,
+			creator: own,
+			direction: 'outgoing',
+			video: !!o.video,
+			...(o.group && { group: o.group }),
+			devices: devices.map((d) => d.jid),
+			status: 'calling',
+			startedAt: Date.now(),
+			groupSession: session,
+		}
+		this.#calls.set(callId, state)
+		try {
+			const ack = await receiver.sendCallAndWait(offer)
+			const summary = session.applyAck(encodeNode(ack)) as GroupSummary
+			await this.#startGroupMedia(state, summary, o)
+		} catch (e) {
+			this.#finishCall(state, 'failed')
+			throw e
+		}
+		return state
+	}
+
+	/** Build the group engine once the server gave us a relay, then deliver the shared key where it is owed. */
+	async #startGroupMedia(
+		state: callSig.CallState,
+		summary: GroupSummary,
+		o: { audioIn?: Int16Array; recordTo?: string },
+	): Promise<void> {
+		const session = state.groupSession!
+		if (!summary.relay_endpoint) throw new Error('the group call has no relay yet')
+		if (!state.groupEngine) {
+			const engine = session.createEngine(state.direction === 'incoming', true, state.video)
+			state.groupEngine = engine
+			const media = new MediaSession({
+				callId: state.callId,
+				direction: state.direction,
+				selfLid: state.creator,
+				peerLid: state.creator,
+				callKey: new Uint8Array(32),
+				group: {
+					engine,
+					relay: { ip: summary.relay_endpoint[0], port: summary.relay_endpoint[1] },
+				},
+				codec: 'opus',
+				enableVideo: state.video,
+				...(o.audioIn && { audioIn: o.audioIn }),
+				...(o.recordTo && { recordTo: o.recordTo }),
+			})
+			state.media = media
+			media.start()
+		}
+		await this.#groupEpoch(state, summary)
+	}
+
+	/** If the server asked for a shared key (and we are the creator), send it to every connected device. */
+	async #groupEpoch(state: callSig.CallState, summary: GroupSummary): Promise<void> {
+		if (!summary.rekey_requested && !summary.rekey_owed) return
+		if (state.direction !== 'outgoing' || !summary.transaction_id) return
+		if (state.epochTx !== undefined && state.epochTx >= summary.transaction_id) return
+		const { sender, receiver } = await this.#live()
+		const raw = new Uint8Array(randomBytes(32))
+		const keys = summary.epoch_recipients.length
+			? await sender.encryptForDevices(summary.epoch_recipients, { call: { callKey: raw } })
+			: []
+		for (const k of keys) {
+			receiver.sendNode(
+				buildGroupEncRekey(
+					JSON.stringify({
+						call_id: state.callId,
+						id: receiver.nextId(),
+						to: k.jid,
+						creator: state.creator,
+						transaction_id: summary.transaction_id,
+						enc_type: k.type,
+						ciphertext: [...k.ciphertext],
+						...(k.type === 'pkmsg' &&
+							this.#creds.account && { device_identity: [...this.#creds.account] }),
+					}),
+				) as BinaryNode,
+			)
+		}
+		state.groupEngine?.applyGroupEpoch(summary.transaction_id, raw)
+		state.epochTx = summary.transaction_id
+		raw.fill(0)
 	}
 
 	/** Hang up a call we placed or answered (also cancels one that is still ringing). */

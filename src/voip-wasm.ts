@@ -14,6 +14,10 @@ export function ensureVoipWasm(): void {
 
 export {
 	CallEngine,
+	GroupSession,
+	buildGroupEncRekey,
+	buildGroupOffer,
+	parseGroupEncRekey,
 	RelayChannel,
 	deriveCallParticipantSsrc,
 	parseRelayFromNode,

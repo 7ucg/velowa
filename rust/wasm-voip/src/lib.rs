@@ -1,6 +1,7 @@
 //! wasm-bindgen bridge for the vendored call stack. It owns no socket and no clock: JavaScript feeds relay datagrams,
 //! microphone frames and timer ticks in, and drains the engine's outputs (datagrams to send, PCM to play, events).
 
+mod group;
 mod relay;
 
 use wacore_voip::voip::{
@@ -88,7 +89,7 @@ pub fn derive_call_participant_ssrc(call_id: &str, self_lid: &str, slot_word: u3
     wacore_voip::voip_control::ssrc::derive_wasm_participant_ssrc(call_id, &participant_id, slot_word)
 }
 
-struct RngTxIds;
+pub(crate) struct RngTxIds;
 impl TxIdSource for RngTxIds {
     fn next_tx_id(&mut self) -> [u8; 12] {
         rand::random()
@@ -167,6 +168,15 @@ const OUT_ENCODED: i32 = 6;
 pub struct CallEngine {
     inner: CoreCallEngine,
     last: Option<Output>,
+}
+
+impl CallEngine {
+    pub(crate) fn from_core(inner: CoreCallEngine) -> CallEngine {
+        CallEngine { inner, last: None }
+    }
+    pub(crate) fn core_mut(&mut self) -> &mut CoreCallEngine {
+        &mut self.inner
+    }
 }
 
 #[wasm_bindgen]
@@ -252,6 +262,29 @@ impl CallEngine {
         }
     }
 
+    /// Who sent the encoded audio of the last `6` output (group calls: the participant's device JID), or empty.
+    #[wasm_bindgen(js_name = encodedSender)]
+    pub fn encoded_sender(&self) -> String {
+        match &self.last {
+            Some(Output::EncodedAudio(f)) => f
+                .device
+                .as_ref()
+                .or(f.sender.as_ref())
+                .map(|j| j.to_string())
+                .unwrap_or_default(),
+            _ => String::new(),
+        }
+    }
+
+    /// Install the shared group epoch (the raw key the creator delivered in `enc_rekey`).
+    #[wasm_bindgen(js_name = applyGroupEpoch)]
+    pub fn apply_group_epoch(&mut self, transaction_id: u32, raw_epoch: &[u8]) -> Result<String, JsValue> {
+        self.inner
+            .apply_group_raw_epoch(transaction_id, raw_epoch)
+            .map(|r| format!("{r:?}"))
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     /// The peer's encoded audio payload of the last `6` output (Opus mode).
     #[wasm_bindgen(js_name = takeEncodedAudio)]
     pub fn take_encoded_audio(&mut self) -> Option<Vec<u8>> {
@@ -329,4 +362,42 @@ impl CallEngine {
     pub fn is_terminated(&self) -> bool {
         self.inner.is_terminated()
     }
+}
+
+
+/// Decode a node as `encodeNode` produced it (data-type byte, optional zlib, marshalled node).
+pub(crate) fn unpack_node(encoded: &[u8]) -> Result<(Vec<u8>, ()), JsValue> {
+    let unpacked = wacore_binary::util::unpack(encoded)
+        .map_err(|e| JsValue::from_str(&format!("unpack error: {e}")))?;
+    Ok((unpacked.into_owned(), ()))
+}
+
+/// A built `Node` as the plain `{tag, attrs, content}` object `sendNode` takes (bytes as `Uint8Array`).
+pub(crate) fn node_to_js_value(node: &wacore_binary::Node) -> JsValue {
+    let obj = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("tag"), &JsValue::from_str(&node.tag));
+    let attrs = js_sys::Object::new();
+    for (k, v) in node.attrs.iter() {
+        let s = match v {
+            wacore_binary::NodeValue::String(s) => s.to_string(),
+            wacore_binary::NodeValue::Jid(j) => j.to_string(),
+        };
+        let _ = js_sys::Reflect::set(&attrs, &JsValue::from_str(k), &JsValue::from_str(&s));
+    }
+    let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("attrs"), &attrs);
+    if let Some(content) = &node.content {
+        let value: JsValue = match content {
+            wacore_binary::NodeContent::Bytes(b) => js_sys::Uint8Array::from(b.as_slice()).into(),
+            wacore_binary::NodeContent::String(s) => JsValue::from_str(s),
+            wacore_binary::NodeContent::Nodes(ns) => {
+                let arr = js_sys::Array::new();
+                for n in ns.iter() {
+                    arr.push(&node_to_js_value(n));
+                }
+                arr.into()
+            }
+        };
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("content"), &value);
+    }
+    obj.into()
 }
