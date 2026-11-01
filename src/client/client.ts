@@ -245,6 +245,10 @@ export class Client {
 		const uploaded = await media.uploadMedia(await this.#getMediaConn(), type, enc, fetch, channel)
 		const built = media.mediaMessage(type, enc, uploaded, opts)
 		if (channel) media.stripMediaKeys(built.message)
+		if (opts.fields) {
+			const key = Object.keys(built.message)[0]!
+			built.message[key] = { ...(built.message[key] as object), ...opts.fields }
+		}
 		if (uploaded.thumbnail && (type === 'image' || type === 'video')) {
 			const body = built.message[Object.keys(built.message)[0]!] as Record<string, unknown>
 			body['thumbnailDirectPath'] = uploaded.thumbnail.directPath
@@ -516,12 +520,15 @@ export class Client {
 	sendQuestionImage = (to: string, data: Uint8Array, question: string, opts: MediaOptions = {}) =>
 		this.sendMedia(to, 'image', data, { ...opts, caption: question, isQuestion: true })
 	/** Send a video with a song attached (the app's "music" post; the video is what plays). */
-	sendMusic = (to: string, video: Uint8Array, music: extras.MusicInfo, opts: MediaOptions = {}) =>
-		this.sendMedia(to, 'video', video, {
+	sendMusic = (to: string, video: Uint8Array, music: extras.MusicInfo, opts: MediaOptions = {}) => {
+		const parts = extras.musicParts(music)
+		return this.sendMedia(to, 'video', video, {
 			...opts,
-			contextInfo: { ...opts.contextInfo, ...extras.musicContext(music) },
+			contextInfo: { ...opts.contextInfo, ...parts.contextInfo },
+			fields: { ...opts.fields, ...parts.fields },
 			extraNodes: [{ tag: 'meta', attrs: { contenttype: 'song' } }],
 		})
+	}
 	async sendLocation(
 		to: string,
 		latitude: number,

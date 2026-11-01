@@ -94,8 +94,11 @@ export interface MusicInfo {
 	catalog?: Record<string, unknown>
 }
 
-/** Context for a video that carries a song (what the app's "music" post looks like). */
-export function musicContext(m: MusicInfo): Record<string, unknown> {
+/** `contextInfo` and extra video fields for a video that carries a song (what the app's "music" post looks like). */
+export function musicParts(m: MusicInfo): {
+	contextInfo: Record<string, unknown>
+	fields: Record<string, unknown>
+} {
 	const music = {
 		songId: m.songId,
 		title: m.title,
@@ -104,32 +107,38 @@ export function musicContext(m: MusicInfo): Record<string, unknown> {
 		isExplicit: m.isExplicit ?? false,
 	}
 	return {
-		forwardingScore: 0,
-		featureEligibilities: { canBeReshared: true },
-		pairedMediaType: 'NOT_PAIRED_MEDIA',
-		statusSourceType: 'MUSIC_STANDALONE',
-		statusAttributions: [{ type: 'MUSIC', music }],
-		annotations: [
-			{
-				// The music sticker sits in the middle of the frame.
-				polygonVertices: [
-					{ x: 0.175, y: 0.3377 },
-					{ x: 0.825, y: 0.3377 },
-					{ x: 0.825, y: 0.6623 },
-					{ x: 0.175, y: 0.6623 },
-				],
-				shouldSkipConfirmation: true,
-				embeddedContent: {
-					embeddedMusic: {
-						...music,
-						...m.catalog,
-						musicSongStartTimeInMs: m.startTimeMs ?? 0,
-						overlapDurationInMs: 30000,
+		contextInfo: {
+			forwardingScore: 0,
+			featureEligibilities: { canBeReshared: true },
+			pairedMediaType: 'NOT_PAIRED_MEDIA',
+			statusSourceType: 'MUSIC_STANDALONE',
+			statusAttributions: [{ type: 'MUSIC', music }],
+		},
+		// `annotations` is a field of the video itself, not of its contextInfo.
+		fields: {
+			accessibilityLabel: 'Music sticker',
+			annotations: [
+				{
+					// The music sticker sits in the middle of the frame.
+					polygonVertices: [
+						{ x: 0.175, y: 0.3377 },
+						{ x: 0.825, y: 0.3377 },
+						{ x: 0.825, y: 0.6623 },
+						{ x: 0.175, y: 0.6623 },
+					],
+					shouldSkipConfirmation: true,
+					embeddedContent: {
+						embeddedMusic: {
+							...music,
+							...m.catalog,
+							musicSongStartTimeInMs: m.startTimeMs ?? 0,
+							overlapDurationInMs: 30000,
+						},
 					},
+					embeddedAction: true,
 				},
-				embeddedAction: true,
-			},
-		],
+			],
+		},
 	}
 }
 

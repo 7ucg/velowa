@@ -334,6 +334,8 @@ export async function downloadMedia(
 // ---- message building -------------------------------------------------------------------------
 
 export interface MediaOptions {
+	/** Extra fields of the media message itself (e.g. `annotations`). */
+	fields?: Record<string, unknown>
 	/** Extra `contextInfo` fields merged into the message (e.g. music attribution). */
 	contextInfo?: Record<string, unknown>
 	/** Extra stanza children, e.g. `<meta contenttype="song"/>`. */

@@ -126,7 +126,10 @@ export class Sender {
 			// Channels are not end-to-end encrypted: the message goes out as plain protobuf.
 			// Channels render a plain `conversation`; an extendedTextMessage (and the secret we add to other chats)
 			// shows up as "your version of WhatsApp doesn't support it" on the phone.
-			const post = channelPost(message)
+			// The phone sends channel posts without a messageSecret.
+			const { messageContextInfo: _info, ...bare } = message
+			void _info
+			const post = channelPost(bare)
 			// Only the plaintext: extra nodes (e.g. the poll creation meta used in chats) are rejected here (479).
 			const stanza: BinaryNode = {
 				tag: 'message',

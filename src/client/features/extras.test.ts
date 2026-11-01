@@ -5,7 +5,7 @@ import {
 	location,
 	parseCall,
 	poll,
-	musicContext,
+	musicParts,
 	question,
 	rejectCall,
 	vcardFor,
@@ -62,8 +62,9 @@ describe('extras', () => {
 	})
 
 	it('builds the music context', () => {
-		const c = musicContext({ title: 'T', author: 'A' }) as { statusAttributions: unknown[] }
-		expect(c['statusAttributions']).toEqual([
+		const c = musicParts({ title: 'T', author: 'A', songId: '1' })
+		expect(c.fields['annotations']).toHaveLength(1)
+		expect(c.contextInfo['statusAttributions']).toEqual([
 			{ type: 'MUSIC', music: expect.objectContaining({ title: 'T', author: 'A' }) },
 		])
 	})
