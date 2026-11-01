@@ -24,6 +24,8 @@ export interface AuthCreds {
 	/** Encoded ADVSignedDeviceIdentity incl. account signature key and our device signature. */
 	account?: Uint8Array
 	platform?: string
+	/** Ephemeral key for pairing-code linking (generated lazily for old creds files). */
+	pairingEphemeralKey: IdentityKeys
 	/** Next unused one-time pre-key id (ids are never reused). */
 	nextPreKeyId: number
 }
@@ -43,6 +45,7 @@ export function initAuthCreds(): AuthCreds {
 		registrationId: randomInt(1, 16380),
 		advSecretKey: randomBytes(32).toString('base64'),
 		nextPreKeyId: 1,
+		pairingEphemeralKey: newIdentityKeyPair(),
 	}
 }
 
@@ -80,5 +83,6 @@ export function loadAuthCreds(path: string): AuthCreds | undefined {
 	if (!existsSync(path)) return undefined
 	const creds = JSON.parse(readFileSync(path, 'utf8'), reviver) as AuthCreds
 	creds.nextPreKeyId ??= 1
+	creds.pairingEphemeralKey ??= newIdentityKeyPair()
 	return creds
 }

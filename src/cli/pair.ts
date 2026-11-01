@@ -1,5 +1,5 @@
 // Dev tool: link velowa by QR code (if needed), then stay connected, log everything and take commands.
-//   node dist/cli/pair.js [--log=false] [--log-dir=logs] [--auth=auth]
+//   node dist/cli/pair.js [--log=false] [--log-dir=logs] [--auth=auth] [--phone=4915...  (pairing code instead of QR)]
 // Commands on stdin: type `help` (send, react, edit, delete, image, poll, groups, archive, privacy, ...)
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
@@ -21,7 +21,17 @@ console.log(
 	logEnabled ? `Logging everything to ${logger.sessionDir}` : 'Logging disabled (--log=false)',
 )
 
-const client = new Client({ authDir: arg('auth', 'auth'), logger })
+const phone = arg('phone', '')
+const client = new Client({
+	authDir: arg('auth', 'auth'),
+	logger,
+	...(phone && { pairWithPhoneNumber: phone }),
+})
+client.on('pairing-code', ({ code }) =>
+	console.log(
+		`\nPairing code: ${code.slice(0, 4)}-${code.slice(4)}\nOn the phone: WhatsApp > Linked devices > Link a device > Link with phone number instead\n`,
+	),
+)
 client.on('qr', ({ qr }) => {
 	console.log('\nScan with WhatsApp > Linked devices > Link a device:\n')
 	qrcode.generate(qr, { small: true })

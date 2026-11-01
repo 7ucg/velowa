@@ -395,7 +395,9 @@ export class Receiver {
 			? (this.d.creds.me?.id ?? '')
 			: (key.participant ?? key.remoteJid ?? chat)
 		const poll = this.#polls.get(this.#pollKey(claimedCreator, key.id))
-		const secrets = this.#secrets.candidates([key.id], chat)
+		// Exactly this poll's secret: the chat-wide "recent secrets" fallback is for Meta AI replies only.
+		const exact = this.#secrets.byId(key.id)
+		const secrets = exact ? [exact] : []
 		if (!secrets.length) return { pollId: key.id, error: 'poll secret unknown' }
 		// The creator comes from what we remembered about the poll, not from fields of the incoming vote.
 		const creator = poll?.creator ?? claimedCreator

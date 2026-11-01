@@ -27,6 +27,7 @@ import * as extras from './features/extras.js'
 import { parsePresence, parseReceipt } from './features/events.js'
 import type { PresenceEvent, ReceiptEvent } from './features/events.js'
 import { Communities } from './features/communities.js'
+import { companionFinish, companionHello, generatePairingCode } from './features/pairing-code.js'
 import { Groups, parseGroupNotification } from './features/groups.js'
 import { loadHistory } from './features/history.js'
 import type { HistoryChunk } from './features/history.js'
@@ -45,6 +46,8 @@ export interface ClientOptions {
 	logger?: ProtocolLogger
 	/** Override the WhatsApp Web client version / browser identity. */
 	config?: Partial<ClientConfig>
+	/** Link with a pairing code instead of a QR: the phone number (digits, with country code) of the account. */
+	pairWithPhoneNumber?: string
 	/** Reconnect automatically after a drop (default true). */
 	autoReconnect?: boolean
 }
@@ -53,6 +56,8 @@ export interface ClientOptions {
 export type ClientEvents = {
 	/** A QR code to scan (Linked devices > Link a device). Refreshed until it is scanned. */
 	qr: { qr: string }
+	/** The 8-character code to type into WhatsApp > Linked devices > Link with phone number (pairing-code mode). */
+	'pairing-code': { code: string }
 	/** Pairing finished; the connection restarts with the new identity. */
 	paired: { id: string; lid?: string }
 	/** Logged in, pre-keys in place, ready to send and receive. */
@@ -109,6 +114,7 @@ export class Client {
 	#isOpen = false
 	#mediaConn: media.MediaConn | undefined
 	#appState: AppStateSync | undefined
+	#pairing: { phone: string; code: string } | undefined
 	#ready: Promise<void> = Promise.resolve()
 
 	constructor(options: ClientOptions = {}) {
@@ -475,6 +481,25 @@ export class Client {
 				tag: 'iq',
 				attrs: { to: 's.whatsapp.net', type: 'result', id: node.attrs['id'] ?? '' },
 			})
+			const phone = this.#options.pairWithPhoneNumber
+			if (phone) {
+				// Pairing-code mode: no QR; ask the phone for a code instead.
+				if (!this.#pairing) {
+					const code = generatePairingCode()
+					this.#pairing = { phone, code }
+					void companionHello(this.#creds, phone, code)
+						.then((hello) => {
+							conn.send({
+								...hello,
+								attrs: { ...hello.attrs, id: `pc-${Date.now().toString(36)}` },
+							})
+							this.logger.event('pairing-code.requested', { phone })
+							this.#events.emit('pairing-code', { code })
+						})
+						.catch((error) => this.logger.event('pairing-code.error', error))
+				}
+				return
+			}
 			const refs = (pairDevice.content as BinaryNode[]).filter((c) => c.tag === 'ref')
 			let ms = 60_000
 			const next = () => {
@@ -491,6 +516,35 @@ export class Client {
 				ms = 20_000
 			}
 			next()
+			return
+		}
+		if (
+			node.tag === 'notification' &&
+			node.attrs['type'] === 'link_code_companion_reg' &&
+			this.#pairing
+		) {
+			conn.send({
+				tag: 'ack',
+				attrs: {
+					id: node.attrs['id'] ?? '',
+					to: node.attrs['from'] ?? '',
+					class: 'notification',
+					type: 'link_code_companion_reg',
+				},
+			})
+			const p = this.#pairing
+			void companionFinish(node, this.#creds, p.phone, p.code)
+				.then((r) => {
+					if (!r) return this.logger.event('pairing-code.empty-notification')
+					this.#creds.advSecretKey = r.advSecretKey
+					saveAuthCreds(this.#credsPath, this.#creds)
+					conn.send({
+						...r.finish,
+						attrs: { ...r.finish.attrs, id: `pf-${Date.now().toString(36)}` },
+					})
+					this.logger.event('pairing-code.finish-sent')
+				})
+				.catch((error) => this.logger.event('pairing-code.error', error))
 			return
 		}
 		if (node.tag === 'iq' && child('pair-success')) {
