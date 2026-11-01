@@ -26,6 +26,7 @@ import * as contacts from './features/contacts.js'
 import * as extras from './features/extras.js'
 import { parsePresence, parseReceipt } from './features/events.js'
 import type { PresenceEvent, ReceiptEvent } from './features/events.js'
+import * as business from './features/business.js'
 import { Communities } from './features/communities.js'
 import { companionFinish, companionHello, generatePairingCode } from './features/pairing-code.js'
 import { Groups, parseGroupNotification } from './features/groups.js'
@@ -350,6 +351,21 @@ export class Client {
 			statusPrivacy: privacy,
 		})
 	}
+
+	/** Public business profile of an account (null if it is not a business). */
+	getBusinessProfile = (jid: string) => business.getBusinessProfile(this.#q, jid)
+	/** Edit our own business profile (WhatsApp Business accounts only). */
+	updateBusinessProfile = (u: business.BusinessProfileUpdate) =>
+		business.updateBusinessProfile(this.#q, u)
+	getCatalog = (jid?: string, limit = 10, cursor?: string) =>
+		business.getCatalog(
+			this.#q,
+			jid ?? this.#creds.me?.id.replace(/:\d+@/, '@') ?? '',
+			limit,
+			cursor,
+		)
+	getCollections = (jid?: string, limit = 51) =>
+		business.getCollections(this.#q, jid ?? this.#creds.me?.id.replace(/:\d+@/, '@') ?? '', limit)
 
 	/** Send a poll (2-12 options). Votes arrive encrypted as `pollUpdateMessage`. */
 	async sendPoll(to: string, name: string, values: string[], selectableCount = 1): Promise<string> {
