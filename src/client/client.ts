@@ -752,7 +752,10 @@ export class Client {
 			try {
 				const summary = st.groupSession.applyUpdate(encodeNode(action)) as GroupSummary
 				if (summary.applied === 'applied') {
-					if (st.groupEngine) st.groupSession.pushToEngine(st.groupEngine, performance.now())
+					if (st.groupEngine) {
+						const r = st.groupSession.pushToEngine(st.groupEngine, performance.now())
+						this.logger.event('call.group-push', { transaction: summary.transaction_id, result: r })
+					}
 					void this.#startGroupMedia(st, summary, {}).catch((e: unknown) =>
 						this.logger.event('call.group-error', e),
 					)
@@ -778,7 +781,8 @@ export class Client {
 		// The envelope is a Signal message from the device that sent the stanza, not from the call creator.
 		const raw = await receiver.decryptCallKey(from, r.enc_type, Uint8Array.from(r.ciphertext))
 		if (!raw) throw new Error('the epoch envelope holds no key')
-		st.groupEngine?.applyGroupEpoch(r.transaction_id, raw)
+		const applied = st.groupEngine?.applyGroupEpoch(r.transaction_id, raw)
+		this.logger.event('call.group-epoch', { transaction: r.transaction_id, from, applied })
 		st.epochTx = r.transaction_id
 	}
 
@@ -1032,6 +1036,12 @@ export class Client {
 			const summary = session.applyAck(encodeNode(ack)) as GroupSummary
 			await this.#startGroupMedia(state, summary, o)
 		} catch (e) {
+			// The offer is out: end it, or it keeps ringing everyone it reached.
+			try {
+				receiver.sendNode(callSig.buildTerminate(callId, `${callId}@call`, own, receiver.nextId()))
+			} catch {
+				/* connection gone: the server ends it on its own */
+			}
 			this.#finishCall(state, 'failed')
 			throw e
 		}
@@ -1111,7 +1121,8 @@ export class Client {
 		const c = this.#calls.get(callId)
 		if (!c) throw new Error(`unknown call ${callId}`)
 		const { receiver } = await this.#live()
-		for (const device of c.devices)
+		// A group call is ended once, at the call service; a 1:1 call at each device it rang on.
+		for (const device of c.groupSession ? [`${callId}@call`] : c.devices)
 			receiver.sendNode(callSig.buildTerminate(callId, device, c.creator, receiver.nextId()))
 		this.#finishCall(c, 'hangup')
 	}
