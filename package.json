@@ -49,7 +49,7 @@
 		"prettier": "^3.5.3",
 		"publint": "^0.3.25",
 		"tsup": "^8.5.1",
-		"typescript": "^5.9.3",
+		"typescript": "^7.0.2",
 		"typescript-eslint": "^8.68.0",
 		"vitest": "^3.2.0"
 	},
