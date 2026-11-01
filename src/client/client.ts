@@ -270,10 +270,17 @@ export class Client {
 		const wire = opts.viewOnce ? extras.viewOnce(message) : message
 		const q = opts.isQuestion ? extras.question(wire) : undefined
 		// Channel media carries its kind on the plaintext node, not on the stanza.
-		return sender.sendMessage(to, q ? q.message : wire, {
+		let serverId: string | undefined
+		const id = await sender.sendMessage(to, q ? q.message : wire, {
 			encAttrs: { mediatype: built.mediaType },
 			extraNodes: [...(q?.opts.extraNodes ?? []), ...(opts.extraNodes ?? [])],
+			onAck: (ack) => (serverId = ack.attrs['server_id']),
 		})
+		if (channel && serverId && opts.labels?.aiContent)
+			await this.newsletters.labelAiContent(to, serverId)
+		if (channel && serverId && opts.labels?.paidPartnership)
+			await this.newsletters.labelPaidPartnership(to, serverId)
+		return id
 	}
 
 	sendImage = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>

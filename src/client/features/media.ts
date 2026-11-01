@@ -334,6 +334,8 @@ export async function downloadMedia(
 // ---- message building -------------------------------------------------------------------------
 
 export interface MediaOptions {
+	/** Channels only: label the post after sending (needs the post's server number from the ack). */
+	labels?: { aiContent?: boolean; paidPartnership?: boolean }
 	/** Extra fields of the media message itself (e.g. `annotations`). */
 	fields?: Record<string, unknown>
 	/** Extra `contextInfo` fields merged into the message (e.g. music attribution). */
