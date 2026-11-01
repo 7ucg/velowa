@@ -296,6 +296,7 @@ export interface GroupMediaOptions {
 	recordVideoTo?: string
 	/** Use this machine's microphone and speaker. */
 	localAudio?: LocalAudioOptions
+	videoFps?: number
 }
 
 /** Only the options that are set, in the shape stored on a call. */
@@ -305,6 +306,7 @@ export const pickMediaOptions = (o: GroupMediaOptions): GroupMediaOptions => ({
 	...(o.videoFrames && { videoFrames: o.videoFrames }),
 	...(o.recordVideoTo && { recordVideoTo: o.recordVideoTo }),
 	...(o.localAudio && { localAudio: o.localAudio }),
+	...(o.videoFps && { videoFps: o.videoFps }),
 })
 
 export interface CallState {

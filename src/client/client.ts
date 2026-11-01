@@ -1,3 +1,4 @@
+import { resolveCallFiles, type CallFileOptions } from './media-files.js'
 import type { LocalAudioOptions } from './local-audio.js'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
@@ -672,8 +673,10 @@ export class Client {
 			recordVideoTo?: string
 			/** Use this machine's microphone and speaker. */
 			localAudio?: LocalAudioOptions
-		} = {},
+			videoFps?: number
+		} & CallFileOptions = {},
 	): Promise<callSig.CallState> {
+		o = await resolveCallFiles(o)
 		const { sender, receiver } = await this.#live()
 		const own = this.#creds.me?.lid
 		if (!own) throw new Error('no own LID yet; wait for the login to finish')
@@ -733,7 +736,9 @@ export class Client {
 					enableVideo: !!o.video,
 					...(o.audioIn && { audioIn: o.audioIn }),
 					...(o.recordTo && { recordTo: o.recordTo }),
-					...(o.videoFrames && { video: { frames: o.videoFrames } }),
+					...(o.videoFrames && {
+						video: { frames: o.videoFrames, ...(o.videoFps && { fps: o.videoFps }) },
+					}),
 					...(o.recordVideoTo && { recordVideoTo: o.recordVideoTo }),
 					...(o.localAudio && { localAudio: o.localAudio }),
 				})
@@ -907,8 +912,10 @@ export class Client {
 			recordVideoTo?: string
 			/** Use this machine's microphone and speaker. */
 			localAudio?: LocalAudioOptions
-		} = {},
+			videoFps?: number
+		} & CallFileOptions = {},
 	): Promise<callSig.CallState> {
+		o = await resolveCallFiles(o)
 		const c = this.#calls.get(callId)
 		if (!c || c.direction !== 'incoming' || !c.offer) throw new Error(`no incoming call ${callId}`)
 		if (c.group) return this.#acceptGroupCall(c, o)
@@ -950,7 +957,9 @@ export class Client {
 			enableVideo: c.video,
 			...(o.audioIn && { audioIn: o.audioIn }),
 			...(o.recordTo && { recordTo: o.recordTo }),
-			...(o.videoFrames && { video: { frames: o.videoFrames } }),
+			...(o.videoFrames && {
+				video: { frames: o.videoFrames, ...(o.videoFps && { fps: o.videoFps }) },
+			}),
 			...(o.recordVideoTo && { recordVideoTo: o.recordVideoTo }),
 			...(o.localAudio && { localAudio: o.localAudio }),
 		})
@@ -991,8 +1000,10 @@ export class Client {
 		o: {
 			group?: string
 			video?: boolean
-		} & callSig.GroupMediaOptions = {},
+		} & callSig.GroupMediaOptions &
+			CallFileOptions = {},
 	): Promise<callSig.CallState> {
+		o = await resolveCallFiles(o)
 		const { sender, receiver } = await this.#live()
 		const own = this.#creds.me?.lid
 		if (!own) throw new Error('no own LID yet; wait for the login to finish')
@@ -1103,7 +1114,9 @@ export class Client {
 				enableVideo: state.video,
 				...(o.audioIn && { audioIn: o.audioIn }),
 				...(o.recordTo && { recordTo: o.recordTo }),
-				...(o.videoFrames && { video: { frames: o.videoFrames } }),
+				...(o.videoFrames && {
+					video: { frames: o.videoFrames, ...(o.videoFps && { fps: o.videoFps }) },
+				}),
 				...(o.recordVideoTo && { recordVideoTo: o.recordVideoTo }),
 				...(o.localAudio && { localAudio: o.localAudio }),
 			})
@@ -1186,8 +1199,9 @@ export class Client {
 	async joinCallLink(
 		link: string,
 		media: callSig.CallLinkMedia = 'audio',
-		o: callSig.GroupMediaOptions = {},
+		o: callSig.GroupMediaOptions & CallFileOptions = {},
 	): Promise<callSig.CallState> {
+		o = await resolveCallFiles(o)
 		const token = callSig.parseCallLinkToken(link)
 		const { receiver } = await this.#live()
 		const own = this.#creds.me?.lid

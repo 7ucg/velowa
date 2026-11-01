@@ -75,3 +75,10 @@ export { buildReport, REPORT_FLOWS, ReportStore } from './client/features/report
 export type { ReportOptions, ReportedMessage } from './client/features/report.js'
 export { splitAnnexB, writeWav } from './client/call-media.js'
 export { type LocalAudioOptions } from './client/local-audio.js'
+export {
+	decodeAudioFile,
+	decodeVideoFile,
+	type CallFileOptions,
+	type MediaFileOptions,
+	type VideoFileOptions,
+} from './client/media-files.js'

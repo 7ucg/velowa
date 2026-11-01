@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Files as call media: `audioFile` (mp3, ogg, wav, m4a, ...) and `videoFile` (mp4, ... with its sound) on `startCall`, `acceptCall`, `startGroupCall` and `joinCallLink`, decoded with ffmpeg (`decodeAudioFile`, `decodeVideoFile`).
 - Local audio: `localAudio: { mic, speaker }` on calls uses the machine microphone and speaker through `parec`/`pacat` (PulseAudio/PipeWire). Group video calls: `videoFrames`/`recordVideoTo` on group calls, and the offer spells the codec `h.264`/`H264` (the other spelling is never rung).
 - Call links: `joinCallLink` (with or without a waiting room), `setApprovalRequired`, `answerWaitingRoom`; group calls report the relay latencies to the call service. A joiner must take the first roster update as its snapshot, not the join ack.
 - Incoming group calls: `acceptCall` joins an invitation into a group call (preaccept acknowledged, then the bare accept at the call service), reads the roster from the offer, waits for the relay and the shared key; group offers are recognised by `group-jid`/`group_info`.
