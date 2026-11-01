@@ -386,6 +386,11 @@ fn dtls_config(
     DtlsConfigBuilder::default()
         .with_crypto_provider(provider)
         .with_certificates(vec![cert])
+        // Deliberately not verified (as WhatsApp Web and the reference client do): signalling hands out no relay
+        // certificate or fingerprint to check against, and this layer protects nothing the media depends on. Audio and
+        // video are end-to-end encrypted with SRTP keys derived from the call key, and the relay's STUN
+        // MESSAGE-INTEGRITY key comes over the authenticated signalling connection. A relay impersonator could drop
+        // the call but not read or alter its media. If a stable relay fingerprint is ever captured, pin it here.
         .with_insecure_skip_verify(true)
         // Only the SNI/cert-hostname, irrelevant under insecure_skip_verify; set to silence the
         // library's empty-server-name warn.
