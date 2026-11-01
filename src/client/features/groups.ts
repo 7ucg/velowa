@@ -188,6 +188,11 @@ export class Groups {
 		}))
 	}
 
+	/** Add Meta AI (or another bot) to a group so it can be mentioned there. */
+	addBot(jid: string, botUser = '867051314767696'): Promise<{ jid: string; status: string }[]> {
+		return this.updateParticipants(jid, [`${botUser}@bot`], 'add')
+	}
+
 	async inviteCode(jid: string): Promise<string | undefined> {
 		return kids(await this.#query(jid, 'get', [{ tag: 'invite', attrs: {} }]), 'invite')[0]?.attrs[
 			'code'

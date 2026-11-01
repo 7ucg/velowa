@@ -4,6 +4,7 @@ import {
 	buildReceipts,
 	chatState,
 	edit,
+	forward,
 	presence,
 	reaction,
 	revoke,
@@ -125,5 +126,37 @@ describe('through the sender (decrypted by the remote device)', () => {
 		)
 		expect(plain['protocolMessage'].type).toBe(14)
 		expect(plain['protocolMessage'].editedMessage.extendedTextMessage.text).toBe('fixed')
+	})
+})
+
+describe('forward and expiration', () => {
+	it('marks forwards, drops the reply thread and the original secret', () => {
+		const m = forward(
+			{
+				messageContextInfo: { messageSecret: Buffer.alloc(32) },
+				extendedTextMessage: {
+					text: 'hi',
+					contextInfo: {
+						stanzaId: 'old',
+						participant: 'x@lid',
+						quotedMessage: { conversation: 'q' },
+						mentionedJid: ['a@lid'],
+					},
+				},
+			},
+			6,
+		)
+		expect(m['messageContextInfo']).toBeUndefined()
+		expect(
+			(m['extendedTextMessage'] as { contextInfo: Record<string, unknown> }).contextInfo,
+		).toEqual({ mentionedJid: ['a@lid'], isForwarded: true, forwardingScore: 6 })
+		expect(() => forward({})).toThrow()
+	})
+
+	it('adds the disappearing-message timer', () => {
+		const m = withContext(textMessage('x'), BOB, { expiration: 604800 }, ME)
+		expect(
+			(m['extendedTextMessage'] as { contextInfo: { expiration: number } }).contextInfo.expiration,
+		).toBe(604800)
 	})
 })

@@ -21,6 +21,8 @@ export interface TextOptions {
 	quoted?: Quoted
 	/** JIDs to @mention; the text must contain `@<number>` for each. */
 	mentions?: string[]
+	/** Disappearing-message timer in seconds for this message (use the chat's current setting). */
+	expiration?: number
 }
 
 const normalizedUser = (jid: string): string => {
@@ -49,7 +51,7 @@ export function withContext(
 	opts: TextOptions,
 	meId: string,
 ): Record<string, unknown> {
-	if (!opts.quoted && !opts.mentions?.length) return message
+	if (!opts.quoted && !opts.mentions?.length && !opts.expiration) return message
 	const field = Object.keys(message).find((k) => k !== 'messageContextInfo')
 	if (!field) return message
 	const body = { ...(message[field] as Record<string, unknown>) }
@@ -64,6 +66,7 @@ export function withContext(
 		if (key.remoteJid !== chat) ctx['remoteJid'] = key.remoteJid
 	}
 	if (opts.mentions?.length) ctx['mentionedJid'] = opts.mentions
+	if (opts.expiration) ctx['expiration'] = opts.expiration
 	body['contextInfo'] = ctx
 	return { ...message, [field]: body }
 }
@@ -180,4 +183,20 @@ export function presence(name: string, type: 'available' | 'unavailable'): Binar
 /** Ask to be told when `jid` goes online/offline. */
 export function presenceSubscribe(jid: string, id: string): BinaryNode {
 	return { tag: 'presence', attrs: { to: jid, id, type: 'subscribe' } }
+}
+
+/** Mark a received message as forwarded (shows the "Forwarded" label; `score` > 4 shows "Forwarded many times"). */
+export function forward(message: Record<string, unknown>, score = 1): Record<string, unknown> {
+	const field = Object.keys(message).find((k) => k !== 'messageContextInfo')
+	if (!field) throw new Error('empty message')
+	const body = { ...(message[field] as Record<string, unknown>) }
+	const ctx = { ...(body['contextInfo'] as Record<string, unknown> | undefined) }
+	// A forward does not keep the original thread: drop quote data and the original's secret.
+	delete ctx['quotedMessage']
+	delete ctx['stanzaId']
+	delete ctx['participant']
+	body['contextInfo'] = { ...ctx, isForwarded: true, forwardingScore: Math.max(1, score) }
+	const { messageContextInfo: _drop, ...rest } = message
+	void _drop
+	return { ...rest, [field]: body }
 }

@@ -168,6 +168,18 @@ export class Client {
 		return sender.sendMessage(to, msg.withContext(msg.textMessage(text), to, opts, meId))
 	}
 
+	/** Forward a received message (its WAProto content) to another chat. */
+	async forwardMessage(to: string, message: Record<string, unknown>, score = 1): Promise<string> {
+		return this.sendMessage(to, msg.forward(message, score))
+	}
+
+	/** Run any WhatsApp Web GraphQL (`w:mex`) query by id, e.g. the ones listed in baron-baileys-v2. */
+	mex = <T = unknown>(queryId: string, variables: unknown, dataPath?: string): Promise<T> =>
+		mexFor(
+			async (n) => (await this.#live()).receiver.request(n),
+			() => `mex-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+		)<T>(queryId, variables, dataPath)
+
 	/** Send a raw WAProto `Message` object. */
 	async sendMessage(to: string, message: Record<string, unknown>): Promise<string> {
 		const { sender } = await this.#live()
