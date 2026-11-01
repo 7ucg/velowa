@@ -37,8 +37,7 @@ else is TypeScript. The package ships **ESM and CommonJS** builds with type defi
 10. [What you can build](#what-you-can-build)
 11. [Reliability and safety](#reliability-and-safety)
 12. [Development](#development)
-13. [Status and limits](#status-and-limits)
-14. [More documentation](#more-documentation)
+13. [More documentation](#more-documentation)
 
 ## Install and set up
 
@@ -604,34 +603,12 @@ src/
 tests/               mirrors src/ one to one; tests/helpers has the fake remote world
 rust/                the WebAssembly crates (wacore-* are one-time copies from whatsapp-rust)
 examples/            runnable programs: echo-bot, cases-bot, plugin-bot, notifier, channel-post, group-admin, calls, tour
-docs/                architecture, design decisions, checklist
+docs/                longer notes
 ```
 
 The Rust crates copied from `whatsapp-rust` are a one-time copy, not a live dependency; they are owned and maintained here.
 
-## Status and limits
-
-Verified against real accounts: pairing and login, 1:1, group and channel messaging with media, polls, quizzes and
-questions, buttons, lists and rich answers, groups and communities (including permissions and member tags), channel posts
-with labels, group status, reports (user, group, channel), link previews, antiban, payment requests, and calls: 1:1 voice
-and video in both directions, incoming calls, group calls in both directions, call links with and without a waiting
-room, camera on and off, raised hands and reactions in a call, files and the local microphone and speaker as call
-media. Everything is also covered by unit and loopback tests.
-
-Known limits:
-
-- **Channel status** posts (the stories of channels) show up as normal posts: the real wire format is not known yet.
-- **A voice-only group call cannot turn the camera on** later (WhatsApp wants the call to start as a video call).
-- **Several people talking at once** are played one after the other on the local speaker, not mixed.
-- **Not implemented:** account registration, interop with other messengers, managed accounts, and typed wrappers for
-  every GraphQL query (use `client.mex`).
-- The API is **pre-1.0**: names can still change between versions; the `CHANGELOG.md` lists every change.
-
 ## More documentation
 
-- [`docs/architecture.md`](docs/architecture.md): toolchain, layout, the event model.
-- [`docs/design-decisions.md`](docs/design-decisions.md): where velowa departs from Baileys and why.
-- [`docs/feature-checklist.md`](docs/feature-checklist.md): what exists, per area.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): rules for git, for what `npm install` puts on a machine, and for releases.
 - [`CHANGELOG.md`](CHANGELOG.md): what changed, newest first.
-- [`prompt.md`](prompt.md) and [`TODO.md`](TODO.md): the original brief and task breakdown.
