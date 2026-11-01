@@ -357,7 +357,10 @@ export class AppStateSync {
 		const patchesNode = kids(node, 'patches')[0] ?? node
 		for (const p of kids(patchesNode, 'patch')) {
 			if (!(p.content instanceof Uint8Array)) continue
-			const bytes = await this.#withExternalMutations(p.content, download)
+			const bytes = this.#withVersion(
+				await this.#withExternalMutations(p.content, download),
+				c.version + 1,
+			)
 			const res = c.applyPatch(bytes, this.#lookupKey, (indexMac) => {
 				const v = macs.get(b64(indexMac))
 				return v ? new Uint8Array(Buffer.from(v, 'base64')) : undefined
@@ -374,6 +377,19 @@ export class AppStateSync {
 		this.#persist(name)
 		for (const m of events) this.d.onEvent(toEvent(name, m))
 		return node.attrs['has_more_patches'] === 'true'
+	}
+
+	/**
+	 * Patches the server relays may carry no `version`; it is then the next one after ours (the patches of a
+	 * collection are consecutive). Same rule as the reference implementation.
+	 */
+	#withVersion(patch: Uint8Array, next: number): Uint8Array {
+		const T = protoType('SyncdPatch')
+		const obj = T.toObject(T.decode(patch), { bytes: Uint8Array, longs: Number }) as {
+			version?: { version?: number }
+		}
+		if (obj.version?.version) return patch
+		return encodeProto('SyncdPatch', { ...obj, version: { version: next } })
 	}
 
 	/** A patch can reference its mutations as an external blob; inline them before verification. */

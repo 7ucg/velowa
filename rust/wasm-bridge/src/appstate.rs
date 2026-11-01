@@ -373,9 +373,7 @@ impl AppStateCollection {
         next.version += 1;
 
         let mut patch = wa::SyncdPatch {
-            version: buffa::MessageField::some(wa::SyncdVersion {
-                version: Some(next.version),
-            }),
+            // No `version` field: the collection node carries the base version; Baileys' patches omit it too.
             mutations: built,
             key_id: buffa::MessageField::some(wa::KeyId {
                 id: Some(key_id.to_vec()),

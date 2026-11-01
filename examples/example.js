@@ -92,6 +92,10 @@ await step('list groups', async () => {
 })
 
 console.log('\napp-state (changes the chat state of your own chat and reverts it)')
+await step('wait for the phone to share the app-state key', async () => {
+	if (!(await client.waitForAppState(40_000))) throw new Error('the phone did not answer the key request in 40s')
+	return 'key received'
+})
 await step('archive own chat', () => client.archiveChat(me, true))
 await step('unarchive own chat', () => client.archiveChat(me, false))
 await step('pin own chat', () => client.pinChat(me, true))
