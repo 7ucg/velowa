@@ -223,8 +223,10 @@ copy the one you like and change it:
 
 | Example | Style |
 | --- | --- |
-| [`examples/bots/cases.js`](examples/bots/cases.js) | **Cases**: one `switch (command)` over the message text, helper values (`isOwner`, `isAdmin`, `group`) computed on the way |
-| [`examples/bots/plugins.js`](examples/bots/plugins.js) + [`examples/bots/plugins/`](examples/bots/plugins) | **Plugins**: one file per command (`export default { commands: ['ping'], run }`), loaded from a folder and reloaded when a file changes |
+| [`examples/cases-bot.js`](examples/cases-bot.js) | **Cases**: one `switch (command)` over the message text, helper values (`isOwner`, `isAdmin`, `group`) computed on the way |
+| [`examples/plugin-bot/`](examples/plugin-bot) | **Plugins**: one file per command (`export default { commands: ['ping'], run }`), loaded from a folder and reloaded when a file changes |
+
+All examples, with how to run them, are listed in [`examples/`](examples/README.md).
 
 The cases style in short:
 
@@ -575,8 +577,9 @@ npm run build:js      # only the TypeScript part (when the WebAssembly did not c
 npm test              # vitest
 npm run lint          # tsc --noEmit + eslint (src and tests)
 npm run check:package # publint + are-the-types-wrong: ESM and CJS consumers both resolve cleanly
+npm run check:docs    # type-checks the code in this README and in examples/ against the built package
 npm run pair          # a dev console that exercises everything and logs every frame
-npm run example       # a scripted end-to-end check against your own account (examples/example.js)
+npm run example       # a tour of the features against your own account (examples/tour.js)
 npm run logs -- list  # look after the protocol logs
 ```
 
@@ -590,7 +593,7 @@ src/
   auth/ logging/ events/ wam/ cli/
 tests/               mirrors src/ one to one; tests/helpers has the fake remote world
 rust/                the WebAssembly crates (wacore-* are one-time copies from whatsapp-rust)
-examples/            example.js (end to end), bots/ (cases and plugins), basic-bot/
+examples/            runnable programs: echo-bot, cases-bot, plugin-bot, notifier, channel-post, group-admin, calls, tour
 docs/                architecture, design decisions, checklist
 ```
 
