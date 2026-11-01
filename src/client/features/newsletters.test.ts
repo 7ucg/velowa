@@ -137,3 +137,28 @@ describe('newsletters', () => {
 		})
 	})
 })
+
+describe('post labels', () => {
+	it('sends the AI-content and paid-partnership mutations', async () => {
+		const calls: unknown[][] = []
+		const n = new Newsletters(
+			(async (...a: unknown[]) => (calls.push(a), {})) as never,
+			(async () => ({ tag: 'iq', attrs: {} })) as never,
+			() => 'id',
+		)
+		await n.labelAiContent('1@newsletter', 418)
+		await n.labelPaidPartnership('1@newsletter', '418')
+		expect(calls).toEqual([
+			[
+				'27909718265289596',
+				{ newsletter_id: '1@newsletter', server_id: '418', message_type: 'MESSAGE' },
+				'xwa2_newsletter_label_ai_content',
+			],
+			[
+				'26102375079404865',
+				{ newsletter_id: '1@newsletter', server_id: '418', message_type: 'MESSAGE' },
+				'xwa2_newsletter_label_paid_partnership',
+			],
+		])
+	})
+})

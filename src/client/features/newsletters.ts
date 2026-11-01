@@ -14,6 +14,8 @@ export const NEWSLETTER_QUERY = {
 	MUTE: '25033614912931367',
 	UNMUTE: '24551592861177484',
 	DELETE: '30062808666639665',
+	LABEL_AI_CONTENT: '27909718265289596',
+	LABEL_PAID_PARTNERSHIP: '26102375079404865',
 } as const
 
 export interface NewsletterMetadata {
@@ -69,6 +71,22 @@ export class Newsletters {
 		private readonly request: RequestFn,
 		private readonly nextId: () => string,
 	) {}
+
+	/** Mark one of our posts as AI-generated content (`serverId` is the number from the send ack). */
+	labelAiContent = (jid: string, serverId: string | number, messageType = 'MESSAGE') =>
+		this.mex(
+			NEWSLETTER_QUERY.LABEL_AI_CONTENT,
+			{ newsletter_id: jid, server_id: String(serverId), message_type: messageType },
+			'xwa2_newsletter_label_ai_content',
+		)
+
+	/** Mark one of our posts as a paid partnership. */
+	labelPaidPartnership = (jid: string, serverId: string | number, messageType = 'MESSAGE') =>
+		this.mex(
+			NEWSLETTER_QUERY.LABEL_PAID_PARTNERSHIP,
+			{ newsletter_id: jid, server_id: String(serverId), message_type: messageType },
+			'xwa2_newsletter_label_paid_partnership',
+		)
 
 	create = async (name: string, description?: string) =>
 		parseNewsletter(
