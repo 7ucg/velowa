@@ -32,9 +32,9 @@ Legend: **done** = implemented with tests; **live** = also exercised against a r
 | --- | --- |
 | Connection, Noise, keepalive, QR + pairing-code login | done; QR/login **live**, pairing code verified against a simulated phone only |
 | Receive pipeline (1:1, groups, channels, Meta AI, retries, receipts, acks, history, polls) | done; decryption/acks/retries/Meta AI **live** |
-| Send pipeline (1:1, groups, status, channels, media, polls, interactive, forward, edit/revoke/react) | done; to the own chat **live**: text, reply, react, edit, delete, poll, location, contact, buttons, image, document; **also live to a second account, a group and a channel** (text, reply, react, edit, delete, image, poll, post; delivery/read receipts came back); status posting still loopback-only |
+| Send pipeline (1:1, groups, status, channels, media, polls, interactive, forward, edit/revoke/react) | done; to the own chat **live**: text, reply, react, edit, delete, poll, location, contact, buttons, image, document; **also live to a second account, a group and a channel** (text, reply, react, edit, delete, image, poll, post; delivery/read receipts came back); text status posting **live** (audience = one account) |
 | Chats / app-state sync (read + write), labels, presence | done; sync (key request to the phone, 328 mutations) and pin/archive writes **live** |
-| Groups, AI-group bot, communities | done; group metadata, invite code and sending to a group **live**; management calls and communities request-level only |
+| Groups, AI-group bot, communities | done; group metadata, invite code and sending to a group **live**; management **live** too (subject, description, announce/locked, disappearing timer, remove/add/promote/demote, 14 notifications came back as events); communities request-level only |
 | Newsletters | done; metadata (role OWNER) and posting **live**; other mex ids may be stale |
 | Business profile, catalog, collections | done (read + profile update) |
 | Privacy, contacts, blocklist, username | done |

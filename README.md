@@ -68,6 +68,8 @@ await client.groups.fetchAll()
 
 A scripted end-to-end check against your own account, no CLI involved (`npm run example`, source in `examples/example.js`): sends text, replies, reactions, edit/delete, poll, location, contact, buttons, image and document to your own chat, reads contacts/privacy/groups, syncs app state and toggles pin/archive on your own chat and reverts it. Last live result: 31 of 31 steps. `examples/example-others.js` does the same against a second account, a group and a channel (26 of 27 live; the one miss was a 404 for a missing profile picture, now returned as `undefined`).
 
+`examples/example-manage.js` exercises group management and status posting on a test group and reverts every change (live: 16 of 16).
+
 A dev console that exercises everything (`help` lists the commands) and logs every frame, stanza and HTTP call:
 `npm run pair` (logs go to `logs/`, credentials to `auth/`; both are git-ignored and contain account secrets).
 
