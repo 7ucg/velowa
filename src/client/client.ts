@@ -25,6 +25,7 @@ import type { AppStateEvent, ChatUpdate, ContactUpdate } from './features/appsta
 import * as contacts from './features/contacts.js'
 import { parsePresence, parseReceipt } from './features/events.js'
 import type { PresenceEvent, ReceiptEvent } from './features/events.js'
+import { Communities } from './features/communities.js'
 import { Groups, parseGroupNotification } from './features/groups.js'
 import { mexFor } from './features/mex.js'
 import { Newsletters } from './features/newsletters.js'
@@ -280,6 +281,11 @@ export class Client {
 		this.#push(act.labelMessage(jid, labelId, messageId, labeled))
 	/** Default disappearing-messages timer for a 1:1 chat, in seconds (0 = off). */
 	setChatEphemeral = (jid: string, seconds: number) => this.#push(act.chatEphemeral(jid, seconds))
+
+	/** Communities: create, link sub-groups, deactivate (members/settings: use `groups` with the community JID). */
+	readonly communities: Communities = new Communities(async (node) =>
+		(await this.#live()).receiver.request(node),
+	)
 
 	/** Channels: `client.newsletters.metadata('invite', code)`, `.follow(jid)`, ... (posting: `sendText(jid, ...)`). */
 	readonly newsletters: Newsletters = new Newsletters(
