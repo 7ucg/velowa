@@ -26,6 +26,21 @@ export interface ReceiverDeps {
 	onNotification?(n: BinaryNode): void
 	/** Called with every receipt (after it was acked). */
 	onReceipt?(n: BinaryNode): void
+	/** The phone announced a history chunk (`historySyncNotification`). */
+	onHistory?(n: {
+		ref: {
+			url?: string
+			directPath?: string
+			mediaKey: Uint8Array
+			fileSha256?: Uint8Array
+			fileEncSha256?: Uint8Array
+			fileLength?: number
+		}
+		syncType?: string
+		chunkOrder?: number
+		progress?: number
+		inline?: Uint8Array
+	}): void
 	/** Sync keys shared by the primary phone (`appStateSyncKeyShare`). */
 	onAppStateKeys?(keys: { keyId: Uint8Array; keyData: Uint8Array }[]): void
 }
@@ -277,7 +292,7 @@ export class Receiver {
 						: type === 'msmsg'
 							? this.#decryptMsmsg(node, author, data)
 							: await this.#decryptEnc(from, author, type, data)
-				const msg = await this.#decodeAndApply(plain, author, id, from, type === 'msmsg')
+				const msg = await this.#decodeAndApply(node, plain, author, id, from, type === 'msmsg')
 				decrypted++
 				logger.event('message.decrypted', { id, from, participant, type, message: msg.json })
 				const decoded: DecodedMessage = { id, from, message: msg.json }
@@ -320,15 +335,22 @@ export class Receiver {
 		return unpadRandomMax16(res.plaintext)
 	}
 
+	/** A peer-category stanza (the phone talking to its linked devices) from our own account. */
+	#isOwnPeer(node: BinaryNode, author: string): boolean {
+		return node.attrs['category'] === 'peer' && this.#isOwnAccount(author)
+	}
+
 	/** Is this JID (any device) one of our own account's, by phone number or LID? */
 	#isOwnAccount(jid: string): boolean {
 		const me = this.d.creds.me
 		if (!me) return false
 		try {
-			const user = jidDecode(jid).user
-			return (
-				user === jidDecode(me.id).user || (me.lid !== undefined && user === jidDecode(me.lid).user)
-			)
+			const a = jidDecode(jid)
+			const same = (other: string) => {
+				const b = jidDecode(other)
+				return a.user === b.user && a.domainType === b.domainType
+			}
+			return same(me.id) || (me.lid !== undefined && same(me.lid))
 		} catch {
 			return false
 		}
@@ -379,6 +401,7 @@ export class Receiver {
 	}
 
 	async #decodeAndApply(
+		node: BinaryNode,
 		plain: Uint8Array,
 		author: string,
 		id: string,
@@ -408,6 +431,7 @@ export class Receiver {
 			}
 			messageContextInfo?: { messageSecret?: Buffer }
 			protocolMessage?: {
+				historySyncNotification?: Record<string, unknown>
 				appStateSyncKeyShare?: {
 					keys?: { keyId?: { keyId?: Buffer }; keyData?: { keyData?: Buffer } }[]
 				}
@@ -416,7 +440,7 @@ export class Receiver {
 		const secret = raw.messageContextInfo?.messageSecret
 		if (secret) this.#secrets.set(id, secret, chat)
 		const shared = raw.protocolMessage?.appStateSyncKeyShare?.keys
-		if (shared?.length && this.d.onAppStateKeys && !this.#isOwnAccount(author)) {
+		if (shared?.length && this.d.onAppStateKeys && !this.#isOwnPeer(node, author)) {
 			// Whoever holds these keys can forge our chat/contact state, so only our own account may hand them out.
 			this.d.logger.event('appstate.key-share-rejected', { author, count: shared.length })
 		} else if (shared?.length && this.d.onAppStateKeys) {
@@ -426,6 +450,36 @@ export class Receiver {
 					: [],
 			)
 			if (keys.length) this.d.onAppStateKeys(keys)
+		}
+		const hist = raw.protocolMessage?.historySyncNotification
+		if (hist && this.d.onHistory && this.#isOwnPeer(node, author)) {
+			const b = (x: unknown) => (x instanceof Uint8Array ? new Uint8Array(x) : undefined)
+			const mk = b(hist['mediaKey'])
+			if (mk || hist['initialHistBootstrapInlinePayload']) {
+				const inline = b(hist['initialHistBootstrapInlinePayload'])
+				this.d.onHistory({
+					ref: {
+						...(typeof hist['directPath'] === 'string' && { directPath: hist['directPath'] }),
+						mediaKey: mk ?? new Uint8Array(32),
+						...(b(hist['fileSha256']) && { fileSha256: b(hist['fileSha256'])! }),
+						...(b(hist['fileEncSha256']) && { fileEncSha256: b(hist['fileEncSha256'])! }),
+						...(hist['fileLength'] !== undefined && { fileLength: Number(hist['fileLength']) }),
+					},
+					...(typeof hist['syncType'] === 'number' || typeof hist['syncType'] === 'string'
+						? { syncType: String(hist['syncType']) }
+						: {}),
+					...(hist['chunkOrder'] !== undefined && { chunkOrder: Number(hist['chunkOrder']) }),
+					...(hist['progress'] !== undefined && { progress: Number(hist['progress']) }),
+					...(inline && { inline }),
+				})
+				// The phone waits for this before it sends the next chunk.
+				this.#sendSafe({
+					tag: 'receipt',
+					attrs: { id: node.attrs['id'] ?? '', to: node.attrs['from'] ?? '', type: 'hist_sync' },
+				})
+			}
+		} else if (hist) {
+			this.d.logger.event('history.rejected', { author })
 		}
 		const skdm = raw.senderKeyDistributionMessage
 		if (skdm?.axolotlSenderKeyDistributionMessage && skdm.groupId) {

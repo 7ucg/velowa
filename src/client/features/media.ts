@@ -53,7 +53,7 @@ export interface EncryptedMedia {
 
 export function encryptMedia(
 	plain: Uint8Array,
-	type: MediaType,
+	type: BlobType,
 	mediaKey: Buffer = randomBytes(32),
 ): EncryptedMedia {
 	const { iv, cipherKey, macKey } = mediaKeys(mediaKey, type)

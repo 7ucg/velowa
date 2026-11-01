@@ -362,7 +362,7 @@ describe('helpers', () => {
 })
 
 describe('Receiver: app-state key shares', () => {
-	async function shareFrom(authorJid: string) {
+	async function shareFrom(authorJid: string, category: string | undefined = 'peer') {
 		const keys: { keyId: Uint8Array; keyData: Uint8Array }[][] = []
 		const w = await setup()
 		const share = text('', {
@@ -385,7 +385,7 @@ describe('Receiver: app-state key shares', () => {
 		})
 		withHook.handle({
 			tag: 'message',
-			attrs: { from: authorJid, id: 'K1', type: 'text', category: 'peer' },
+			attrs: { from: authorJid, id: 'K1', type: 'text', ...(category && { category }) },
 			content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
 		})
 		await withHook.idle()
@@ -394,6 +394,14 @@ describe('Receiver: app-state key shares', () => {
 
 	it('accepts keys from our own account (phone, by LID or number)', async () => {
 		expect(await shareFrom('48615137533978@lid')).toHaveLength(1)
+	})
+
+	it('drops keys that do not arrive as a peer message, even from our own account', async () => {
+		expect(await shareFrom('48615137533978@lid', '')).toHaveLength(0)
+	})
+
+	it('does not treat the same digits in another address family as ours', async () => {
+		expect(await shareFrom('48615137533978@s.whatsapp.net')).toHaveLength(0)
 	})
 
 	it('drops keys shared by anyone else', async () => {

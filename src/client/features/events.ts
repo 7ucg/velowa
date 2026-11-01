@@ -16,6 +16,9 @@ const kids = (n: BinaryNode, tag?: string): BinaryNode[] =>
 	Array.isArray(n.content) ? n.content.filter((c) => tag === undefined || c.tag === tag) : []
 
 /** Parse a `<receipt>` (including the batched `<list><item id/></list>` form). */
+const digits = (v: string | undefined): number | undefined =>
+	v && /^\d{1,12}$/.test(v) ? Number(v) : undefined
+
 export function parseReceipt(node: BinaryNode): ReceiptEvent {
 	const ids = [node.attrs['id'] ?? '']
 	for (const list of kids(node, 'list'))
@@ -25,7 +28,7 @@ export function parseReceipt(node: BinaryNode): ReceiptEvent {
 		...(node.attrs['participant'] && { participant: node.attrs['participant'] }),
 		ids: ids.filter(Boolean),
 		type: node.attrs['type'] ?? 'delivery',
-		...(node.attrs['t'] && { timestamp: Number(node.attrs['t']) }),
+		...(digits(node.attrs['t']) !== undefined && { timestamp: digits(node.attrs['t'])! }),
 	}
 }
 
@@ -45,12 +48,13 @@ export function parsePresence(node: BinaryNode): PresenceEvent | undefined {
 	const participant = node.attrs['participant']
 	const base = { chat, ...(participant && { participant }) }
 	if (node.tag === 'presence') {
-		const type = node.attrs['type'] === 'unavailable' ? 'unavailable' : 'available'
+		const t = node.attrs['type']
+		// Only the two defined states count; an unknown variant must not be reported as "online".
+		if (t !== undefined && t !== 'available' && t !== 'unavailable') return undefined
 		return {
 			...base,
-			state: type,
-			...(node.attrs['last'] &&
-				/^\d+$/.test(node.attrs['last']) && { lastSeen: Number(node.attrs['last']) }),
+			state: t ?? 'available',
+			...(digits(node.attrs['last']) !== undefined && { lastSeen: digits(node.attrs['last'])! }),
 		}
 	}
 	if (node.tag === 'chatstate') {

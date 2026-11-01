@@ -27,6 +27,8 @@ import { parsePresence, parseReceipt } from './features/events.js'
 import type { PresenceEvent, ReceiptEvent } from './features/events.js'
 import { Communities } from './features/communities.js'
 import { Groups, parseGroupNotification } from './features/groups.js'
+import { loadHistory } from './features/history.js'
+import type { HistoryChunk } from './features/history.js'
 import { mexFor } from './features/mex.js'
 import { Newsletters } from './features/newsletters.js'
 import type { GroupNotification } from './features/groups.js'
@@ -68,6 +70,8 @@ export type ClientEvents = {
 	receipt: ReceiptEvent
 	/** Online/offline and typing indicators (after `subscribePresence`, or in open chats). */
 	presence: PresenceEvent
+	/** A chunk of chat history announced by the phone after linking (chats, messages, push names). */
+	history: HistoryChunk
 	/** A group changed (members, subject, settings). */
 	'group.update': GroupNotification
 	/** Any server notification, parsed or not (account_sync, devices, picture, ...). */
@@ -520,7 +524,23 @@ export class Client {
 			logger: this.logger,
 			send: (n) => conn.send(n),
 			onMessage: (m) => this.#events.emit('message', m),
-			onReceipt: (node) => this.#events.emit('receipt', parseReceipt(node)),
+			onHistory: (n) => {
+				void loadHistory(n)
+					.then((chunk) => {
+						this.logger.event('history.chunk', {
+							syncType: chunk.syncType,
+							progress: chunk.progress,
+							chats: chunk.chats.length,
+							messages: chunk.chats.reduce((a, c) => a + c.messages.length, 0),
+						})
+						this.#events.emit('history', chunk)
+					})
+					.catch((error) => this.logger.event('history.error', error))
+			},
+			onReceipt: (node) => {
+				// Receipts are keyed by (chat, id): a bare id is not unique across chats.
+				if (node.attrs['from']) this.#events.emit('receipt', parseReceipt(node))
+			},
 			onAppStateKeys: (keys) => {
 				this.#appState?.addKeys(keys)
 				void this.#appState?.sync()

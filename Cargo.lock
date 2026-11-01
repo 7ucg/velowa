@@ -1183,7 +1183,9 @@ dependencies = [
 name = "velowa-wasm-bridge"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "buffa",
  "console_error_panic_hook",
  "js-sys",
  "rand",

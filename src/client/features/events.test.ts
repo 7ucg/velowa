@@ -52,5 +52,11 @@ describe('incoming receipts and presence', () => {
 			})?.state,
 		).toBe('paused')
 		expect(parsePresence({ tag: 'chatstate', attrs: { from: 'a@x' } })).toBeUndefined()
+		expect(
+			parsePresence({ tag: 'presence', attrs: { from: 'a@x', type: 'weird' } }),
+		).toBeUndefined()
+		expect(
+			parseReceipt({ tag: 'receipt', attrs: { from: 'a@x', id: 'M', t: 'NaN' } }).timestamp,
+		).toBeUndefined()
 	})
 })
