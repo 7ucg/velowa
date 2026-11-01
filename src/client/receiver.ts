@@ -22,6 +22,8 @@ export interface ReceiverDeps {
 	send(node: BinaryNode): void
 	/** Called with every successfully decoded message (plain JSON-able object). */
 	onMessage?(m: DecodedMessage): void
+	/** Called with every notification (after it was acked). */
+	onNotification?(n: BinaryNode): void
 }
 
 export interface DecodedMessage {
@@ -227,6 +229,7 @@ export class Receiver {
 				}
 			}
 			this.#sendSafe(buildAck(node, meId))
+			this.d.onNotification?.(node)
 			return
 		}
 		if (node.tag === 'receipt') {

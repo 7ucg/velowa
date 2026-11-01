@@ -18,6 +18,8 @@ import type { ClientConfig } from './pairing.js'
 import { Receiver } from './receiver.js'
 import type { DecodedMessage } from './receiver.js'
 import { Sender } from './sender.js'
+import { Groups, parseGroupNotification } from './features/groups.js'
+import type { GroupNotification } from './features/groups.js'
 import * as media from './features/media.js'
 import type { MediaOptions, MediaType } from './features/media.js'
 import * as msg from './features/messages.js'
@@ -46,6 +48,10 @@ export type ClientEvents = {
 	close: { code?: number; reason: string; willReconnect: boolean }
 	/** A decrypted incoming message. */
 	message: DecodedMessage
+	/** A group changed (members, subject, settings). */
+	'group.update': GroupNotification
+	/** Any server notification, parsed or not (account_sync, devices, picture, ...). */
+	notification: { type: string; node: BinaryNode }
 }
 
 /**
@@ -216,6 +222,9 @@ export class Client {
 		receiver.sendNode(msg.presence(name, type))
 	}
 
+	/** Group management: `client.groups.create(...)`, `.updateParticipants(...)`, `.metadata(...)`, ... */
+	readonly groups: Groups = new Groups(async (node) => (await this.#live()).receiver.request(node))
+
 	/** Remember the account's display name (used for presence). */
 	setName(name: string): void {
 		if (!this.#creds.me) throw new Error('not paired')
@@ -371,6 +380,12 @@ export class Client {
 			logger: this.logger,
 			send: (n) => conn.send(n),
 			onMessage: (m) => this.#events.emit('message', m),
+			onNotification: (node) => {
+				const type = node.attrs['type'] ?? ''
+				this.#events.emit('notification', { type, node })
+				if (type === 'w:gp2')
+					for (const n of parseGroupNotification(node)) this.#events.emit('group.update', n)
+			},
 		})
 		this.#receiver = receiver
 		this.#sender = new Sender({
