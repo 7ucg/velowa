@@ -253,6 +253,46 @@ describe('Sender: retry receipts', () => {
 	})
 })
 
+describe('Sender: group stanza details and statuses', () => {
+	it('adds the reporting token to group messages and multicast to legacy group ids', async () => {
+		const { sender, stanzas } = await world()
+		await sender.sendText('120363000000000001@g.us', 'x')
+		await sender.sendText('4915600000000-1600000000@g.us', 'y')
+		expect(kids(stanzas[0]!, 'reporting')).toHaveLength(1)
+		expect(kids(stanzas[0]!, 'multicast')).toHaveLength(0)
+		expect(kids(stanzas[1]!, 'multicast')).toHaveLength(1)
+	})
+
+	it('posts a status to the given audience with status_setting and no addressing_mode', async () => {
+		const { sender, stanzas, bob0 } = await world()
+		await sender.sendMessage(
+			'status@broadcast',
+			{ extendedTextMessage: { text: 'story' } },
+			{ statusRecipients: ['4915611111111@s.whatsapp.net'], statusPrivacy: 'allowlist' },
+		)
+		const st = stanzas[0]!
+		expect(st.attrs['to']).toBe('status@broadcast')
+		expect(st.attrs['addressing_mode']).toBeUndefined()
+		expect(kids(st, 'meta')[0]!.attrs).toEqual({
+			status_setting: 'allowlist',
+			session_scope: 'status',
+		})
+		expect(kids(st, 'enc')[0]!.attrs['type']).toBe('skmsg')
+		expect(
+			kids(kids(st, 'participants')[0]!, 'to')
+				.map((t) => t.attrs['jid'])
+				.sort(),
+		).toEqual(['4915611111111:1@s.whatsapp.net', bob0.jid].sort())
+	})
+
+	it('refuses a status without an audience', async () => {
+		const { sender } = await world()
+		await expect(
+			sender.sendMessage('status@broadcast', { extendedTextMessage: { text: 's' } }),
+		).rejects.toThrow(/statusRecipients/)
+	})
+})
+
 describe('Sender: channels', () => {
 	it('posts plain protobuf in a <plaintext> node and waits for the ack', async () => {
 		const { sender, stanzas } = await world()

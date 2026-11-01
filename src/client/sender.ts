@@ -46,6 +46,10 @@ export interface SendOptions {
 	stanzaAttrs?: Record<string, string>
 	/** Attributes added to every `<enc>` node, e.g. `{ mediatype: 'image' }` or `{ 'decrypt-fail': 'hide' }`. */
 	encAttrs?: Record<string, string>
+	/** Status/story posts: who may see it (the status audience). Required for `status@broadcast`. */
+	statusRecipients?: string[]
+	/** Audience mode written to `<meta status_setting>`; defaults to `contacts`. */
+	statusPrivacy?: 'contacts' | 'allowlist' | 'denylist'
 	/** Extra child nodes of `<message>` (e.g. `<meta .../>`). */
 	extraNodes?: BinaryNode[]
 }
@@ -125,9 +129,10 @@ export class Sender {
 		}
 		this.#remember(id, to, withSecret)
 		this.d.onSent?.(id, to, withSecret)
-		const stanza = to.endsWith('@g.us')
-			? await this.#groupStanza(id, to, withSecret, opts)
-			: await this.#directStanza(id, to, withSecret, opts)
+		const stanza =
+			to.endsWith('@g.us') || to === 'status@broadcast'
+				? await this.#groupStanza(id, to, withSecret, opts)
+				: await this.#directStanza(id, to, withSecret, opts)
 		this.d.logger.event('send.message', { id, to })
 		await this.d.receiver.sendAndWaitAck(stanza)
 		this.d.logger.event('send.acked', { id, to })
@@ -436,7 +441,12 @@ export class Sender {
 		opts: SendOptions,
 	): Promise<BinaryNode> {
 		const { creds } = this.d
-		const { participants, addressingMode } = await this.groupParticipants(group)
+		const isStatus = group === 'status@broadcast'
+		if (isStatus && !opts.statusRecipients?.length)
+			throw new Error('a status needs statusRecipients')
+		const { participants, addressingMode } = isStatus
+			? { participants: opts.statusRecipients!, addressingMode: 'lid' }
+			: await this.groupParticipants(group)
 		const devices = await this.getDevices(participants)
 		this.#setAudience(id, devices)
 		const senderId = addressingMode === 'lid' && creds.me?.lid ? creds.me.lid : creds.me!.id
@@ -489,6 +499,15 @@ export class Sender {
 		if (nodes.length) content.unshift({ tag: 'participants', attrs: {}, content: nodes })
 		if (needsIdentity && creds.account)
 			content.push({ tag: 'device-identity', attrs: {}, content: creds.account })
+		if (/^\d{1,15}-\d+@g\.us$/.test(group) && !message['reactionMessage'])
+			content.push({ tag: 'multicast', attrs: {} })
+		const reporting = this.#reporting(id, group, message)
+		if (reporting) content.push(reporting)
+		if (isStatus && !opts.stanzaAttrs?.['edit'])
+			content.push({
+				tag: 'meta',
+				attrs: { status_setting: opts.statusPrivacy ?? 'contacts', session_scope: 'status' },
+			})
 		content.push(...(opts.extraNodes ?? []))
 		return {
 			tag: 'message',
@@ -496,7 +515,7 @@ export class Sender {
 				id,
 				to: group,
 				type: messageType(message),
-				addressing_mode: addressingMode,
+				...(isStatus ? {} : { addressing_mode: addressingMode }),
 				...opts.stanzaAttrs,
 			},
 			content,

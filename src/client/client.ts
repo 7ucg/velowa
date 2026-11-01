@@ -338,6 +338,19 @@ export class Client {
 	updatePrivacy = (name: contacts.PrivacyCategory, value: contacts.PrivacyValue) =>
 		contacts.updatePrivacy(this.#q, name, value)
 
+	/** Post a text status/story visible to `recipients` (the audience must be given explicitly). */
+	async sendStatusText(
+		text: string,
+		recipients: string[],
+		privacy: 'contacts' | 'allowlist' | 'denylist' = 'contacts',
+	): Promise<string> {
+		const { sender } = await this.#live()
+		return sender.sendMessage('status@broadcast', msg.textMessage(text), {
+			statusRecipients: recipients,
+			statusPrivacy: privacy,
+		})
+	}
+
 	/** Send a poll (2-12 options). Votes arrive encrypted as `pollUpdateMessage`. */
 	async sendPoll(to: string, name: string, values: string[], selectableCount = 1): Promise<string> {
 		const { sender } = await this.#live()
