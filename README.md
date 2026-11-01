@@ -11,15 +11,66 @@ else is TypeScript. The package ships **ESM and CommonJS** builds with type defi
 > account can get it restricted or banned; read [Reliability and safety](#reliability-and-safety) before you point
 > it at an account you care about.
 
+## How velowa differs from Baileys and its forks
+
+velowa is **not a fork**: its TypeScript is written fresh, not copied from Baileys, and it was designed from the protocol up and
+only then compared with Baileys behaviour where that helps. What that changes in practice:
+
+| | Baileys and libraries derived from it | velowa |
+| --- | --- | --- |
+| Where the protocol work runs | JavaScript: Signal, Noise, binary encoding and decoding | **Rust compiled to WebAssembly** for Signal, Noise, WABinary, app-state crypto and call media; TypeScript for everything else |
+| Calls | usually only seen and rejected: no audio or video | **real calls**: voice and video, one to one and in groups, call links with a waiting room, camera / hand / reactions in a call, audio and video from files or your microphone and speaker |
+| Sending | one `sendMessage(jid, content)` with a loose content object | the same one-call style, **`client.send(jid, {...})`, with typed content kinds**, plus a typed method for every feature (`sendPoll`, `postToChannel`, `reportUser`, ...) |
+| Connection | `connection.update` with status codes to interpret | one **`connection` event** (`state`, `qr`, `pairingCode`, `reason`, `loggedOut`) and **automatic reconnect**; no reconnect loop to write |
+| Bots | you write your own message parsing | **`serialize()`** gives a ready `Message` (`text`, `sender`, `quoted`, `reply()`, `download()`), `GroupCache` / `isGroupAdmin` for permissions; **no framework is imposed**, cases and plugin bots are examples |
+| Account safety | often an add-on or left to you | **`antiban`** is built in (rate caps, random gaps, new-chat delay, identical-text limit, warm-up) |
+| Debugging | a logger you configure | a **protocol log of every frame and stanza**, grouped by day, rotated, compressed and pruned, with `velowa-logs` to manage it |
+
+Also worth knowing: velowa ships **ESM and CommonJS** builds with types in a package of about 1.5 MB with three runtime
+dependencies, **no install script and no Rust needed** on your machine (checked by tests, `publint` and `attw`); it is
+written in strict TypeScript with a test suite that mirrors `src/`, and the code in this README and in `examples/` is
+type-checked against the built package.
+
+## What exists and works
+
+"Checked" says how far a row has been tried: **live** means it was exercised against real WhatsApp accounts and phones;
+**tests** means it is covered by unit and loopback tests only.
+
+| Area | What you get | Checked |
+| --- | --- | --- |
+| Connection | QR or pairing-code linking, login from the saved folder, automatic reconnect, `connection` event | live (QR); tests (pairing code) |
+| Messages | text, replies, mentions, reactions, edit, delete, forward, view-once, link previews, typing / presence, read receipts | live |
+| Media | image, video, audio, voice note, document, sticker: encrypted upload and download, from bytes, files, URLs or streams | live |
+| Interactive | buttons, lists, templates, native-flow buttons, Meta-AI style rich answers (text, code, table, LaTeX, map) and HTML | live |
+| Polls | polls, quizzes, questions, image polls and quizzes | live |
+| Groups | create, members, admins, name, description, settings, invite links, join approval, disappearing messages, member tags, permissions | live |
+| Communities | create, link and unlink groups, deactivate | live for link and unlink; tests for the rest |
+| Channels | create, follow, mute; post text, image, video, polls, quizzes, questions and music; AI-content and paid-partnership labels | live for posting and labels; tests for create, follow, mute |
+| Status | text status with a chosen audience; group status (text, picture, video, music, voice) | live |
+| Contacts and account | number lookup, "About", profile picture, username lookup, blocking, privacy settings, profile name and picture | live for lookups, blocking and reading settings; tests for changing them |
+| Chats | archive, mute, pin, star, mark read, delete, clear, labels, per-chat disappearing timer | live for archive, pin, star; tests for the rest |
+| Reports | report a user, a group, a channel, a message to the admins | live |
+| Payments | payment requests and answers | live |
+| Calls | voice and video one to one in both directions; incoming calls; group calls in both directions; call links, joining, waiting room and its admin commands; camera on and off, raised hands and reactions in a call; files and microphone / speaker as call media | live |
+| Anti-ban and analytics | rate limits and pacing; WAM usage events | live |
+| Business | business profile, catalog and collections, editing a business profile | live for reading a profile; tests for the rest |
+| History | the history chunks the phone sends after linking | tests |
+| Escape hatches | `client.request(node)` for any stanza, `client.mex(queryId, variables)` for any GraphQL query | live |
+
+Not included: registering a new number, managed accounts and interop with other messengers. Channel *status* posts
+arrive as ordinary posts, and a call that started as voice-only cannot turn the camera on later.
+
 ## Contents
 
-1. [Install and set up](#install-and-set-up)
-2. [Link an account](#link-an-account)
-3. [A first bot in 20 lines](#a-first-bot-in-20-lines)
-4. [Receiving: messages and events](#receiving-messages-and-events)
-5. [Sending: `client.send`](#sending-clientsend)
-6. [Writing a bot: your style](#writing-a-bot-your-style)
-7. [Feature guide](#feature-guide)
+1. [How velowa differs from Baileys and its forks](#how-velowa-differs-from-baileys-and-its-forks)
+2. [What exists and works](#what-exists-and-works)
+3. [Install and set up](#install-and-set-up)
+4. [Link an account](#link-an-account)
+5. [A first bot in 20 lines](#a-first-bot-in-20-lines)
+6. [Receiving: messages and events](#receiving-messages-and-events)
+7. [Sending: `client.send`](#sending-clientsend)
+8. [Writing a bot: your style](#writing-a-bot-your-style)
+9. [Feature guide](#feature-guide)
    - [Messages: reply, mention, react, edit, delete, forward](#messages-reply-mention-react-edit-delete-forward)
    - [Media](#media)
    - [Buttons, lists and rich answers](#buttons-lists-and-rich-answers)
@@ -32,12 +83,12 @@ else is TypeScript. The package ships **ESM and CommonJS** builds with type defi
    - [Reports](#reports)
    - [Calls](#calls)
    - [Chats and app state](#chats-and-app-state)
-8. [Events reference](#events-reference)
-9. [Configuration](#configuration)
-10. [What you can build](#what-you-can-build)
-11. [Reliability and safety](#reliability-and-safety)
-12. [Development](#development)
-13. [More documentation](#more-documentation)
+10. [Events reference](#events-reference)
+11. [Configuration](#configuration)
+12. [What you can build](#what-you-can-build)
+13. [Reliability and safety](#reliability-and-safety)
+14. [Development](#development)
+15. [More documentation](#more-documentation)
 
 ## Install and set up
 
