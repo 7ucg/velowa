@@ -984,9 +984,7 @@ export class Client {
 		o: {
 			group?: string
 			video?: boolean
-			audioIn?: Int16Array
-			recordTo?: string
-		} = {},
+		} & callSig.GroupMediaOptions = {},
 	): Promise<callSig.CallState> {
 		const { sender, receiver } = await this.#live()
 		const own = this.#creds.me?.lid
@@ -1074,7 +1072,7 @@ export class Client {
 	async #startGroupMedia(
 		state: callSig.CallState,
 		summary: GroupSummary,
-		o: { audioIn?: Int16Array; recordTo?: string },
+		o: callSig.GroupMediaOptions,
 	): Promise<void> {
 		const session = state.groupSession!
 		// An invitation we answered gets its relay with a later roster update.
@@ -1098,6 +1096,8 @@ export class Client {
 				enableVideo: state.video,
 				...(o.audioIn && { audioIn: o.audioIn }),
 				...(o.recordTo && { recordTo: o.recordTo }),
+				...(o.videoFrames && { video: { frames: o.videoFrames } }),
+				...(o.recordVideoTo && { recordVideoTo: o.recordVideoTo }),
 			})
 			state.media = media
 			media.on('connected', () => {
@@ -1178,7 +1178,7 @@ export class Client {
 	async joinCallLink(
 		link: string,
 		media: callSig.CallLinkMedia = 'audio',
-		o: { audioIn?: Int16Array; recordTo?: string } = {},
+		o: callSig.GroupMediaOptions = {},
 	): Promise<callSig.CallState> {
 		const token = callSig.parseCallLinkToken(link)
 		const { receiver } = await this.#live()
@@ -1202,10 +1202,7 @@ export class Client {
 			startedAt: Date.now(),
 			groupSession: session,
 			members: new Set([user(join.creator), user(own)]),
-			mediaOptions: {
-				...(o.audioIn && { audioIn: o.audioIn }),
-				...(o.recordTo && { recordTo: o.recordTo }),
-			},
+			mediaOptions: callSig.pickMediaOptions(o),
 			...(join.inWaitingRoom && { waiting: true }),
 			awaitsRelay: true,
 		}
@@ -1328,7 +1325,7 @@ export class Client {
 	/** Answer an invitation into a group call: join at the call service, the relay and the shared key follow. */
 	async #acceptGroupCall(
 		c: callSig.CallState,
-		o: { audioIn?: Int16Array; recordTo?: string },
+		o: callSig.GroupMediaOptions,
 	): Promise<callSig.CallState> {
 		const { receiver } = await this.#live()
 		const own = this.#creds.me?.lid
@@ -1339,10 +1336,7 @@ export class Client {
 		const summary = session.applyInvite(encodeNode(inner)) as GroupSummary
 		c.groupSession = session
 		c.members = new Set([c.creator.replace(/:\d+@/, '@'), ...summary.members])
-		c.mediaOptions = {
-			...(o.audioIn && { audioIn: o.audioIn }),
-			...(o.recordTo && { recordTo: o.recordTo }),
-		}
+		c.mediaOptions = callSig.pickMediaOptions(o)
 		const service = `${c.callId}@call`
 		// One step at a time: the service wants the preparation acknowledged before the answer.
 		await receiver.sendCallAndWait(

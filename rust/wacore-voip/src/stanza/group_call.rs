@@ -1326,8 +1326,8 @@ fn audio_opus(rate: &str) -> Node {
 #[inline(never)]
 fn video_offer_node(device_orientation: u8) -> Node {
     NodeBuilder::new("video")
-        .attr("enc", "h264")
-        .attr("dec", "h264")
+        .attr("enc", "h.264")
+        .attr("dec", "H264")
         .attr("orientation", "0")
         .attr("screen_width", "1920")
         .attr("screen_height", "1080")

@@ -286,6 +286,23 @@ export const buildPreaccept = (
 		],
 	})
 
+/** What a group call does with its media: audio to send, video to send, and where to record what comes in. */
+export interface GroupMediaOptions {
+	audioIn?: Int16Array
+	recordTo?: string
+	/** H.264 access units (Annex-B, with AUD NALs) to send, looped. */
+	videoFrames?: Uint8Array[]
+	recordVideoTo?: string
+}
+
+/** Only the options that are set, in the shape stored on a call. */
+export const pickMediaOptions = (o: GroupMediaOptions): GroupMediaOptions => ({
+	...(o.audioIn && { audioIn: o.audioIn }),
+	...(o.recordTo && { recordTo: o.recordTo }),
+	...(o.videoFrames && { videoFrames: o.videoFrames }),
+	...(o.recordVideoTo && { recordVideoTo: o.recordVideoTo }),
+})
+
 export interface CallState {
 	callId: string
 	/** The other side (user JID). */
@@ -322,7 +339,7 @@ export interface CallState {
 	awaitsRelay?: boolean
 	/** Joined through a call link and still in the waiting room. */
 	waiting?: boolean
-	mediaOptions?: { audioIn?: Int16Array; recordTo?: string }
+	mediaOptions?: GroupMediaOptions
 	pendingEpoch?: { transaction: number; key: Uint8Array }
 	/** The newest shared-epoch transaction we installed. */
 	epochTx?: number
