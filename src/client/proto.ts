@@ -1,4 +1,15 @@
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import protobuf from 'protobufjs'
+
+/** The schema sits next to the built bundle (`dist/proto/`), or two levels up from this file in the source tree. */
+function schemaPath(): string {
+	for (const rel of ['./proto/WAProto.proto', '../../proto/WAProto.proto']) {
+		const path = fileURLToPath(new URL(rel, import.meta.url))
+		if (existsSync(path)) return path
+	}
+	throw new Error('WAProto.proto not found next to the library')
+}
 
 // The full WAProto schema (the Rust waproto crate only carries the 35 types it needs).
 let root: protobuf.Root | undefined
@@ -6,7 +17,7 @@ let root: protobuf.Root | undefined
 export function protoRoot(): protobuf.Root {
 	if (!root) {
 		const r = new protobuf.Root()
-		r.loadSync(new URL('../../proto/WAProto.proto', import.meta.url).pathname)
+		r.loadSync(schemaPath())
 		r.resolveAll()
 		root = r
 	}

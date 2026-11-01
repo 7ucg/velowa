@@ -3,7 +3,7 @@
 ## Toolchain (TS side)
 | Concern | Choice | Why |
 | --- | --- | --- |
-| Build | plain `tsc`, ESM, `module: NodeNext` | A library needs no bundler; emits `.js` + `.d.ts` 1:1, trivially debuggable. Baileys' toolchain was picked for JS+JSDoc and is not carried over. |
+| Build | `tsup` (esbuild), ESM **and** CommonJS, `tsc --noEmit` for the type check | One source, two formats: `dist/index.js` + `dist/index.d.ts` for `import`, `dist/index.cjs` + `dist/index.d.cts` for `require`; no source maps. The generated WASM glue is bundled, the `.wasm` files and `WAProto.proto` are copied next to the bundles (`scripts/copy-assets.mjs`). `npm run check:package` runs `publint` and `attw`. |
 | Tests | `vitest` | Runs TS/ESM natively; `ts-jest` + ESM is a known pain point. Same `describe/it/expect` shape. |
 | Lint/format | `eslint` 9 flat config + `typescript-eslint`, `prettier` | Standard; type-aware rules catch missed union cases. |
 | WASM loader | generated `wasm-pack --target web` glue, loaded with `initSync(readFileSync(...))` | Works on Node >= 18 with no bundler and no `fetch` of a file URL; browsers use the default async init. |

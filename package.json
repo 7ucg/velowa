@@ -3,13 +3,20 @@
 	"version": "0.0.0",
 	"description": "WhatsApp Web multi-device client library — TypeScript, with libsignal/WABinary/Noise/app-state crypto ported to Rust and compiled to WASM",
 	"type": "module",
-	"main": "./dist/index.js",
+	"main": "./dist/index.cjs",
 	"types": "./dist/index.d.ts",
 	"exports": {
 		".": {
-			"types": "./dist/index.d.ts",
-			"import": "./dist/index.js"
-		}
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			},
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			}
+		},
+		"./package.json": "./package.json"
 	},
 	"engines": {
 		"node": ">=18"
@@ -17,23 +24,28 @@
 	"license": "MIT",
 	"scripts": {
 		"build:wasm": "wasm-pack build rust/wasm-bridge --target web --out-dir ../../src/wasm",
-		"build": "npm run build:wasm && npm run build:wasm-voip && rm -rf dist && tsc -p tsconfig.json && rm -rf dist/wasm dist/wasm-voip && cp -r src/wasm dist/wasm && cp -r src/wasm-voip dist/wasm-voip && rm -f dist/wasm/.gitignore dist/wasm/package.json dist/wasm-voip/.gitignore dist/wasm-voip/package.json",
+		"build": "npm run build:wasm && npm run build:wasm-voip && npm run build:js",
 		"typecheck": "tsc --noEmit",
 		"lint": "tsc --noEmit && eslint src tests",
 		"format": "prettier --write src tests",
 		"test": "vitest run",
 		"prepack": "npm run build",
-		"pair": "tsc -p tsconfig.json && node dist/cli/pair.js",
+		"pair": "npm run build:js && node dist/cli/pair.js",
 		"example": "npm run build && node examples/example.js",
-		"build:wasm-voip": "wasm-pack build rust/wasm-voip --target web --out-dir ../../src/wasm-voip"
+		"build:wasm-voip": "wasm-pack build rust/wasm-voip --target web --out-dir ../../src/wasm-voip",
+		"check:package": "publint && attw --pack . --profile node16",
+		"build:js": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsup && node scripts/copy-assets.mjs"
 	},
 	"devDependencies": {
+		"@arethetypeswrong/cli": "^0.18.5",
 		"@types/node": "^22.0.0",
 		"@types/qrcode-terminal": "^0.12.2",
 		"@types/ws": "^8.18.2",
 		"eslint": "^9",
 		"eslint-config-prettier": "^10.1.8",
 		"prettier": "^3.5.3",
+		"publint": "^0.3.25",
+		"tsup": "^8.5.1",
 		"typescript": "^5.9.3",
 		"typescript-eslint": "^8.68.0",
 		"vitest": "^3.2.0"
@@ -46,7 +58,6 @@
 	},
 	"files": [
 		"dist",
-		"proto/WAProto.proto",
 		"LICENSE",
 		"README.md"
 	],
@@ -61,5 +72,6 @@
 		"type": "git",
 		"url": "git+https://github.com/7ucg/velowa.git"
 	},
-	"sideEffects": false
+	"sideEffects": false,
+	"module": "./dist/index.js"
 }
