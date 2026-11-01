@@ -38,7 +38,7 @@ export type {
 	AppStateResult,
 } from './crypto/appstate.js'
 export { Client } from './client/client.js'
-export type { ClientOptions, ClientEvents } from './client/client.js'
+export type { ClientOptions, ClientEvents, ConnectionUpdate } from './client/client.js'
 export { ProtocolLogger } from './logging/protocol-logger.js'
 export type { ProtocolLoggerOptions } from './logging/protocol-logger.js'
 export {
@@ -94,3 +94,31 @@ export {
 	type MediaFileOptions,
 	type VideoFileOptions,
 } from './client/features/call/media-files.js'
+
+// jid helpers and message reading
+export {
+	areJidsSameUser,
+	isJidBroadcast,
+	isJidGroup,
+	isJidNewsletter,
+	isJidStatusBroadcast,
+	isJidUser,
+	isLidUser,
+	jidDecode,
+	jidEncode,
+	jidNormalizedUser,
+} from './jid.js'
+export {
+	getContentType,
+	messageText,
+	normalizeMessageContent,
+} from './client/features/message/content-type.js'
+export type {
+	MediaSource,
+	MessageContent,
+	SendContentOptions,
+} from './client/features/message/send-content.js'
+
+// helpers for bots: a received message and a group, ready to use
+export { serialize, isMe, GroupCache, isGroupAdmin } from './bot/index.js'
+export type { Message, QuotedMessage, GroupInfo } from './bot/index.js'

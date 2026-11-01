@@ -1,3 +1,8 @@
+import {
+	sendContent,
+	type MessageContent,
+	type SendContentOptions,
+} from './features/message/send-content.js'
 import { resolveCallFiles, type CallFileOptions } from './features/call/media-files.js'
 import type { LocalAudioOptions } from './features/call/local-audio.js'
 import { randomBytes } from 'node:crypto'
@@ -112,8 +117,27 @@ export interface ClientOptions {
 	antiban?: boolean | Partial<AntiBanConfig>
 }
 
+/**
+ * The connection in one event: where it is (`state`) and what just happened. `qr` and `pairingCode` appear while
+ * the account is being linked, `newLogin` once it was, `reason` / `code` / `willReconnect` / `loggedOut` on a close.
+ */
+export interface ConnectionUpdate {
+	state: 'connecting' | 'open' | 'close'
+	qr?: string
+	pairingCode?: string
+	newLogin?: boolean
+	/** `close` only. */
+	reason?: string
+	code?: number
+	willReconnect?: boolean
+	/** The account was logged out on the phone: delete the auth folder and link again. */
+	loggedOut?: boolean
+}
+
 /** Everything a consumer can listen for. Payloads are plain data. */
 export type ClientEvents = {
+	/** Connection state changes, QR codes and pairing codes in one place (the individual events below still fire). */
+	connection: ConnectionUpdate
 	/** A QR code to scan (Linked devices > Link a device). Refreshed until it is scanned. */
 	qr: { qr: string }
 	/** The 8-character code to type into WhatsApp > Linked devices > Link with phone number (pairing-code mode). */
@@ -261,6 +285,15 @@ export class Client {
 	async forwardMessage(to: string, message: Record<string, unknown>, score = 1): Promise<string> {
 		return this.sendMessage(to, msg.forward(message, score))
 	}
+
+	/**
+	 * Send anything with one call: `client.send(jid, { text: 'hi' })`, `{ image }`, `{ video }`, `{ audio, voiceNote }`,
+	 * `{ document, mimetype }`, `{ sticker }`, `{ poll }`, `{ location }`, `{ contacts }`, `{ react }`, `{ edit, text }`,
+	 * `{ revoke }`, `{ forward }`, `{ text, buttons }`, `{ text, sections, buttonText }`. Media can be bytes, a file
+	 * path or URL (`{ url }`) or a stream. Returns the message id.
+	 */
+	send = (to: string, content: MessageContent, options?: SendContentOptions): Promise<string> =>
+		sendContent(this, to, content, options)
 
 	/** Send a raw stanza (an `iq`) and wait for its answer: the escape hatch for anything not wrapped yet. */
 	request = async (node: BinaryNode): Promise<BinaryNode> =>
@@ -1860,11 +1893,19 @@ export class Client {
 					Boolean(this.#creds.me) &&
 					reason !== 'logged-out'
 				this.#events.emit('close', { ...(code !== undefined && { code }), reason, willReconnect })
+				this.#events.emit('connection', {
+					state: willReconnect ? 'connecting' : 'close',
+					reason,
+					...(code !== undefined && { code }),
+					willReconnect,
+					loggedOut: reason === 'logged-out',
+				})
 				if (willReconnect) setTimeout(() => !this.#stopped && this.#start(), 1000)
 				else this.logger.close('disconnect', { code, reason })
 			},
 		})
 		this.#conn = conn
+		this.#events.emit('connection', { state: 'connecting' })
 		conn.connect()
 	}
 
@@ -1922,6 +1963,7 @@ export class Client {
 							})
 							this.logger.event('pairing-code.requested', { phone })
 							this.#events.emit('pairing-code', { code })
+							this.#events.emit('connection', { state: 'connecting', pairingCode: code })
 						})
 						.catch((error) => this.logger.event('pairing-code.error', error))
 				}
@@ -1939,6 +1981,7 @@ export class Client {
 				const qr = qrString(Buffer.from(ref.content as Uint8Array).toString('utf8'), this.#creds)
 				this.logger.event('qr.generated', { qr })
 				this.#events.emit('qr', { qr })
+				this.#events.emit('connection', { state: 'connecting', qr })
 				this.#qrTimer = setTimeout(next, ms)
 				ms = 20_000
 			}
@@ -1985,6 +2028,7 @@ export class Client {
 					id: this.#creds.me!.id,
 					...(this.#creds.me!.lid && { lid: this.#creds.me!.lid }),
 				})
+				this.#events.emit('connection', { state: 'connecting', newLogin: true })
 				conn.send(reply)
 			} catch (error) {
 				this.logger.event('pair.error', error)
@@ -2171,5 +2215,6 @@ export class Client {
 		}, 30_000)
 		this.#isOpen = true
 		this.#events.emit('open', { id: creds.me!.id })
+		this.#events.emit('connection', { state: 'open' })
 	}
 }

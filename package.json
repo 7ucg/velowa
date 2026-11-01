@@ -35,7 +35,8 @@
 		"build:wasm-voip": "wasm-pack build rust/wasm-voip --target web --out-dir ../../src/wasm-voip",
 		"check:package": "publint && attw --pack . --profile node16",
 		"build:js": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsup && node scripts/copy-assets.mjs",
-		"logs": "tsup && node scripts/copy-assets.mjs && node dist/cli/logs.js"
+		"logs": "tsup && node scripts/copy-assets.mjs && node dist/cli/logs.js",
+		"check:docs": "node scripts/check-readme.mjs"
 	},
 	"devDependencies": {
 		"@arethetypeswrong/cli": "^0.18.5",

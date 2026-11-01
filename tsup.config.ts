@@ -13,7 +13,11 @@ export default defineConfig([
 	{
 		...common,
 		// ESM: the library and the pairing helper share their chunks, so both find the assets in `dist/`
-		entry: { index: 'src/index.ts', 'cli/pair': 'src/cli/pair.ts', 'cli/logs': 'src/cli/logs.ts' },
+		entry: {
+			index: 'src/index.ts',
+			'cli/pair': 'src/cli/pair.ts',
+			'cli/logs': 'src/cli/logs.ts',
+		},
 		format: ['esm'],
 		dts: { entry: { index: 'src/index.ts' } },
 		clean: false,
