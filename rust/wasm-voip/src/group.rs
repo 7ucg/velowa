@@ -5,6 +5,7 @@
 use wacore_binary::Jid;
 use wacore_voip::stanza::call::OfferDeviceKey;
 use wacore_voip::stanza::group_call::{
+    parse_group_invite_snapshot,
     GroupEncRekeyParams, InitialGroupOfferParams, build_group_enc_rekey, build_initial_group_offer,
     parse_group_enc_rekey, parse_group_update, parse_initial_group_call_ack,
 };
@@ -173,6 +174,8 @@ struct Summary {
     relay_endpoint: Option<(String, u16)>,
     /// Connected devices that already have a media id, other than ours: who must be sent the shared epoch.
     epoch_recipients: Vec<String>,
+    /// Every user (no device) the roster names, whatever their state.
+    members: Vec<String>,
     participants: serde_json::Value,
 }
 
@@ -219,6 +222,20 @@ impl GroupSession {
                 ),
                 None => (0, String::new(), false, serde_json::Value::Null, None, false, vec![]),
             };
+        let members: Vec<String> = self
+            .state
+            .snapshot()
+            .map(|u| {
+                u.participants
+                    .iter()
+                    .map(|p| {
+                        let mut j = p.jid.clone();
+                        j.device = 0;
+                        j.to_string()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         to_js(&Summary {
             applied: applied_name(applied),
             transaction_id,
@@ -228,6 +245,7 @@ impl GroupSession {
             has_relay,
             relay_endpoint,
             epoch_recipients: recipients,
+            members,
             participants,
         })
     }
@@ -245,6 +263,23 @@ impl GroupSession {
         }
         let applied = self.state.apply_initial_offer_ack(update);
         self.summary(&applied)
+    }
+
+    /// The `<offer>` of an invitation into a group call (its action node, encoded): the roster it carries, if any.
+    #[wasm_bindgen(js_name = applyInvite)]
+    pub fn apply_invite(&mut self, encoded_offer: &[u8]) -> Result<JsValue, JsValue> {
+        let (unpacked, _) = unpack_node(encoded_offer)?;
+        let node = wacore_binary::marshal::unmarshal_ref(&unpacked).map_err(err)?;
+        match parse_group_invite_snapshot(&node).map_err(err)? {
+            Some(update) => {
+                if update.call_id != self.call_id {
+                    return Err(err("offer belongs to another call"));
+                }
+                let applied = self.state.apply_initial_offer_ack(update);
+                self.summary(&applied)
+            }
+            None => self.summary(&GroupStateApply::Stale),
+        }
     }
 
     /// A `<group_update>` (the call stanza's action node, encoded).

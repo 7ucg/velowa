@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Incoming group calls: `acceptCall` joins an invitation into a group call (preaccept acknowledged, then the bare accept at the call service), reads the roster from the offer, waits for the relay and the shared key; group offers are recognised by `group-jid`/`group_info`.
 - Group calls: creator behaviour of WhatsApp Web (heartbeat every 10 s, transport hint, mute state, timed terminate + `group_call_duration`), the group Allocate in the web shape, and a fresh channel and UDP flow when the server moves the call to another relay; a group call now reaches the callee audio.
 - Phase 0: TypeScript scaffold, vendored `wacore-{derive,binary,libsignal,noise,appstate}` building for native and wasm32, own `waproto`, CI skeleton.
 - Phase 1: WABinary binding (`encodeNode`/`decodeNode`) and TS codec.

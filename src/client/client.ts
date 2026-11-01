@@ -156,6 +156,7 @@ export interface GroupSummary {
 	has_relay: boolean
 	relay_endpoint?: [string, number]
 	epoch_recipients: string[]
+	members: string[]
 	participants: unknown
 }
 
@@ -752,6 +753,7 @@ export class Client {
 			try {
 				const summary = st.groupSession.applyUpdate(encodeNode(action)) as GroupSummary
 				if (summary.applied === 'applied') {
+					for (const m of summary.members) st.members?.add(m)
 					if (st.groupEngine) {
 						const r = st.groupSession.pushToEngine(st.groupEngine, performance.now())
 						this.logger.event('call.group-push', { transaction: summary.transaction_id, result: r })
@@ -781,7 +783,17 @@ export class Client {
 		// The envelope is a Signal message from the device that sent the stanza, not from the call creator.
 		const raw = await receiver.decryptCallKey(from, r.enc_type, Uint8Array.from(r.ciphertext))
 		if (!raw) throw new Error('the epoch envelope holds no key')
-		const applied = st.groupEngine?.applyGroupEpoch(r.transaction_id, raw)
+		if (!st.groupEngine) {
+			// Answered a call whose relay has not arrived yet: keep the key for the engine.
+			st.pendingEpoch = { transaction: r.transaction_id, key: raw }
+			this.logger.event('call.group-epoch', {
+				transaction: r.transaction_id,
+				from,
+				applied: 'pending',
+			})
+			return
+		}
+		const applied = st.groupEngine.applyGroupEpoch(r.transaction_id, raw)
 		this.logger.event('call.group-epoch', { transaction: r.transaction_id, from, applied })
 		st.epochTx = r.transaction_id
 	}
@@ -798,7 +810,8 @@ export class Client {
 			const allowed = st.groupSession
 				? fromService || fromMember
 				: st.group
-					? c.from === st.group
+					? // a group invitation we have not answered yet: the call service or the person who started it
+						fromService || userOf(c.from) === userOf(st.creator)
 					: userOf(c.from) === userOf(st.peer)
 			if (!allowed) {
 				this.logger.event('call.ignored-stanza', {
@@ -841,7 +854,7 @@ export class Client {
 			devices: [creator],
 			status: 'ringing',
 			startedAt: Date.now(),
-			...(c.isGroup && { group: c.from }),
+			...(c.isGroup && { group: c.group ?? c.from }),
 			...(node && { offer: node, offerFrom: c.from }),
 		})
 		this.#pruneCalls()
@@ -884,7 +897,7 @@ export class Client {
 	): Promise<callSig.CallState> {
 		const c = this.#calls.get(callId)
 		if (!c || c.direction !== 'incoming' || !c.offer) throw new Error(`no incoming call ${callId}`)
-		if (c.group) throw new Error('group calls are not supported yet')
+		if (c.group) return this.#acceptGroupCall(c, o)
 		const { receiver } = await this.#live()
 		const own = this.#creds.me
 		if (!own?.lid) throw new Error('no own LID yet')
@@ -1056,7 +1069,10 @@ export class Client {
 		o: { audioIn?: Int16Array; recordTo?: string },
 	): Promise<void> {
 		const session = state.groupSession!
+		// An invitation we answered gets its relay with a later roster update.
+		if (!summary.relay_endpoint && state.direction === 'incoming') return
 		if (!summary.relay_endpoint) throw new Error('the group call has no relay yet')
+		o = { ...state.mediaOptions, ...o }
 		if (!state.groupEngine) {
 			const engine = session.createEngine(state.direction === 'incoming', true, state.video)
 			state.groupEngine = engine
@@ -1080,6 +1096,14 @@ export class Client {
 				if (state.status !== 'ended') state.status = 'connected'
 			})
 			media.start()
+			if (state.pendingEpoch) {
+				const { transaction, key } = state.pendingEpoch
+				delete state.pendingEpoch
+				const applied = engine.applyGroupEpoch(transaction, key)
+				state.epochTx = transaction
+				this.logger.event('call.group-epoch', { transaction, applied })
+				key.fill(0)
+			}
 		}
 		await this.#groupEpoch(state, summary)
 		this.#hintTransport(state, summary)
@@ -1153,6 +1177,39 @@ export class Client {
 		state.groupEngine?.applyGroupEpoch(summary.transaction_id, raw)
 		state.epochTx = summary.transaction_id
 		raw.fill(0)
+	}
+
+	/** Answer an invitation into a group call: join at the call service, the relay and the shared key follow. */
+	async #acceptGroupCall(
+		c: callSig.CallState,
+		o: { audioIn?: Int16Array; recordTo?: string },
+	): Promise<callSig.CallState> {
+		const { receiver } = await this.#live()
+		const own = this.#creds.me?.lid
+		if (!own) throw new Error('no own LID yet')
+		ensureVoipWasm()
+		const inner = (Array.isArray(c.offer!.content) ? c.offer!.content[0] : undefined) as BinaryNode
+		const session = new GroupSession(c.callId, c.creator, own)
+		const summary = session.applyInvite(encodeNode(inner)) as GroupSummary
+		c.groupSession = session
+		c.members = new Set([c.creator.replace(/:\d+@/, '@'), ...summary.members])
+		c.mediaOptions = {
+			...(o.audioIn && { audioIn: o.audioIn }),
+			...(o.recordTo && { recordTo: o.recordTo }),
+		}
+		const service = `${c.callId}@call`
+		// One step at a time: the service wants the preparation acknowledged before the answer.
+		await receiver.sendCallAndWait(
+			callSig.buildPreaccept(c.callId, service, c.creator, receiver.nextId(), c.video),
+		)
+		// The answer is not acknowledged on its own: the roster update that follows carries the relay.
+		receiver.sendNode(
+			callSig.buildAccept(c.callId, service, c.creator, receiver.nextId(), c.video, true),
+		)
+		c.status = 'connected'
+		// The invitation may already carry the relay; otherwise the roster update after our accept does.
+		await this.#startGroupMedia(c, summary, o)
+		return c
 	}
 
 	/** Hang up a call we placed or answered (also cancels one that is still ringing). */

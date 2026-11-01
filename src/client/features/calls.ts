@@ -201,7 +201,20 @@ export function buildAccept(
 	creator: string,
 	id: string,
 	video = false,
+	/** An invitation into a running group call is answered with the bare form: audio, net, encopt. */
+	bare = false,
 ): BinaryNode {
+	if (bare)
+		return wrap(to, id, {
+			tag: 'accept',
+			attrs: { 'call-id': callId, 'call-creator': creator },
+			content: [
+				audio('16000'),
+				...(video ? [{ tag: 'video', attrs: { dec: 'H264', device_orientation: '0' } }] : []),
+				{ tag: 'net', attrs: { medium: '2' } },
+				encopt,
+			],
+		})
 	return wrap(to, id, {
 		tag: 'accept',
 		attrs: { 'call-id': callId, 'call-creator': creator },
@@ -276,6 +289,9 @@ export interface CallState {
 	/** Group calls: the roster the server holds, and the engine the roster feeds. */
 	groupSession?: GroupSession
 	groupEngine?: CallEngine
+	/** Group calls we answered: media options kept until the relay arrives, and a shared key that came before the engine. */
+	mediaOptions?: { audioIn?: Int16Array; recordTo?: string }
+	pendingEpoch?: { transaction: number; key: Uint8Array }
 	/** The newest shared-epoch transaction we installed. */
 	epochTx?: number
 	/** The media path (relay socket + engine) once the call has a relay. */

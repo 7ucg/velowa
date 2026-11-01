@@ -215,6 +215,8 @@ export interface CallEvent {
 	creator?: string
 	isVideo?: boolean
 	isGroup?: boolean
+	/** The group a call was placed in (`group-jid`). */
+	group?: string
 	timestamp?: number
 }
 
@@ -231,7 +233,12 @@ export function parseCall(node: BinaryNode): CallEvent | undefined {
 		from: node.attrs['from'] ?? '',
 		...(info.attrs['call-creator'] && { creator: info.attrs['call-creator'] }),
 		...(info.tag === 'offer' && { isVideo: hasVideo }),
-		...(info.attrs['type'] === 'group' && { isGroup: true }),
+		...((info.attrs['type'] === 'group' ||
+			info.attrs['group-jid'] ||
+			(Array.isArray(info.content) && info.content.some((c) => c.tag === 'group_info'))) && {
+			isGroup: true,
+		}),
+		...(info.attrs['group-jid'] && { group: info.attrs['group-jid'] }),
 		...(node.attrs['t'] &&
 			/^\d{1,12}$/.test(node.attrs['t']) && { timestamp: Number(node.attrs['t']) }),
 	}
