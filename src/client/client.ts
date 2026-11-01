@@ -245,6 +245,11 @@ export class Client {
 		const uploaded = await media.uploadMedia(await this.#getMediaConn(), type, enc, fetch, channel)
 		const built = media.mediaMessage(type, enc, uploaded, opts)
 		if (channel) media.stripMediaKeys(built.message)
+		if (uploaded.thumbnail && (type === 'image' || type === 'video')) {
+			const body = built.message[Object.keys(built.message)[0]!] as Record<string, unknown>
+			body['thumbnailDirectPath'] = uploaded.thumbnail.directPath
+			body['thumbnailSha256'] = uploaded.thumbnail.sha256
+		}
 		let message = msg.withContext(built.message, to, opts, meId)
 		const field = Object.keys(message).find((k) => k !== 'messageContextInfo')!
 		const extraContext = {
@@ -492,10 +497,10 @@ export class Client {
 		const { sender } = await this.#live()
 		const conn = await this.#getMediaConn()
 		const hashes: string[] = []
-		for (const img of images) {
+		for (const [i, img] of images.entries()) {
 			const raw = media.rawMedia(img)
 			await media.uploadMedia(conn, 'image', raw, fetch, true)
-			hashes.push(Buffer.from(raw.fileSha256).toString('hex'))
+			hashes.push(media.pollOptionHash(values[i]!, raw.fileSha256))
 		}
 		const p = extras.poll(name, values, 1, { ...o, optionImageHashes: hashes })
 		return sender.sendMessage(to, p.message, p.opts)

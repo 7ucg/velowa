@@ -81,11 +81,17 @@ export function question(inner: Record<string, unknown>): {
 export interface MusicInfo {
 	title: string
 	author: string
-	songId?: string
+	songId: string
 	artistAttribution?: string
 	isExplicit?: boolean
 	/** Where the shared snippet starts, in milliseconds. */
 	startTimeMs?: number
+	/**
+	 * Catalog data of the song (`musicContentMediaId`, `artworkDirectPath`, `artworkSha256`, `artworkEncSha256`,
+	 * `countryBlocklist`, ...). Only WhatsApp's music catalog hands these out; copy them from a received music
+	 * post (`annotations[0].embeddedContent.embeddedMusic`) to re-post the same song.
+	 */
+	catalog?: Record<string, unknown>
 }
 
 /** Context for a video that carries a song (what the app's "music" post looks like). */
@@ -98,13 +104,28 @@ export function musicContext(m: MusicInfo): Record<string, unknown> {
 		isExplicit: m.isExplicit ?? false,
 	}
 	return {
+		forwardingScore: 0,
+		featureEligibilities: { canBeReshared: true },
+		pairedMediaType: 'NOT_PAIRED_MEDIA',
 		statusSourceType: 'MUSIC_STANDALONE',
 		statusAttributions: [{ type: 'MUSIC', music }],
 		annotations: [
 			{
+				// The music sticker sits in the middle of the frame.
+				polygonVertices: [
+					{ x: 0.175, y: 0.3377 },
+					{ x: 0.825, y: 0.3377 },
+					{ x: 0.825, y: 0.6623 },
+					{ x: 0.175, y: 0.6623 },
+				],
 				shouldSkipConfirmation: true,
 				embeddedContent: {
-					embeddedMusic: { ...music, musicSongStartTimeInMs: m.startTimeMs ?? 0 },
+					embeddedMusic: {
+						...music,
+						...m.catalog,
+						musicSongStartTimeInMs: m.startTimeMs ?? 0,
+						overlapDurationInMs: 30000,
+					},
 				},
 				embeddedAction: true,
 			},

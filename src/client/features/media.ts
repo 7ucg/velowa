@@ -173,7 +173,19 @@ export const uploadToken = (hash: Uint8Array): string =>
 export interface UploadResult {
 	url: string
 	directPath: string
+	/** Channel uploads: the server-made thumbnail. */
+	thumbnail?: { directPath: string; sha256: Uint8Array }
 }
+
+/** Hash that ties a poll option to its image: sha256-hex(sha256-hex(name) + base64(image sha256)). */
+export const pollOptionHash = (name: string, imageSha256: Uint8Array): string =>
+	createHash('sha256')
+		.update(
+			createHash('sha256').update(name, 'utf8').digest('hex') +
+				Buffer.from(imageSha256).toString('base64'),
+			'utf8',
+		)
+		.digest('hex')
 
 type Fetch = typeof fetch
 
@@ -196,8 +208,26 @@ export async function uploadMedia(
 				body: new Uint8Array(media.encrypted),
 			})
 			const json = (await res.json().catch(() => undefined)) as
-				{ url?: string; direct_path?: string } | undefined
-			if (json?.url && json.direct_path) return { url: json.url, directPath: json.direct_path }
+				| {
+						url?: string
+						direct_path?: string
+						thumbnail_info?: { thumbnail_direct_path?: string; thumbnail_sha256?: string }
+				  }
+				| undefined
+			if (json?.url && json.direct_path) {
+				const t = json.thumbnail_info
+				return {
+					url: json.url,
+					directPath: json.direct_path,
+					...(t?.thumbnail_direct_path &&
+						t.thumbnail_sha256 && {
+							thumbnail: {
+								directPath: t.thumbnail_direct_path,
+								sha256: Buffer.from(t.thumbnail_sha256, 'base64'),
+							},
+						}),
+				}
+			}
 			lastError = new Error(
 				`upload to ${host} failed (HTTP ${res.status}): ${JSON.stringify(json)}`,
 			)

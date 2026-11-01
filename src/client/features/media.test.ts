@@ -260,3 +260,16 @@ describe('media messages', () => {
 		expect(Buffer.from(ref.ref.mediaKey).equals(enc.mediaKey)).toBe(true)
 	})
 })
+
+describe('pollOptionHash', () => {
+	it('is sha256-hex(sha256-hex(name) + base64(image hash))', async () => {
+		const { createHash } = await import('node:crypto')
+		const { pollOptionHash } = await import('./media.js')
+		const img = createHash('sha256').update('img').digest()
+		const inner = createHash('sha256').update('k').digest('hex')
+		const expected = createHash('sha256')
+			.update(inner + img.toString('base64'))
+			.digest('hex')
+		expect(pollOptionHash('k', img)).toBe(expected)
+	})
+})
