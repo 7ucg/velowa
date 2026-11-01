@@ -204,3 +204,76 @@ export interface CallState {
 	/** The media path (relay socket + engine) once the call has a relay. */
 	media?: MediaSession
 }
+
+// ---- call links ("rooms") ---------------------------------------------------------------------
+
+export type CallLinkMedia = 'audio' | 'video'
+
+/** `https://call.whatsapp.com/{voice|video}/{token}` */
+export const callLinkUrl = (token: string, media: CallLinkMedia): string =>
+	`https://call.whatsapp.com/${media === 'video' ? 'video' : 'voice'}/${token}`
+
+const service = (id: string, action: BinaryNode): BinaryNode => ({
+	tag: 'call',
+	attrs: { to: '@call', id },
+	content: [action],
+})
+
+export const buildLinkCreate = (media: CallLinkMedia, id: string): BinaryNode =>
+	service(id, { tag: 'link_create', attrs: { media } })
+
+export const buildLinkQuery = (token: string, media: CallLinkMedia, id: string): BinaryNode =>
+	service(id, { tag: 'link_query', attrs: { token, media } })
+
+export const buildWaitingRoomToggle = (
+	callId: string,
+	creator: string,
+	enabled: boolean,
+	id: string,
+): BinaryNode =>
+	service(id, {
+		tag: 'waiting_room_toggle',
+		attrs: { 'call-id': callId, 'call-creator': creator, enabled: enabled ? '1' : '0' },
+	})
+
+const child = (n: BinaryNode, tag: string): BinaryNode | undefined =>
+	Array.isArray(n.content) ? n.content.find((c) => c.tag === tag) : undefined
+
+export interface CallLink {
+	token: string
+	media: CallLinkMedia
+	url: string
+}
+
+export interface CallLinkPreview extends CallLink {
+	creator: string
+	waitingRoomEnabled: boolean
+	/** We created the link (admin of its waiting room). */
+	isAdmin: boolean
+}
+
+/** The `<link_create token media/>` of a create ack. */
+export function parseLinkCreateAck(ack: BinaryNode): CallLink {
+	const c = child(ack, 'link_create')
+	const token = c?.attrs['token']
+	if (!token) throw new Error('link_create ack carries no token')
+	const media = c.attrs['media'] === 'video' ? 'video' : 'audio'
+	return { token, media, url: callLinkUrl(token, media) }
+}
+
+/** The preview a `link_query` ack gives: who made the link and whether joiners wait for approval. */
+export function parseLinkQueryAck(ack: BinaryNode): CallLinkPreview {
+	const c = child(ack, 'link_query')
+	const token = c?.attrs['token']
+	if (!c || !token) throw new Error('link_query ack carries no link')
+	const media = c.attrs['media'] === 'video' ? 'video' : 'audio'
+	const waiting = child(c, 'waiting_room')
+	return {
+		token,
+		media,
+		url: callLinkUrl(token, media),
+		creator: c.attrs['link_creator'] ?? '',
+		waitingRoomEnabled: waiting?.attrs['enabled'] === '1',
+		isAdmin: waiting?.attrs['is_admin'] === '1',
+	}
+}

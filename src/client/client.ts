@@ -852,6 +852,26 @@ export class Client {
 		return c
 	}
 
+	/** Create a call link (a "room") that others can join: `https://call.whatsapp.com/{voice|video}/{token}`. */
+	async createCallLink(media: callSig.CallLinkMedia = 'audio'): Promise<callSig.CallLink> {
+		const { receiver } = await this.#live()
+		const ack = await receiver.sendCallAndWait(callSig.buildLinkCreate(media, receiver.nextId()))
+		return callSig.parseLinkCreateAck(ack)
+	}
+
+	/** Who made a call link and whether joiners have to be let in. `link` is the token or the whole URL. */
+	async queryCallLink(
+		link: string,
+		media: callSig.CallLinkMedia = 'audio',
+	): Promise<callSig.CallLinkPreview> {
+		const token = link.split('/').filter(Boolean).pop()!.split('?')[0]!
+		const { receiver } = await this.#live()
+		const ack = await receiver.sendCallAndWait(
+			callSig.buildLinkQuery(token, media, receiver.nextId()),
+		)
+		return callSig.parseLinkQueryAck(ack)
+	}
+
 	/** Hang up a call we placed or answered (also cancels one that is still ringing). */
 	async endCall(callId: string): Promise<void> {
 		const c = this.#calls.get(callId)

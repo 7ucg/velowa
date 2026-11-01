@@ -2,6 +2,11 @@
 import { describe, expect, it } from 'vitest'
 import {
 	buildAccept,
+	buildLinkCreate,
+	buildLinkQuery,
+	callLinkUrl,
+	parseLinkCreateAck,
+	parseLinkQueryAck,
 	buildOffer,
 	buildPreaccept,
 	buildReject,
@@ -107,5 +112,41 @@ describe('call signaling builders', () => {
 		])
 		const p = (buildPreaccept('c', 'd@lid', 'me@lid', 'i').content as any[])[0]
 		expect(p.content.map((c: any) => c.tag)).toEqual(['audio', 'encopt', 'capability'])
+	})
+
+	it('builds and parses call-link requests', () => {
+		expect(buildLinkCreate('video', 'i')).toEqual({
+			tag: 'call',
+			attrs: { to: '@call', id: 'i' },
+			content: [{ tag: 'link_create', attrs: { media: 'video' } }],
+		})
+		expect((buildLinkQuery('T', 'audio', 'i').content as any[])[0].attrs).toEqual({
+			token: 'T',
+			media: 'audio',
+		})
+		const created = parseLinkCreateAck({
+			tag: 'ack',
+			attrs: {},
+			content: [{ tag: 'link_create', attrs: { token: 'abc', media: 'video' } }],
+		})
+		expect(created).toEqual({
+			token: 'abc',
+			media: 'video',
+			url: 'https://call.whatsapp.com/video/abc',
+		})
+		expect(callLinkUrl('x', 'audio')).toBe('https://call.whatsapp.com/voice/x')
+		const q = parseLinkQueryAck({
+			tag: 'ack',
+			attrs: {},
+			content: [
+				{
+					tag: 'link_query',
+					attrs: { token: 'abc', media: 'audio', link_creator: 'u@lid' },
+					content: [{ tag: 'waiting_room', attrs: { enabled: '1', is_admin: '1' } }],
+				},
+			],
+		})
+		expect(q).toMatchObject({ creator: 'u@lid', waitingRoomEnabled: true, isAdmin: true })
+		expect(() => parseLinkCreateAck({ tag: 'ack', attrs: {} })).toThrow()
 	})
 })
