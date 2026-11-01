@@ -290,7 +290,10 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		if (this.#recordTo && this.#recorded.length) {
 			const all = new Int16Array(this.#recorded.reduce((n, c) => n + c.length, 0))
 			let at = 0
-			for (const c of this.#recorded) (all.set(c, at), (at += c.length))
+			for (const c of this.#recorded) {
+				all.set(c, at)
+				at += c.length
+			}
 			writeWav(this.#recordTo, all)
 		}
 		this.#opus?.delete()
