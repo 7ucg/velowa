@@ -61,6 +61,9 @@ export function splitAnnexB(data: Uint8Array): Uint8Array[] {
 	return starts.map((s, k) => data.subarray(s, starts[k + 1] ?? data.length))
 }
 
+/** Most decoders a group call keeps (WhatsApp group calls hold far fewer people). */
+const MAX_DECODERS = 64
+
 /** One mic frame is 60 ms of 16 kHz mono PCM. */
 export const FRAME_SAMPLES = 960
 const FRAME_MS = 60
@@ -269,10 +272,20 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 						if (pkt) {
 							try {
 								const who = this.#engine.encodedSender()
-								let dec = this.#opus
+								let dec: OpusCodec = this.#opus
 								if (who) {
-									dec = this.#decoders.get(who) ?? newOpus()
-									this.#decoders.set(who, dec)
+									const known = this.#decoders.get(who)
+									if (known) dec = known
+									else {
+										// The speaker's id comes from the network: keep at most one decoder per plausible participant.
+										if (this.#decoders.size >= MAX_DECODERS) {
+											const oldest = this.#decoders.keys().next().value!
+											this.#decoders.get(oldest)?.delete()
+											this.#decoders.delete(oldest)
+										}
+										dec = newOpus()
+										this.#decoders.set(who, dec)
+									}
 								}
 								if (who) this.emit('speaker', who)
 								const raw = dec.decode(Buffer.from(pkt))

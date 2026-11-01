@@ -951,6 +951,9 @@ export class Client {
 		if (!own) throw new Error('no own LID yet; wait for the login to finish')
 		ensureVoipWasm()
 		const ownUser = own.replace(/:\d+@/, '@')
+		// A call bound to a group has to name everyone in it; the server refuses a partial roster (error 412).
+		if (o.group && !targets.length)
+			targets = (await this.groups.metadata(o.group)).participants.map((p) => p.id)
 		const users: string[] = []
 		for (const t of targets) {
 			let u = t.replace(/:\d+@/, '@')
@@ -962,10 +965,15 @@ export class Client {
 			if (u !== ownUser && !users.includes(u)) users.push(u)
 		}
 		const devices = await sender.getDevices(users)
+		// The roster lists every device of every participant, ours included (the server checks it against its own).
+		const ownDevices = (await sender.getDevices([ownUser])).map((d) => d.jid)
 		const participants = [
 			{
 				jid: ownUser,
-				devices: [{ jid: own, capability: [...callSig.CAPABILITY_STANDARD_OPUS_OFFER] }],
+				devices: [
+					{ jid: own, capability: [...callSig.CAPABILITY_STANDARD_OPUS_OFFER] },
+					...ownDevices.filter((j) => j !== own).map((jid) => ({ jid })),
+				],
 			},
 			...users.map((u) => ({
 				jid: u,
@@ -1001,6 +1009,7 @@ export class Client {
 			status: 'calling',
 			startedAt: Date.now(),
 			groupSession: session,
+			members: new Set([ownUser, ...users]),
 		}
 		this.#calls.set(callId, state)
 		try {
@@ -1053,8 +1062,12 @@ export class Client {
 		if (state.epochTx !== undefined && state.epochTx >= summary.transaction_id) return
 		const { sender, receiver } = await this.#live()
 		const raw = new Uint8Array(randomBytes(32))
-		const keys = summary.epoch_recipients.length
-			? await sender.encryptForDevices(summary.epoch_recipients, { call: { callKey: raw } })
+		// Only people who belong in this call get the key, whatever the roster claims.
+		const recipients = summary.epoch_recipients.filter((j) =>
+			state.members?.has(j.replace(/:\d+@/, '@')),
+		)
+		const keys = recipients.length
+			? await sender.encryptForDevices(recipients, { call: { callKey: raw } })
 			: []
 		for (const k of keys) {
 			receiver.sendNode(

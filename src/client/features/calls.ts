@@ -203,6 +203,8 @@ export interface CallState {
 	offerFrom?: string
 	/** The server's `<relay>` block from the offer ack (outgoing) or the offer (incoming). */
 	relay?: BinaryNode
+	/** Group calls: the users (LIDs, no device) who belong in this call; the shared key goes to nobody else. */
+	members?: Set<string>
 	/** Group calls: the roster the server holds, and the engine the roster feeds. */
 	groupSession?: GroupSession
 	groupEngine?: CallEngine
