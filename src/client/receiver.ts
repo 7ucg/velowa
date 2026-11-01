@@ -71,6 +71,7 @@ export function buildAck(node: BinaryNode, meId?: string): BinaryNode {
  */
 export class Receiver {
 	readonly #pending = new Map<string, { resolve(n: BinaryNode): void; reject(e: Error): void }>()
+	readonly #acks = new Map<string, { resolve(n: BinaryNode): void; reject(e: Error): void }>()
 	readonly #retryCounts = new Map<string, number>()
 	readonly #secrets = new MessageSecrets()
 	#queue: Promise<void> = Promise.resolve()
@@ -86,6 +87,17 @@ export class Receiver {
 				this.#pending.delete(node.attrs['id']!)
 				if (node.attrs['type'] === 'error')
 					p.reject(new Error(`iq error: ${JSON.stringify(node.content)}`))
+				else p.resolve(node)
+				return true
+			}
+			return false
+		}
+		if (node.tag === 'ack' && node.attrs['class'] === 'message') {
+			const p = this.#acks.get(node.attrs['id'] ?? '')
+			if (p) {
+				this.#acks.delete(node.attrs['id']!)
+				if (node.attrs['error'])
+					p.reject(new Error(`message rejected by server (error ${node.attrs['error']})`))
 				else p.resolve(node)
 				return true
 			}
@@ -127,6 +139,28 @@ export class Receiver {
 			} catch (e) {
 				clearTimeout(timer)
 				this.#pending.delete(id)
+				reject(e as Error)
+			}
+		})
+	}
+
+	/** Send a message stanza and resolve with the server's `<ack class="message">`. */
+	sendAndWaitAck(node: BinaryNode): Promise<BinaryNode> {
+		const id = node.attrs['id'] ?? ''
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				this.#acks.delete(id)
+				reject(new Error(`no server ack for message ${id}`))
+			}, REQUEST_TIMEOUT_MS)
+			this.#acks.set(id, {
+				resolve: (n) => (clearTimeout(timer), resolve(n)),
+				reject: (e) => (clearTimeout(timer), reject(e)),
+			})
+			try {
+				this.d.send(node)
+			} catch (e) {
+				clearTimeout(timer)
+				this.#acks.delete(id)
 				reject(e as Error)
 			}
 		})

@@ -37,3 +37,7 @@ export type {
 	AppStateMutation,
 	AppStateResult,
 } from './crypto/appstate.js'
+export { Client } from './client/client.js'
+export type { ClientOptions, ClientEvents } from './client/client.js'
+export { ProtocolLogger } from './logging/protocol-logger.js'
+export type { ProtocolLoggerOptions } from './logging/protocol-logger.js'
