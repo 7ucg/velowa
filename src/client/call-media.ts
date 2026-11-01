@@ -121,10 +121,12 @@ type MediaEvents = {
  */
 export class MediaSession extends TypedEmitter<MediaEvents> {
 	readonly #engine: CallEngine
-	readonly #socket: Socket
-	readonly #channel: RelayChannel
+	#socket: Socket
+	#channel: RelayChannel
+	/** A replacement channel is dialling; the engine waits for it before it sends again. */
+	#redial = false
 	readonly #t0 = performance.now()
-	readonly #relay: RelayConfig
+	#relay: RelayConfig
 	#timer: NodeJS.Timeout | undefined
 	#mic: NodeJS.Timeout | undefined
 	#closed = false
@@ -181,15 +183,21 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		this.#recordVideoTo = o.recordVideoTo
 		// Media rides a DataChannel over SCTP over DTLS over this UDP flow (as in WhatsApp Web's peer connection).
 		this.#channel = new RelayChannel(this.#relay.relay_ip, this.#relay.relay_port)
-		this.#socket = createSocket('udp4')
-		this.#socket.on('message', (msg) => {
-			if (this.#closed) return
+		this.#socket = this.#openSocket()
+	}
+
+	/** One UDP flow per relay channel: a redial must not reuse the 5-tuple of the old DTLS association. */
+	#openSocket(): Socket {
+		const socket = createSocket('udp4')
+		socket.on('message', (msg) => {
+			if (this.#closed || socket !== this.#socket) return
 			this.#received++
 			const err = this.#channel.handleDatagram(this.#now(), msg)
 			if (err) return this.close(`relay: ${err}`)
 			this.#pump()
 		})
-		this.#socket.on('error', (e) => this.close(`socket: ${e.message}`))
+		socket.on('error', (e) => this.close(`socket: ${e.message}`))
+		return socket
 	}
 
 	#now(): number {
@@ -199,6 +207,11 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 	/** Packets exchanged with the relay so far. */
 	get stats(): { sent: number; received: number } {
 		return { sent: this.#sent, received: this.#received }
+	}
+
+	/** The engine's own counters (RTP in, SRTP failures, why it is silent) as text. */
+	get engineStats(): string {
+		return this.#engine.mediaStats()
 	}
 
 	#started = false
@@ -238,6 +251,11 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 				this.#socket.send(d, this.#relay.relay_port, this.#relay.relay_ip)
 				moved = true
 			}
+			if (this.#redial && this.#channel.isOpen()) {
+				this.#redial = false
+				this.#engine.relayReconnected(this.#now())
+				moved = true
+			}
 			// 2. the engine starts when the media channel is up
 			if (!this.#started && this.#channel.isOpen()) {
 				this.#started = true
@@ -245,16 +263,32 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 				moved = true
 			}
 			// 3. media messages from the relay go to the engine
-			for (let m = this.#channel.pollInbound(); m; m = this.#channel.pollInbound()) {
+			for (
+				let m = this.#channel.pollInbound();
+				m && !this.#redial;
+				m = this.#channel.pollInbound()
+			) {
 				this.#engine.handleRelayPacket(this.#now(), m)
 				moved = true
 			}
 			// 4. what the engine wants
-			if (this.#started) {
+			if (this.#started && !this.#redial) {
 				for (;;) {
 					const kind = this.#engine.pollOutput()
 					if (kind === 0) break
 					moved = true
+					if (kind === 7) {
+						// New relay credentials: the old channel is done, the Allocate follows on a fresh one.
+						const target = this.#engine.takeReconnect()?.match(/^(.+):(\d+)$/)
+						if (target)
+							this.#relay = { ...this.#relay, relay_ip: target[1]!, relay_port: Number(target[2]) }
+						const old = this.#socket
+						this.#channel = new RelayChannel(this.#relay.relay_ip, this.#relay.relay_port)
+						this.#socket = this.#openSocket()
+						old.close()
+						this.#redial = true
+						break
+					}
 					if (kind === 1) {
 						const pkt = this.#engine.takeTransmit()
 						if (pkt) {

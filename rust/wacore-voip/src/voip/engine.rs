@@ -1811,7 +1811,10 @@ impl CallEngine {
                 || refresh.endpoint_xor != self.endpoint_xor
                 || refresh.integrity_key != self.integrity_key
         });
-        if !relay_material_changed && !subscriptions_changed {
+        // WhatsApp Web allocates once per relay and never again for roster changes; a second Allocate on the
+        // same credentials is answered with 452. Subscriptions are not part of its Allocate at all.
+        let _ = subscriptions_changed;
+        if !relay_material_changed {
             return Ok(());
         }
         if let Some(refresh) = relay_refresh {
@@ -1822,6 +1825,10 @@ impl CallEngine {
             self.relay_token = refresh.relay_token;
             self.endpoint_xor = refresh.endpoint_xor;
             self.integrity_key = refresh.integrity_key;
+        }
+        if relay_material_changed && reconnect.is_none() {
+            // The relay takes one Allocate per transport (WhatsApp Web opens a fresh channel for each new token).
+            reconnect = Some(self.relay_addr);
         }
         if relay_material_changed {
             // New credentials invalidate the allocation even on the same endpoint; address-only
@@ -2367,7 +2374,7 @@ impl CallEngine {
     }
 
     /// Start the deferred allocation-response budget once a replacement relay transport is ready.
-    pub(crate) fn relay_reconnected(&mut self, now: Millis) {
+    pub fn relay_reconnected(&mut self, now: Millis) {
         if self.started && self.allocate_pending && self.allocate_deadline == NEVER {
             self.allocate_deadline = now + ALLOCATE_TIMEOUT_MS;
         }

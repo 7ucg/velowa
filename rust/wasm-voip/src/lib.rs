@@ -161,6 +161,7 @@ const OUT_EVENT: i32 = 3;
 const OUT_VIDEO: i32 = 4;
 const OUT_OTHER: i32 = 5;
 const OUT_ENCODED: i32 = 6;
+const OUT_RECONNECT: i32 = 7;
 
 /// Sans-IO call engine: the relay control plane (STUN allocate, keepalive) and the media plane (MLow PCM, E2E-SRTP).
 /// Feed inputs, then drain `pollOutput` until it returns 0 and arm one timer for `lastTimeout`.
@@ -217,6 +218,18 @@ impl CallEngine {
         self.inner.handle_input(now as u64, Input::VideoFrame(frame));
     }
 
+    /// The replacement relay transport is open: start the Allocate response budget.
+    #[wasm_bindgen(js_name = relayReconnected)]
+    pub fn relay_reconnected(&mut self, now: f64) {
+        self.inner.relay_reconnected(now as u64);
+    }
+
+    /// The engine's media counters as text (RTP received, SRTP failures, silence reason ...), for diagnostics.
+    #[wasm_bindgen(js_name = mediaStats)]
+    pub fn media_stats(&self) -> String {
+        format!("{:?}", self.inner.media_stats())
+    }
+
     #[wasm_bindgen(js_name = handleTimeout)]
     pub fn handle_timeout(&mut self, now: f64) {
         self.inner.handle_input(now as u64, Input::Timeout);
@@ -234,10 +247,23 @@ impl CallEngine {
             Output::Event(_) => OUT_EVENT,
             Output::VideoPlayout(_) => OUT_VIDEO,
             Output::EncodedAudio(_) => OUT_ENCODED,
+            Output::ReconnectRelay(_) => OUT_RECONNECT,
             _ => OUT_OTHER,
         };
         self.last = Some(out);
         kind
+    }
+
+    /// The relay (`ip:port`) the last `OUT_RECONNECT` output asks us to dial.
+    #[wasm_bindgen(js_name = takeReconnect)]
+    pub fn take_reconnect(&mut self) -> Option<String> {
+        match self.last.take() {
+            Some(Output::ReconnectRelay(a)) => Some(a.to_string()),
+            other => {
+                self.last = other;
+                None
+            }
+        }
     }
 
     #[wasm_bindgen(js_name = takeTransmit)]

@@ -850,6 +850,8 @@ export class Client {
 	/** Mark a call over: stop its media, forget its key. */
 	#finishCall(st: callSig.CallState, reason: string): void {
 		st.status = 'ended'
+		if (st.heartbeat) clearInterval(st.heartbeat)
+		delete st.heartbeat
 		st.media?.close(reason)
 		delete st.media
 		st.callKey?.fill(0)
@@ -1032,6 +1034,7 @@ export class Client {
 		try {
 			const ack = await receiver.sendCallAndWait(offer)
 			const summary = session.applyAck(encodeNode(ack)) as GroupSummary
+			this.#startHeartbeat(state)
 			await this.#startGroupMedia(state, summary, o)
 		} catch (e) {
 			// The offer is out: end it, or it keeps ringing everyone it reached.
@@ -1076,6 +1079,41 @@ export class Client {
 			media.start()
 		}
 		await this.#groupEpoch(state, summary)
+		this.#hintTransport(state, summary)
+	}
+
+	/** The creator pings the call service every 10 s; without it the server drops the call. */
+	#startHeartbeat(st: callSig.CallState): void {
+		if (st.direction !== 'outgoing' || st.heartbeat) return
+		const beat = () => {
+			void this.#live()
+				.then(({ receiver }) =>
+					receiver.sendNode(callSig.buildHeartbeat(st.callId, st.creator, receiver.nextId())),
+				)
+				.catch((e: unknown) => this.logger.event('call.heartbeat-failed', e))
+		}
+		beat()
+		st.heartbeat = setInterval(beat, 10_000)
+		st.heartbeat.unref()
+	}
+
+	/** Once a device is in the call, tell it our network (once) and announce that we are unmuted. */
+	#hintTransport(st: callSig.CallState, summary: GroupSummary): void {
+		if (st.direction !== 'outgoing') return
+		const fresh = summary.epoch_recipients.filter(
+			(j) => st.members?.has(j.replace(/:\d+@/, '@')) && !st.hinted?.has(j),
+		)
+		if (!fresh.length) return
+		const hinted = (st.hinted ??= new Set())
+		void this.#live()
+			.then(({ receiver }) => {
+				for (const j of fresh) {
+					hinted.add(j)
+					receiver.sendNode(callSig.buildTransportHint(st.callId, j, st.creator, receiver.nextId()))
+				}
+				receiver.sendNode(callSig.buildMuteState(st.callId, st.creator, false, receiver.nextId()))
+			})
+			.catch((e: unknown) => this.logger.event('call.transport-failed', e))
 	}
 
 	/** If the server asked for a shared key (and we are the creator), send it to every connected device. */
@@ -1120,8 +1158,13 @@ export class Client {
 		if (!c) throw new Error(`unknown call ${callId}`)
 		const { receiver } = await this.#live()
 		// A group call is ended once, at the call service; a 1:1 call at each device it rang on.
-		for (const device of c.groupSession ? [`${callId}@call`] : c.devices)
-			receiver.sendNode(callSig.buildTerminate(callId, device, c.creator, receiver.nextId()))
+		if (c.groupSession) {
+			const ms = Math.max(0, Date.now() - c.startedAt)
+			receiver.sendNode(callSig.buildTerminateTimed(callId, c.creator, ms, receiver.nextId()))
+			receiver.sendNode(callSig.buildGroupDuration(callId, c.creator, ms, receiver.nextId()))
+		} else
+			for (const device of c.devices)
+				receiver.sendNode(callSig.buildTerminate(callId, device, c.creator, receiver.nextId()))
 		this.#finishCall(c, 'hangup')
 	}
 

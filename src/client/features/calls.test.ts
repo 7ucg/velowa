@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, expect, it } from 'vitest'
+import * as callSig from './calls.js'
 import {
 	buildAccept,
 	buildLinkCreate,
@@ -168,5 +169,30 @@ describe('call signaling builders', () => {
 		])
 			expect(() => parseCallLinkToken(bad), bad).toThrow()
 		expect(() => buildLinkQuery('', 'audio', 'i')).toThrow()
+	})
+})
+
+describe('group call creator stanzas', () => {
+	it('matches the shapes WhatsApp Web sends', () => {
+		const id = '00ab'
+		const creator = '1:19@lid'
+		expect(callSig.buildHeartbeat(id, creator, 'x')).toEqual({
+			tag: 'call',
+			attrs: { to: '00ab@call', id: 'x' },
+			content: [{ tag: 'heartbeat', attrs: { 'call-id': id, 'call-creator': creator } }],
+		})
+		const t = callSig.buildTransportHint(id, '2@lid', creator, 'y')
+		expect(t.attrs['to']).toBe('2@lid')
+		expect(
+			(t.content as { attrs: Record<string, string> }[])[0]!.attrs['transport-message-type'],
+		).toBe('4')
+		const m = callSig.buildMuteState(id, creator, false, 'z')
+		expect((m.content as { attrs: Record<string, string> }[])[0]!.attrs['mute-state']).toBe('0')
+		const e = callSig.buildTerminateTimed(id, creator, 25745, 'w')
+		expect((e.content as { attrs: Record<string, string> }[])[0]!.attrs).toMatchObject({
+			duration: '25745',
+			audio_duration: '25745',
+		})
+		expect(callSig.buildGroupDuration(id, creator, 5, 'v').attrs['to']).toBe('call')
 	})
 })

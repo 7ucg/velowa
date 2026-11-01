@@ -118,6 +118,71 @@ export const buildTerminate = (
 		attrs: { 'call-id': callId, 'call-creator': creator, ...(reason && { reason }) },
 	})
 
+/** A group-call hang-up with the call length, like the app sends it. */
+export const buildTerminateTimed = (
+	callId: string,
+	creator: string,
+	ms: number,
+	id: string,
+): BinaryNode =>
+	wrap(`${callId}@call`, id, {
+		tag: 'terminate',
+		attrs: {
+			'call-id': callId,
+			'call-creator': creator,
+			duration: String(ms),
+			audio_duration: String(ms),
+		},
+	})
+
+/** Group calls, creator side (as WhatsApp Web sends them): keep-alive, mute state, transport hint, call length. */
+export const buildHeartbeat = (callId: string, creator: string, id: string): BinaryNode =>
+	wrap(`${callId}@call`, id, {
+		tag: 'heartbeat',
+		attrs: { 'call-id': callId, 'call-creator': creator },
+	})
+
+export const buildMuteState = (
+	callId: string,
+	creator: string,
+	muted: boolean,
+	id: string,
+): BinaryNode =>
+	wrap(`${callId}@call`, id, {
+		tag: 'mute_v2',
+		attrs: { 'call-id': callId, 'call-creator': creator, 'mute-state': muted ? '1' : '0' },
+	})
+
+/** Tell one participant device which network we are on (`transport-message-type` 4, wifi/udp). */
+export const buildTransportHint = (
+	callId: string,
+	to: string,
+	creator: string,
+	id: string,
+): BinaryNode =>
+	wrap(to, id, {
+		tag: 'transport',
+		attrs: { 'call-id': callId, 'call-creator': creator, 'transport-message-type': '4' },
+		content: [{ tag: 'net', attrs: { medium: '2', protocol: '0' } }],
+	})
+
+/** The call length (milliseconds) that goes with a hang-up, and the report the app files at `call` after it. */
+export const buildGroupDuration = (
+	callId: string,
+	creator: string,
+	ms: number,
+	id: string,
+): BinaryNode =>
+	wrap('call', id, {
+		tag: 'group_call_duration',
+		attrs: {
+			'call-id': callId,
+			'call-creator': creator,
+			type: 'group',
+			audio_duration: String(ms),
+		},
+	})
+
 /** Decline an incoming call. */
 export const buildReject = (callId: string, to: string, creator: string, id: string): BinaryNode =>
 	wrap(to, id, {
@@ -195,6 +260,9 @@ export interface CallState {
 	devices: string[]
 	status: 'calling' | 'ringing' | 'connected' | 'ended'
 	startedAt: number
+	/** Group calls: keep-alive timer, and the devices that already got our transport hint. */
+	heartbeat?: NodeJS.Timeout
+	hinted?: Set<string>
 	/** The 32-byte call key (end-to-end media key). */
 	callKey?: Uint8Array
 	/** The offer stanza as received (incoming calls): its `<enc>` holds the call key. */

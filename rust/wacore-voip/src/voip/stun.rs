@@ -308,7 +308,9 @@ pub struct WasmGroupStunAllocateRequest<'a> {
 pub fn build_wasm_group_stun_allocate_request(
     request: &WasmGroupStunAllocateRequest<'_>,
 ) -> Vec<u8> {
-    let pids = normalized_pids(request.participant_pids);
+    // WhatsApp Web never attaches subscriptions, participant count or FEC descriptors to its group Allocate
+    // (captured with up to three other participants); the relay answers 452 when they are present.
+    let pids: Vec<u32> = Vec::new();
     let descriptors = create_wasm_stream_descriptors_from_ssrcs(
         request.stream_ssrcs,
         if pids.len() > 1 {
