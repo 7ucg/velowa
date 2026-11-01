@@ -264,24 +264,34 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		this.emit('audio', pcm)
 	}
 
-	/** Feed a prepared recording into the call, one 60 ms frame at a time, once the media path is up. */
 	#startMic(): void {
-		if (this.#mic || !this.#audioIn) return
+		if (this.#mic) return
+		// A call needs a steady stream: the peer shows "reconnecting" a few seconds after the last packet. So the
+		// microphone ticks for the whole call and sends silence whenever nothing is queued to say.
 		this.#mic = setInterval(() => {
-			if (this.#closed || !this.#audioIn) return
+			if (this.#closed) return
 			const frame = new Int16Array(FRAME_SAMPLES)
-			frame.set(this.#audioIn.subarray(this.#audioPos, this.#audioPos + FRAME_SAMPLES))
-			this.#audioPos += FRAME_SAMPLES
+			if (this.#audioIn) {
+				frame.set(this.#audioIn.subarray(this.#audioPos, this.#audioPos + FRAME_SAMPLES))
+				this.#audioPos += FRAME_SAMPLES
+				if (this.#audioPos >= this.#audioIn.length) this.#audioIn = undefined
+			}
 			if (this.#opus) {
 				const enc = this.#opus.encode(Buffer.from(frame.buffer), FRAME_SAMPLES)
 				this.#engine.handleEncodedAudio(this.#now(), enc)
 			} else this.#engine.handleMicFrame(this.#now(), frame)
 			this.#pump()
-			if (this.#audioPos >= this.#audioIn.length) {
-				clearInterval(this.#mic)
-				this.#mic = undefined
-			}
 		}, FRAME_MS)
+	}
+
+	/** Say something (16 kHz mono PCM); queued after whatever is still playing. */
+	speak(pcm: Int16Array): void {
+		const rest = this.#audioIn ? this.#audioIn.subarray(this.#audioPos) : new Int16Array(0)
+		const next = new Int16Array(rest.length + pcm.length)
+		next.set(rest)
+		next.set(pcm, rest.length)
+		this.#audioIn = next
+		this.#audioPos = 0
 	}
 
 	close(reason = 'closed'): void {
