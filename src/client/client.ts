@@ -18,6 +18,8 @@ import type { ClientConfig } from './pairing.js'
 import { Receiver } from './receiver.js'
 import type { DecodedMessage } from './receiver.js'
 import { Sender } from './sender.js'
+import * as media from './features/media.js'
+import type { MediaOptions, MediaType } from './features/media.js'
 import * as msg from './features/messages.js'
 import type { ChatState, MessageKey, ReceiptType, TextOptions } from './features/messages.js'
 
@@ -72,6 +74,7 @@ export class Client {
 	#keepAlive: NodeJS.Timeout | undefined
 	#stopped = false
 	#isOpen = false
+	#mediaConn: media.MediaConn | undefined
 	#ready: Promise<void> = Promise.resolve()
 
 	constructor(options: ClientOptions = {}) {
@@ -147,6 +150,48 @@ export class Client {
 		const { sender } = await this.#live()
 		const r = msg.revoke(key)
 		return sender.sendMessage(key.remoteJid, r.message, r.opts)
+	}
+
+	async #getMediaConn(): Promise<media.MediaConn> {
+		const { receiver } = await this.#live()
+		const c = this.#mediaConn
+		if (c && Date.now() - c.fetchedAt < c.ttl * 1000) return c
+		return (this.#mediaConn = media.parseMediaConn(
+			await receiver.request(media.mediaConnRequest()),
+		))
+	}
+
+	/** Encrypt, upload and send an image / video / audio / document / sticker. */
+	async sendMedia(
+		to: string,
+		type: MediaType,
+		data: Uint8Array,
+		opts: MediaOptions & TextOptions = {},
+	): Promise<string> {
+		const { sender, meId } = await this.#live()
+		const enc = media.encryptMedia(data, type)
+		const uploaded = await media.uploadMedia(await this.#getMediaConn(), type, enc)
+		const built = media.mediaMessage(type, enc, uploaded, opts)
+		const message = msg.withContext(built.message, to, opts, meId)
+		return sender.sendMessage(to, message, { encAttrs: { mediatype: built.mediaType } })
+	}
+
+	sendImage = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
+		this.sendMedia(to, 'image', data, opts)
+	sendVideo = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
+		this.sendMedia(to, 'video', data, opts)
+	sendAudio = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
+		this.sendMedia(to, 'audio', data, opts)
+	sendDocument = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
+		this.sendMedia(to, 'document', data, opts)
+	sendSticker = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
+		this.sendMedia(to, 'sticker', data, opts)
+
+	/** Download and decrypt the media of a received message (`event.message`). */
+	async downloadMedia(message: Record<string, unknown>): Promise<Buffer> {
+		const m = media.mediaOf(message)
+		if (!m) throw new Error('message carries no downloadable media')
+		return media.downloadMedia(m.ref, m.type)
 	}
 
 	/** Mark messages as read (`read-self` keeps read receipts private). */
