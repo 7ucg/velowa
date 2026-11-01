@@ -641,7 +641,7 @@ export class Client {
 	 */
 	async startCall(
 		to: string,
-		o: { video?: boolean; audioIn?: Int16Array } = {},
+		o: { video?: boolean; audioIn?: Int16Array; recordTo?: string } = {},
 	): Promise<callSig.CallState> {
 		const { sender, receiver } = await this.#live()
 		const own = this.#creds.me?.lid
@@ -668,6 +668,7 @@ export class Client {
 			keys: keys.map((k) => ({ jid: k.jid, type: k.type, ciphertext: k.ciphertext })),
 			multiDevice: ring.length > 1,
 			video: !!o.video,
+			opus: true,
 			id,
 			...(keys.some((k) => k.type === 'pkmsg') &&
 				this.#creds.account && { deviceIdentity: this.#creds.account }),
@@ -697,7 +698,9 @@ export class Client {
 					peerLid: peer,
 					callKey,
 					relay,
+					codec: 'opus',
 					...(o.audioIn && { audioIn: o.audioIn }),
+					...(o.recordTo && { recordTo: o.recordTo }),
 				})
 				state.media = media
 				media.on('closed', () => void 0)

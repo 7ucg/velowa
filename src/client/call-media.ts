@@ -1,4 +1,6 @@
 import { createSocket, type Socket } from 'node:dgram'
+import { createRequire } from 'node:module'
+import { writeFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import { encodeNode, type BinaryNode } from '../codec/index.js'
 import {
@@ -9,6 +11,40 @@ import {
 	parseRelayFromNode,
 } from '../voip-wasm.js'
 import { TypedEmitter } from '../events/emitter.js'
+
+interface OpusCodec {
+	encode(pcm: Buffer, frameSize: number): Buffer
+	decode(packet: Buffer): Buffer
+	delete(): void
+}
+
+/** libopus compiled to WebAssembly (`opusscript`); loaded only for calls. */
+function newOpus(): OpusCodec {
+	const O = createRequire(import.meta.url)('opusscript') as {
+		new (rate: number, channels: number, app: number): OpusCodec
+		Application: { VOIP: number }
+	}
+	return new O(16000, 1, O.Application.VOIP)
+}
+
+/** Write 16 kHz mono 16-bit PCM as a WAV file. */
+export function writeWav(path: string, pcm: Int16Array, rate = 16000): void {
+	const data = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength)
+	const h = Buffer.alloc(44)
+	h.write('RIFF', 0)
+	h.writeUInt32LE(36 + data.length, 4)
+	h.write('WAVEfmt ', 8)
+	h.writeUInt32LE(16, 16)
+	h.writeUInt16LE(1, 20)
+	h.writeUInt16LE(1, 22)
+	h.writeUInt32LE(rate, 24)
+	h.writeUInt32LE(rate * 2, 28)
+	h.writeUInt16LE(2, 32)
+	h.writeUInt16LE(16, 34)
+	h.write('data', 36)
+	h.writeUInt32LE(data.length, 40)
+	writeFileSync(path, Buffer.concat([h, data]))
+}
 
 /** One mic frame is 60 ms of 16 kHz mono PCM. */
 export const FRAME_SAMPLES = 960
@@ -33,6 +69,10 @@ export interface MediaSessionOptions {
 	relay: BinaryNode
 	/** 16 kHz mono signed 16-bit PCM to speak into the call, played once from the start. */
 	audioIn?: Int16Array
+	/** Audio codec on the wire: standard Opus (default) or MLow. Must match what the offer announced. */
+	codec?: 'opus' | 'mlow'
+	/** Save what the peer says (16 kHz mono WAV) when the session ends. */
+	recordTo?: string
 }
 
 type MediaEvents = {
@@ -87,9 +127,12 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 				enable_media: true,
 				enable_video: false,
 				enable_sframe: true,
+				audio: o.codec === 'mlow' ? 'mlow' : 'opus',
 			}),
 		)
 		this.#audioIn = o.audioIn
+		if (o.codec !== 'mlow') this.#opus = newOpus()
+		this.#recordTo = o.recordTo
 		// Media rides a DataChannel over SCTP over DTLS over this UDP flow (as in WhatsApp Web's peer connection).
 		this.#channel = new RelayChannel(this.#relay.relay_ip, this.#relay.relay_port)
 		this.#socket = createSocket('udp4')
@@ -113,6 +156,9 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 	}
 
 	#started = false
+	#opus: OpusCodec | undefined
+	#recordTo: string | undefined
+	#recorded: Int16Array[] = []
 
 	/** Dial the relay: DTLS handshake first; the engine starts once the media channel is open. */
 	start(): void {
@@ -161,9 +207,19 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 							const err = this.#channel.write(this.#now(), pkt)
 							if (err) return this.close(`relay: ${err}`)
 						}
+					} else if (kind === 6 && this.#opus) {
+						const pkt = this.#engine.takeEncodedAudio()
+						if (pkt) {
+							try {
+								const raw = this.#opus.decode(Buffer.from(pkt))
+								this.#heard(new Int16Array(raw.buffer, raw.byteOffset, raw.byteLength >> 1).slice())
+							} catch {
+								/* one undecodable packet is a gap, not a failure */
+							}
+						}
 					} else if (kind === 2) {
 						const pcm = this.#engine.takePlayout()
-						if (pcm) this.emit('audio', Int16Array.from(pcm))
+						if (pcm) this.#heard(Int16Array.from(pcm))
 					} else if (kind === 3) {
 						const name = this.#engine.eventName()
 						const code = this.#engine.eventCode()
@@ -203,6 +259,11 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		}
 	}
 
+	#heard(pcm: Int16Array): void {
+		if (this.#recordTo) this.#recorded.push(pcm)
+		this.emit('audio', pcm)
+	}
+
 	/** Feed a prepared recording into the call, one 60 ms frame at a time, once the media path is up. */
 	#startMic(): void {
 		if (this.#mic || !this.#audioIn) return
@@ -211,7 +272,10 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 			const frame = new Int16Array(FRAME_SAMPLES)
 			frame.set(this.#audioIn.subarray(this.#audioPos, this.#audioPos + FRAME_SAMPLES))
 			this.#audioPos += FRAME_SAMPLES
-			this.#engine.handleMicFrame(this.#now(), frame)
+			if (this.#opus) {
+				const enc = this.#opus.encode(Buffer.from(frame.buffer), FRAME_SAMPLES)
+				this.#engine.handleEncodedAudio(this.#now(), enc)
+			} else this.#engine.handleMicFrame(this.#now(), frame)
 			this.#pump()
 			if (this.#audioPos >= this.#audioIn.length) {
 				clearInterval(this.#mic)
@@ -223,6 +287,13 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 	close(reason = 'closed'): void {
 		if (this.#closed) return
 		this.#closed = true
+		if (this.#recordTo && this.#recorded.length) {
+			const all = new Int16Array(this.#recorded.reduce((n, c) => n + c.length, 0))
+			let at = 0
+			for (const c of this.#recorded) (all.set(c, at), (at += c.length))
+			writeWav(this.#recordTo, all)
+		}
+		this.#opus?.delete()
 		if (this.#timer) clearTimeout(this.#timer)
 		if (this.#mic) clearInterval(this.#mic)
 		try {

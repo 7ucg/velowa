@@ -4,7 +4,7 @@
 mod relay;
 
 use wacore_voip::voip::{
-    AudioConfig, CallConfig, CallDirection, CallEngine as CoreCallEngine, CallEvent, Input, NEVER,
+    AudioConfig, AudioFormat, CallConfig, CallDirection, CallEngine as CoreCallEngine, CallEvent, Input, NEVER,
     Output, TxIdSource,
 };
 use wacore_voip::voip_control::relay_parse;
@@ -115,6 +115,9 @@ struct EngineConfigJson {
     #[serde(default)]
     enable_video: bool,
     enable_sframe: bool,
+    /// "mlow" (PCM in/out, default) or "opus" (complete Opus packets in/out).
+    #[serde(default)]
+    audio: String,
 }
 
 fn call_config_from_json(json: &str) -> Result<CallConfig, String> {
@@ -132,7 +135,11 @@ fn call_config_from_json(json: &str) -> Result<CallConfig, String> {
         peer_lid: c.peer_lid,
         call_key: c.call_key,
         ssrc: c.ssrc,
-        audio: AudioConfig::MLOW_PCM,
+        audio: if c.audio == "opus" {
+            AudioConfig::encoded(AudioFormat::OPUS_16KHZ_60MS)
+        } else {
+            AudioConfig::MLOW_PCM
+        },
         relay_token: c.relay_token,
         auth_token: c.auth_token,
         relay_ip: c.relay_ip,
@@ -152,6 +159,7 @@ const OUT_PLAYOUT: i32 = 2;
 const OUT_EVENT: i32 = 3;
 const OUT_VIDEO: i32 = 4;
 const OUT_OTHER: i32 = 5;
+const OUT_ENCODED: i32 = 6;
 
 /// Sans-IO call engine: the relay control plane (STUN allocate, keepalive) and the media plane (MLow PCM, E2E-SRTP).
 /// Feed inputs, then drain `pollOutput` until it returns 0 and arm one timer for `lastTimeout`.
@@ -188,6 +196,12 @@ impl CallEngine {
     }
 
     /// One H.264 Annex-B access unit (video calls).
+    /// One complete encoded audio payload (Opus mode).
+    #[wasm_bindgen(js_name = handleEncodedAudio)]
+    pub fn handle_encoded_audio(&mut self, now: f64, payload: &[u8]) {
+        self.inner.handle_input(now as u64, Input::EncodedAudio(payload));
+    }
+
     #[wasm_bindgen(js_name = handleVideoFrame)]
     pub fn handle_video_frame(&mut self, now: f64, frame: &[u8]) {
         self.inner.handle_input(now as u64, Input::VideoFrame(frame));
@@ -209,6 +223,7 @@ impl CallEngine {
             Output::Playout(_) => OUT_PLAYOUT,
             Output::Event(_) => OUT_EVENT,
             Output::VideoPlayout(_) => OUT_VIDEO,
+            Output::EncodedAudio(_) => OUT_ENCODED,
             _ => OUT_OTHER,
         };
         self.last = Some(out);
@@ -230,6 +245,18 @@ impl CallEngine {
     pub fn take_playout(&mut self) -> Option<Vec<i16>> {
         match self.last.take() {
             Some(Output::Playout(p)) => Some(p),
+            other => {
+                self.last = other;
+                None
+            }
+        }
+    }
+
+    /// The peer's encoded audio payload of the last `6` output (Opus mode).
+    #[wasm_bindgen(js_name = takeEncodedAudio)]
+    pub fn take_encoded_audio(&mut self) -> Option<Vec<u8>> {
+        match self.last.take() {
+            Some(Output::EncodedAudio(f)) => Some(f.data.to_vec()),
             other => {
                 self.last = other;
                 None
