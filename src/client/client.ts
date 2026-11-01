@@ -34,6 +34,7 @@ import { loadHistory } from './features/history.js'
 import type { HistoryChunk } from './features/history.js'
 import { mexFor } from './features/mex.js'
 import { Newsletters } from './features/newsletters.js'
+import { Usernames } from './features/username.js'
 import type { GroupNotification } from './features/groups.js'
 import * as media from './features/media.js'
 import type { MediaOptions, MediaType } from './features/media.js'
@@ -311,6 +312,14 @@ export class Client {
 			)(queryId, variables, dataPath),
 		async (n) => (await this.#live()).receiver.request(n),
 		() => `nl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+	)
+
+	/** Usernames: `client.usernames.check('name')`, `.set(...)`, `.mine()`. */
+	readonly usernames: Usernames = new Usernames((queryId, variables, dataPath) =>
+		mexFor(
+			async (n) => (await this.#live()).receiver.request(n),
+			() => `mex-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+		)(queryId, variables, dataPath),
 	)
 
 	#q = async (node: BinaryNode) => (await this.#live()).receiver.request(node)
