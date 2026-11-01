@@ -119,4 +119,14 @@ describe('connect-time guard (DNS rebinding)', () => {
 		expect(hit).toBe(false)
 		server.close()
 	})
+
+	it('honours the caller abort and an overall deadline', async () => {
+		// Both fail before any data flows; example.com is only resolved, never needed to answer.
+		const ac = new AbortController()
+		ac.abort()
+		await expect(
+			guardedFetch(5000)('http://example.com/', { signal: ac.signal } as RequestInit),
+		).rejects.toThrow()
+		await expect(guardedFetch(1)('http://example.com/')).rejects.toThrow()
+	})
 })

@@ -73,8 +73,11 @@ async function resolveAll(host: string): Promise<string[]> {
  * that was checked is the one the socket uses, so a DNS answer that changes between check and connect (rebinding)
  * cannot reach an internal host.
  */
-export function guardedFetch(timeoutMs: number): typeof fetch {
-	return ((input: string | URL, init?: { headers?: Record<string, string> }) =>
+export function guardedFetch(timeoutMs: number, hardCapBytes = 2 * 1024 * 1024): typeof fetch {
+	return ((
+		input: string | URL,
+		init?: { headers?: Record<string, string>; signal?: AbortSignal },
+	) =>
 		new Promise<Response>((resolve, reject) => {
 			const u = new URL(String(input))
 			const mod = u.protocol === 'https:' ? https : http
@@ -101,11 +104,26 @@ export function guardedFetch(timeoutMs: number): typeof fetch {
 					for (const [k, v] of Object.entries(res.headers))
 						if (typeof v === 'string') headers.set(k, v)
 						else if (Array.isArray(v)) headers.set(k, v.join(', '))
+					// Backpressure: the socket is paused whenever the reader is behind, and the body is cut at a hard cap.
+					let seen = 0
 					const body = new ReadableStream<Uint8Array>({
 						start(controller) {
-							res.on('data', (c: Buffer) => controller.enqueue(new Uint8Array(c)))
+							res.pause()
+							res.on('data', (c: Buffer) => {
+								seen += c.length
+								if (seen > hardCapBytes) {
+									res.destroy()
+									controller.error(new Error('response too large'))
+									return
+								}
+								controller.enqueue(new Uint8Array(c))
+								if ((controller.desiredSize ?? 0) <= 0) res.pause()
+							})
 							res.on('end', () => controller.close())
 							res.on('error', (e) => controller.error(e))
+						},
+						pull() {
+							res.resume()
 						},
 						cancel() {
 							res.destroy()
@@ -123,6 +141,12 @@ export function guardedFetch(timeoutMs: number): typeof fetch {
 					)
 				},
 			)
+			// One deadline for the whole exchange (the socket timeout only covers idle time), and the caller's abort.
+			const deadline = setTimeout(() => req.destroy(new Error('timeout')), timeoutMs)
+			req.on('close', () => clearTimeout(deadline))
+			const abort = () => req.destroy(new Error('aborted'))
+			if (init?.signal?.aborted) abort()
+			else init?.signal?.addEventListener('abort', abort, { once: true })
 			req.on('timeout', () => req.destroy(new Error('timeout')))
 			req.on('error', reject)
 			req.end()
@@ -136,7 +160,7 @@ async function safeGet(
 	maxBytes: number,
 	accept: string,
 ): Promise<{ body: Uint8Array; finalUrl: string; type: string } | undefined> {
-	const doFetch = o.fetch ?? guardedFetch(o.timeoutMs)
+	const doFetch = o.fetch ?? guardedFetch(o.timeoutMs, maxBytes + 64 * 1024)
 	const resolve = o.resolve ?? resolveAll
 	let current = url
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -157,12 +181,19 @@ async function safeGet(
 		})
 		if (res.status >= 300 && res.status < 400) {
 			const loc = res.headers.get('location')
+			await res.body?.cancel().catch(() => undefined)
 			if (!loc) return undefined
 			current = new URL(loc, current).toString()
 			continue
 		}
-		if (!res.ok || !res.body) return undefined
-		if (Number(res.headers.get('content-length')) > maxBytes) return undefined
+		if (!res.ok || !res.body) {
+			await res.body?.cancel().catch(() => undefined)
+			return undefined
+		}
+		if (Number(res.headers.get('content-length')) > maxBytes) {
+			await res.body.cancel().catch(() => undefined)
+			return undefined
+		}
 		const chunks: Uint8Array[] = []
 		let total = 0
 		const reader = res.body.getReader()
