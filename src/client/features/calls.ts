@@ -153,6 +153,32 @@ export const buildMuteState = (
 		attrs: { 'call-id': callId, 'call-creator': creator, 'mute-state': muted ? '1' : '0' },
 	})
 
+/** Latency to one relay (the 6-byte address from the roster update), reported once per relay block. */
+export const buildRelayLatency = (
+	callId: string,
+	creator: string,
+	transactionId: string,
+	relayName: string,
+	rttMs: number,
+	address: Uint8Array,
+	id: string,
+): BinaryNode =>
+	wrap(`${callId}@call`, id, {
+		tag: 'relaylatency',
+		attrs: { 'call-id': callId, 'call-creator': creator, 'transaction-id': transactionId },
+		content: [
+			{
+				tag: 'te',
+				// bit 25 marks a measured value, the low bits are the round trip in milliseconds
+				attrs: {
+					latency: String(0x2000000 + Math.max(0, Math.round(rttMs))),
+					relay_name: relayName,
+				},
+				content: address,
+			},
+		],
+	})
+
 /** Tell one participant device which network we are on (`transport-message-type` 4, wifi/udp). */
 export const buildTransportHint = (
 	callId: string,
@@ -290,6 +316,12 @@ export interface CallState {
 	groupSession?: GroupSession
 	groupEngine?: CallEngine
 	/** Group calls we answered: media options kept until the relay arrives, and a shared key that came before the engine. */
+	/** The newest relay block we reported latencies for. */
+	latencyTx?: string
+	/** Joined through a call link: the relay comes with the first roster update, not with the join ack. */
+	awaitsRelay?: boolean
+	/** Joined through a call link and still in the waiting room. */
+	waiting?: boolean
 	mediaOptions?: { audioIn?: Int16Array; recordTo?: string }
 	pendingEpoch?: { transaction: number; key: Uint8Array }
 	/** The newest shared-epoch transaction we installed. */
@@ -350,16 +382,97 @@ export const buildLinkQuery = (token: string, media: CallLinkMedia, id: string):
 	return service(id, { tag: 'link_query', attrs: { token, media } })
 }
 
+/** Waiting-room traffic goes to the call itself (`<callId>@call`), not to the link service. */
+const roomRequest = (
+	callId: string,
+	creator: string,
+	id: string,
+	tag: string,
+	attrs: Record<string, string> = {},
+	content?: BinaryNode[],
+): BinaryNode =>
+	wrap(`${callId}@call`, id, {
+		tag,
+		attrs: { 'call-id': callId, 'call-creator': creator, ...attrs },
+		...(content && { content }),
+	})
+
 export const buildWaitingRoomToggle = (
 	callId: string,
 	creator: string,
 	enabled: boolean,
 	id: string,
 ): BinaryNode =>
-	service(id, {
-		tag: 'waiting_room_toggle',
-		attrs: { 'call-id': callId, 'call-creator': creator, enabled: enabled ? '1' : '0' },
+	roomRequest(callId, creator, id, 'waiting_room_toggle', { enabled: enabled ? '1' : '0' })
+
+/** Keeps a pending join in the waiting room alive (every 10 s). */
+export const buildWaitingRoomHeartbeat = (
+	callId: string,
+	creator: string,
+	id: string,
+): BinaryNode => roomRequest(callId, creator, id, 'heartbeat', { type: 'waiting_room' })
+
+export const buildWaitingRoomAdmit = (
+	callId: string,
+	creator: string,
+	user: string,
+	id: string,
+	deny = false,
+): BinaryNode =>
+	roomRequest(callId, creator, id, deny ? 'waiting_room_deny' : 'waiting_room_admit', {}, [
+		{ tag: 'user', attrs: { jid: user } },
+	])
+
+/** Join a call link: audio (and video) announcement, network, capability. */
+export const buildLinkJoin = (token: string, media: CallLinkMedia, id: string): BinaryNode => {
+	if (!TOKEN.test(token)) throw new Error('invalid call-link token')
+	return service(id, {
+		tag: 'link_join',
+		attrs: { token, media },
+		content: [
+			audio('16000'),
+			...(media === 'video'
+				? [{ tag: 'video', attrs: { dec: 'H264', device_orientation: '0' } }]
+				: []),
+			{ tag: 'net', attrs: { medium: '2' } },
+			capabilityNode(
+				media === 'video' ? CAPABILITY_STANDARD_OPUS_VIDEO_OFFER : CAPABILITY_STANDARD_OPUS_OFFER,
+			),
+		],
 	})
+}
+
+export interface LinkJoin {
+	callId: string
+	creator: string
+	media: CallLinkMedia
+	/** Not admitted yet: the creator has to let us in. */
+	inWaitingRoom: boolean
+	/** The ack carried the call's roster and relay (admitted). */
+	admitted: boolean
+	isAdmin: boolean
+}
+
+/** The `<link_join>` ack: either a group snapshot (admitted) or a waiting room. */
+export function parseLinkJoinAck(ack: BinaryNode, token: string): LinkJoin {
+	const group = child(ack, 'group_info')
+	const room = child(ack, 'waiting_room')
+	const src = group ?? room
+	const callId = src?.attrs['call-id']
+	const creator = src?.attrs['call-creator']
+	if (!src || !callId || !creator) throw new Error('link_join ack names no call')
+	if (room?.attrs['link-token'] && room.attrs['link-token'] !== token)
+		throw new Error('the waiting room belongs to another link')
+	const media = (group?.attrs['media'] ?? room?.attrs['media']) === 'video' ? 'video' : 'audio'
+	return {
+		callId,
+		creator,
+		media,
+		inWaitingRoom: !!room && !group,
+		admitted: !!group,
+		isAdmin: room?.attrs['is_admin'] === '1',
+	}
+}
 
 const child = (n: BinaryNode, tag: string): BinaryNode | undefined =>
 	Array.isArray(n.content) ? n.content.find((c) => c.tag === tag) : undefined

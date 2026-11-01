@@ -196,3 +196,72 @@ describe('group call creator stanzas', () => {
 		expect(callSig.buildGroupDuration(id, creator, 5, 'v').attrs['to']).toBe('call')
 	})
 })
+
+describe('call-link join', () => {
+	it('builds the join request and reads both kinds of answer', () => {
+		const j = callSig.buildLinkJoin('abcDEF123_-xyz', 'audio', 'i1')
+		expect(j.attrs['to']).toBe('@call')
+		const link = (
+			j.content as { tag: string; attrs: Record<string, string>; content: { tag: string }[] }[]
+		)[0]!
+		expect(link.tag).toBe('link_join')
+		expect(link.content.map((c) => c.tag)).toEqual(['audio', 'net', 'capability'])
+		expect(() => callSig.buildLinkJoin('../x', 'audio', 'i')).toThrow()
+
+		const admitted = callSig.parseLinkJoinAck(
+			{
+				tag: 'ack',
+				attrs: {},
+				content: [
+					{
+						tag: 'group_info',
+						attrs: { 'call-id': 'C1', 'call-creator': '1:2@lid', media: 'video' },
+					},
+				],
+			},
+			'tok',
+		)
+		expect(admitted).toMatchObject({
+			callId: 'C1',
+			media: 'video',
+			admitted: true,
+			inWaitingRoom: false,
+		})
+		const waiting = callSig.parseLinkJoinAck(
+			{
+				tag: 'ack',
+				attrs: {},
+				content: [
+					{
+						tag: 'waiting_room',
+						attrs: {
+							'call-id': 'C2',
+							'call-creator': '1@lid',
+							'link-token': 'tok',
+							media: 'audio',
+						},
+					},
+				],
+			},
+			'tok',
+		)
+		expect(waiting).toMatchObject({ callId: 'C2', inWaitingRoom: true, admitted: false })
+		expect(() =>
+			callSig.parseLinkJoinAck(
+				{
+					tag: 'ack',
+					attrs: {},
+					content: [
+						{
+							tag: 'waiting_room',
+							attrs: { 'call-id': 'C', 'call-creator': 'x', 'link-token': 'other' },
+						},
+					],
+				},
+				'tok',
+			),
+		).toThrow()
+		expect(callSig.buildWaitingRoomHeartbeat('C', 'x@lid', 'h').attrs['to']).toBe('C@call')
+		expect(callSig.buildWaitingRoomAdmit('C', 'x@lid', 'u@lid', 'a', true).content).toBeDefined()
+	})
+})

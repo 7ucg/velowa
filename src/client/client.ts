@@ -750,10 +750,18 @@ export class Client {
 		const action = Array.isArray(node.content) ? node.content[0] : undefined
 		if (!st?.groupSession || !action) return
 		if (c.status === 'group_update') {
+			this.#reportRelayLatency(st, action)
 			try {
 				const summary = st.groupSession.applyUpdate(encodeNode(action)) as GroupSummary
 				if (summary.applied === 'applied') {
 					for (const m of summary.members) st.members?.add(m)
+					if (st.waiting) {
+						// Let in: the waiting-room heartbeat becomes the call's own.
+						st.waiting = false
+						if (st.heartbeat) clearInterval(st.heartbeat)
+						delete st.heartbeat
+						this.#startHeartbeat(st)
+					}
 					if (st.groupEngine) {
 						const r = st.groupSession.pushToEngine(st.groupEngine, performance.now())
 						this.logger.event('call.group-push', { transaction: summary.transaction_id, result: r })
@@ -1070,7 +1078,7 @@ export class Client {
 	): Promise<void> {
 		const session = state.groupSession!
 		// An invitation we answered gets its relay with a later roster update.
-		if (!summary.relay_endpoint && state.direction === 'incoming') return
+		if (!summary.relay_endpoint && (state.direction === 'incoming' || state.awaitsRelay)) return
 		if (!summary.relay_endpoint) throw new Error('the group call has no relay yet')
 		o = { ...state.mediaOptions, ...o }
 		if (!state.groupEngine) {
@@ -1107,6 +1115,144 @@ export class Client {
 		}
 		await this.#groupEpoch(state, summary)
 		this.#hintTransport(state, summary)
+	}
+
+	/**
+	 * Tell the call service how far each relay of a roster update is from us (once per relay block). The service
+	 * picks the call's relay from everyone's reports, and drops a participant that never reported.
+	 */
+	#reportRelayLatency(st: callSig.CallState, holder: BinaryNode): void {
+		const relay = (Array.isArray(holder.content) ? holder.content : []).find(
+			(k) => k.tag === 'relay',
+		)
+		const tx = relay?.attrs['transaction-id']
+		if (!relay || !tx || st.latencyTx === tx) return
+		st.latencyTx = tx
+		const seen = new Set<string>()
+		const reports: { name: string; rtt: number; address: Uint8Array }[] = []
+		for (const te of Array.isArray(relay.content) ? relay.content : []) {
+			const name = te.attrs['relay_name']
+			if (te.tag !== 'te2' || !name || seen.has(name)) continue
+			if (!(te.content instanceof Uint8Array) || te.content.length !== 6) continue
+			seen.add(name)
+			reports.push({ name, rtt: Number(te.attrs['c2r_rtt'] ?? 0) || 0, address: te.content })
+		}
+		void this.#live()
+			.then(({ receiver }) => {
+				for (const r of reports)
+					receiver.sendNode(
+						callSig.buildRelayLatency(
+							st.callId,
+							st.creator,
+							tx,
+							r.name,
+							r.rtt,
+							r.address,
+							receiver.nextId(),
+						),
+					)
+			})
+			.catch((e: unknown) => this.logger.event('call.latency-failed', e))
+	}
+
+	/** A pending call-link join pings the waiting room every 10 s until it is let in. */
+	#startWaitingHeartbeat(st: callSig.CallState): void {
+		const beat = () => {
+			void this.#live()
+				.then(({ receiver }) =>
+					receiver.sendNode(
+						callSig.buildWaitingRoomHeartbeat(st.callId, st.creator, receiver.nextId()),
+					),
+				)
+				.catch((e: unknown) => this.logger.event('call.heartbeat-failed', e))
+		}
+		beat()
+		st.heartbeat = setInterval(beat, 10_000)
+		st.heartbeat.unref()
+	}
+
+	/**
+	 * Join a call link ("room"). When the creator wants to approve joiners the call waits in the waiting room
+	 * (`status` `ringing`, `waiting` true) and goes on once the creator lets us in.
+	 */
+	async joinCallLink(
+		link: string,
+		media: callSig.CallLinkMedia = 'audio',
+		o: { audioIn?: Int16Array; recordTo?: string } = {},
+	): Promise<callSig.CallState> {
+		const token = callSig.parseCallLinkToken(link)
+		const { receiver } = await this.#live()
+		const own = this.#creds.me?.lid
+		if (!own) throw new Error('no own LID yet; wait for the login to finish')
+		ensureVoipWasm()
+		const ack = await receiver.sendCallAndWait(
+			callSig.buildLinkJoin(token, media, receiver.nextId()),
+		)
+		const join = callSig.parseLinkJoinAck(ack, token)
+		const user = (j: string) => j.replace(/:\d+@/, '@')
+		const session = new GroupSession(join.callId, join.creator, own)
+		const state: callSig.CallState = {
+			callId: join.callId,
+			peer: user(join.creator),
+			creator: join.creator,
+			direction: 'outgoing',
+			video: join.media === 'video',
+			devices: [],
+			status: join.admitted ? 'connected' : 'ringing',
+			startedAt: Date.now(),
+			groupSession: session,
+			members: new Set([user(join.creator), user(own)]),
+			mediaOptions: {
+				...(o.audioIn && { audioIn: o.audioIn }),
+				...(o.recordTo && { recordTo: o.recordTo }),
+			},
+			...(join.inWaitingRoom && { waiting: true }),
+			awaitsRelay: true,
+		}
+		this.#calls.set(join.callId, state)
+		try {
+			if (join.admitted) {
+				// The ack's roster has the transaction of the first update, which carries the relay and the rekey
+				// request: applying it here would make that update look stale. The update is the first snapshot.
+				this.#startHeartbeat(state)
+			} else this.#startWaitingHeartbeat(state)
+		} catch (e) {
+			try {
+				receiver.sendNode(
+					callSig.buildTerminate(
+						join.callId,
+						`${join.callId}@call`,
+						join.creator,
+						receiver.nextId(),
+					),
+				)
+			} catch {
+				/* connection gone */
+			}
+			this.#finishCall(state, 'failed')
+			throw e
+		}
+		return state
+	}
+
+	/** Creator of a call link: require approval for joiners (or not). */
+	async setApprovalRequired(callId: string, enabled: boolean): Promise<void> {
+		const c = this.#calls.get(callId)
+		if (!c) throw new Error(`unknown call ${callId}`)
+		const { receiver } = await this.#live()
+		await receiver.sendCallAndWait(
+			callSig.buildWaitingRoomToggle(callId, c.creator, enabled, receiver.nextId()),
+		)
+	}
+
+	/** Creator of a call link: let a waiting person in, or turn them away. */
+	async answerWaitingRoom(callId: string, user: string, admit = true): Promise<void> {
+		const c = this.#calls.get(callId)
+		if (!c) throw new Error(`unknown call ${callId}`)
+		const { receiver } = await this.#live()
+		await receiver.sendCallAndWait(
+			callSig.buildWaitingRoomAdmit(callId, c.creator, user, receiver.nextId(), !admit),
+		)
 	}
 
 	/** The creator pings the call service every 10 s; without it the server drops the call. */
