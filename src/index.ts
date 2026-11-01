@@ -41,3 +41,17 @@ export { Client } from './client/client.js'
 export type { ClientOptions, ClientEvents } from './client/client.js'
 export { ProtocolLogger } from './logging/protocol-logger.js'
 export type { ProtocolLoggerOptions } from './logging/protocol-logger.js'
+export {
+	quickReply,
+	urlButton,
+	callButton,
+	copyButton,
+	singleSelect,
+} from './client/features/interactive.js'
+export type {
+	NativeButton,
+	InteractiveOptions,
+	ListSection,
+} from './client/features/interactive.js'
+export { pollOptionHash, vcardFor } from './client/features/extras.js'
+export type { MessageKey, Quoted, TextOptions } from './client/features/messages.js'

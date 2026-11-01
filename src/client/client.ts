@@ -24,6 +24,7 @@ import type { RangeMessage } from './features/chat-actions.js'
 import type { AppStateEvent, ChatUpdate, ContactUpdate } from './features/appstate-sync.js'
 import * as contacts from './features/contacts.js'
 import * as extras from './features/extras.js'
+import * as interactiveMsg from './features/interactive.js'
 import { parsePresence, parseReceipt } from './features/events.js'
 import type { PresenceEvent, ReceiptEvent } from './features/events.js'
 import * as business from './features/business.js'
@@ -375,6 +376,13 @@ export class Client {
 		)
 	getCollections = (jid?: string, limit = 51) =>
 		business.getCollections(this.#q, jid ?? this.#creds.me?.id.replace(/:\d+@/, '@') ?? '', limit)
+
+	/** Buttons / list message (native flow). Build buttons with `quickReply`, `urlButton`, `singleSelect`, ... from the package. */
+	async sendInteractive(to: string, o: interactiveMsg.InteractiveOptions): Promise<string> {
+		const { sender } = await this.#live()
+		const m = interactiveMsg.interactive(o)
+		return sender.sendMessage(to, m.message, m.opts)
+	}
 
 	/** Send a poll (2-12 options). Votes arrive encrypted as `pollUpdateMessage`. */
 	async sendPoll(to: string, name: string, values: string[], selectableCount = 1): Promise<string> {
