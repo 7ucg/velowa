@@ -1,0 +1,14 @@
+/target
+/node_modules
+/dist
+/src/wasm
+*.log
+.DS_Store
+/prompt.md
+/TODO.md
+/graphify-out
+/logs
+/auth
+/src/wasm-voip
+/tools
+/scripts
