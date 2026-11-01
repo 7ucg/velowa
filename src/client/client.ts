@@ -641,7 +641,14 @@ export class Client {
 	 */
 	async startCall(
 		to: string,
-		o: { video?: boolean; audioIn?: Int16Array; recordTo?: string } = {},
+		o: {
+			video?: boolean
+			audioIn?: Int16Array
+			recordTo?: string
+			/** Video calls: H.264 access units to send, looped (see `splitAnnexB`). */
+			videoFrames?: Uint8Array[]
+			recordVideoTo?: string
+		} = {},
 	): Promise<callSig.CallState> {
 		const { sender, receiver } = await this.#live()
 		const own = this.#creds.me?.lid
@@ -699,8 +706,11 @@ export class Client {
 					callKey,
 					relay,
 					codec: 'opus',
+					enableVideo: !!o.video,
 					...(o.audioIn && { audioIn: o.audioIn }),
 					...(o.recordTo && { recordTo: o.recordTo }),
+					...(o.videoFrames && { video: { frames: o.videoFrames } }),
+					...(o.recordVideoTo && { recordVideoTo: o.recordVideoTo }),
 				})
 				state.media = media
 				media.on('closed', () => void 0)
@@ -784,7 +794,12 @@ export class Client {
 	 */
 	async acceptCall(
 		callId: string,
-		o: { audioIn?: Int16Array; recordTo?: string } = {},
+		o: {
+			audioIn?: Int16Array
+			recordTo?: string
+			videoFrames?: Uint8Array[]
+			recordVideoTo?: string
+		} = {},
 	): Promise<callSig.CallState> {
 		const c = this.#calls.get(callId)
 		if (!c || c.direction !== 'incoming' || !c.offer) throw new Error(`no incoming call ${callId}`)
@@ -824,8 +839,11 @@ export class Client {
 			callKey,
 			relay,
 			codec: 'opus',
+			enableVideo: c.video,
 			...(o.audioIn && { audioIn: o.audioIn }),
 			...(o.recordTo && { recordTo: o.recordTo }),
+			...(o.videoFrames && { video: { frames: o.videoFrames } }),
+			...(o.recordVideoTo && { recordVideoTo: o.recordVideoTo }),
 		})
 		c.media = media
 		media.start()

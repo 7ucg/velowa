@@ -46,6 +46,21 @@ export function writeWav(path: string, pcm: Int16Array, rate = 16000): void {
 	writeFileSync(path, Buffer.concat([h, data]))
 }
 
+/**
+ * Split an H.264 Annex-B stream into access units. Needs access-unit delimiters (NAL type 9), which encoders write
+ * with e.g. `x264 aud=1`; every delimiter starts a new unit.
+ */
+export function splitAnnexB(data: Uint8Array): Uint8Array[] {
+	const starts: number[] = []
+	for (let i = 0; i + 3 < data.length; i++) {
+		if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 1 && (data[i + 3]! & 0x1f) === 9)
+			// include a leading zero byte of a 4-byte start code
+			starts.push(i > 0 && data[i - 1] === 0 ? i - 1 : i)
+	}
+	if (!starts.length) throw new Error('no access-unit delimiters; encode with x264 aud=1')
+	return starts.map((s, k) => data.subarray(s, starts[k + 1] ?? data.length))
+}
+
 /** One mic frame is 60 ms of 16 kHz mono PCM. */
 export const FRAME_SAMPLES = 960
 const FRAME_MS = 60
@@ -73,11 +88,18 @@ export interface MediaSessionOptions {
 	codec?: 'opus' | 'mlow'
 	/** Save what the peer says (16 kHz mono WAV) when the session ends. */
 	recordTo?: string
+	/** Video calls: H.264 access units to send (looped) and where to save the peer's stream (Annex-B). */
+	video?: { frames: Uint8Array[]; fps?: number }
+	recordVideoTo?: string
+	/** Build the video plane: the call is a video call. */
+	enableVideo?: boolean
 }
 
 type MediaEvents = {
 	/** The relay accepted us; the media path is up. */
 	connected: undefined
+	/** One access unit (Annex-B) of the peer's video. */
+	video: Uint8Array
 	/** A 60 ms chunk of the peer's audio (16 kHz mono PCM). */
 	audio: Int16Array
 	/** Engine events by name (`RelayAllocated`, `MediaConnected`, ...). */
@@ -125,7 +147,7 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 				integrity_key: this.#relay.integrity_key,
 				warp_mi_tag_len: this.#relay.warp_mi_tag_len,
 				enable_media: true,
-				enable_video: false,
+				enable_video: !!o.enableVideo,
 				enable_sframe: true,
 				audio: o.codec === 'mlow' ? 'mlow' : 'opus',
 			}),
@@ -133,6 +155,9 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		this.#audioIn = o.audioIn
 		if (o.codec !== 'mlow') this.#opus = newOpus()
 		this.#recordTo = o.recordTo
+		this.#videoOut = o.video?.frames
+		this.#videoFps = o.video?.fps ?? 15
+		this.#recordVideoTo = o.recordVideoTo
 		// Media rides a DataChannel over SCTP over DTLS over this UDP flow (as in WhatsApp Web's peer connection).
 		this.#channel = new RelayChannel(this.#relay.relay_ip, this.#relay.relay_port)
 		this.#socket = createSocket('udp4')
@@ -157,6 +182,12 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 
 	#started = false
 	#opus: OpusCodec | undefined
+	#videoOut: Uint8Array[] | undefined
+	#videoFps = 15
+	#videoPos = 0
+	#videoTimer: NodeJS.Timeout | undefined
+	#recordVideoTo: string | undefined
+	#videoIn: Uint8Array[] = []
 	#recordTo: string | undefined
 	#recorded: Int16Array[] = []
 
@@ -207,6 +238,12 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 							const err = this.#channel.write(this.#now(), pkt)
 							if (err) return this.close(`relay: ${err}`)
 						}
+					} else if (kind === 4) {
+						const au = this.#engine.takeVideo()
+						if (au) {
+							if (this.#recordVideoTo) this.#videoIn.push(au)
+							this.emit('video', au)
+						}
 					} else if (kind === 6 && this.#opus) {
 						const pkt = this.#engine.takeEncodedAudio()
 						if (pkt) {
@@ -227,6 +264,7 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 						if (name === 'MediaConnected' || name === 'RelayAllocated') {
 							this.emit('connected', undefined)
 							this.#startMic()
+							this.#startVideo()
 						}
 						if (
 							name === 'RelayAllocateFailed' ||
@@ -284,6 +322,20 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		}, FRAME_MS)
 	}
 
+	#startVideo(): void {
+		if (this.#videoTimer || !this.#videoOut?.length) return
+		this.#videoTimer = setInterval(
+			() => {
+				if (this.#closed || !this.#videoOut) return
+				const au = this.#videoOut[this.#videoPos % this.#videoOut.length]!
+				this.#videoPos++
+				this.#engine.handleVideoFrame(this.#now(), au)
+				this.#pump()
+			},
+			Math.round(1000 / this.#videoFps),
+		)
+	}
+
 	/** Say something (16 kHz mono PCM); queued after whatever is still playing. */
 	speak(pcm: Int16Array): void {
 		const rest = this.#audioIn ? this.#audioIn.subarray(this.#audioPos) : new Int16Array(0)
@@ -306,6 +358,9 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 			}
 			writeWav(this.#recordTo, all)
 		}
+		if (this.#videoTimer) clearInterval(this.#videoTimer)
+		if (this.#recordVideoTo && this.#videoIn.length)
+			writeFileSync(this.#recordVideoTo, Buffer.concat(this.#videoIn))
 		this.#opus?.delete()
 		if (this.#timer) clearTimeout(this.#timer)
 		if (this.#mic) clearInterval(this.#mic)
