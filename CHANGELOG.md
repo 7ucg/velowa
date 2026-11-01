@@ -9,3 +9,4 @@
 - Phase 5: `Client` (QR pairing verified live, login, auto-reconnect), protocol logger, receiver (pre-keys, acks, receipts, 1:1/group decryption, retries, Meta AI `msmsg`), sender (1:1, groups, channels; send verified live to own number).
 - Phase 6: media, replies/mentions/reactions/edit/delete, polls, groups, communities, newsletters, contacts/privacy, app-state sync and chat actions, history sync, calls (events + reject).
 - Pairing-code linking, status posting, interactive messages, business profile/catalog, usernames, forwarding, retry resends, poll votes, `client.mex()`.
+- LID addressing for Signal sessions (fixes the phone not decrypting our own-device copies), serialized cipher calls, app-state key request to the phone, `examples/example.js` live check (31/31).

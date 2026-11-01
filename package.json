@@ -23,7 +23,8 @@
 		"format": "prettier --write src",
 		"test": "vitest run",
 		"prepack": "npm run build",
-		"pair": "tsc -p tsconfig.json && node dist/cli/pair.js"
+		"pair": "tsc -p tsconfig.json && node dist/cli/pair.js",
+		"example": "npm run build && node examples/example.js"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",

@@ -30,9 +30,10 @@ fresh design rather than a port of `baron-baileys-v2`.
 
 ## Status
 
-Working and verified against a real account: Noise handshake, QR pairing, login/re-login, pre-key upload, receiving and
-decrypting 1:1/group/channel messages and Meta AI replies, sending text to the own number (round trip with a reply),
-live protocol logging.
+Working and verified against a real account (see `npm run example`): Noise handshake, QR pairing, login/re-login, pre-key
+upload, receiving and decrypting 1:1/group/channel messages and Meta AI replies, sending text, replies, reactions, edit,
+delete, polls, location, contacts, buttons, images and documents to the own chat, contacts/privacy/groups queries, app-state
+sync (328 changes) and app-state writes (pin/archive), encrypted media download, live protocol logging.
 
 Implemented and covered by unit/loopback tests only (not yet exercised against the live server): sending to other
 contacts and groups, media upload/download, reactions/edit/delete, polls, group management, communities, newsletters,
@@ -64,6 +65,8 @@ await client.ready()
 await client.sendText('4915...@s.whatsapp.net', 'hi')
 await client.groups.fetchAll()
 ```
+
+A scripted end-to-end check against your own account, no CLI involved (`npm run example`, source in `examples/example.js`): sends text, replies, reactions, edit/delete, poll, location, contact, buttons, image and document to your own chat, reads contacts/privacy/groups, syncs app state and toggles pin/archive on your own chat and reverts it. Last live result: 31 of 31 steps.
 
 A dev console that exercises everything (`help` lists the commands) and logs every frame, stanza and HTTP call:
 `npm run pair` (logs go to `logs/`, credentials to `auth/`; both are git-ignored and contain account secrets).

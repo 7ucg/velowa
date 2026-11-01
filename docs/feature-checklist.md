@@ -32,8 +32,8 @@ Legend: **done** = implemented with tests; **live** = also exercised against a r
 | --- | --- |
 | Connection, Noise, keepalive, QR + pairing-code login | done; QR/login **live**, pairing code verified against a simulated phone only |
 | Receive pipeline (1:1, groups, channels, Meta AI, retries, receipts, acks, history, polls) | done; decryption/acks/retries/Meta AI **live** |
-| Send pipeline (1:1, groups, status, channels, media, polls, interactive, forward, edit/revoke/react) | done; text to own number **live**, rest loopback-tested |
-| Chats / app-state sync (read + write), labels, presence | done (loopback + real captures of key share) |
+| Send pipeline (1:1, groups, status, channels, media, polls, interactive, forward, edit/revoke/react) | done; to the own chat **live**: text, reply, react, edit, delete, poll, location, contact, buttons, image, document; groups/status/channels/other contacts loopback-tested only |
+| Chats / app-state sync (read + write), labels, presence | done; sync (key request to the phone, 328 mutations) and pin/archive writes **live** |
 | Groups, AI-group bot, communities | done (request-level tests) |
 | Newsletters | done (w:mex; ids may be stale) |
 | Business profile, catalog, collections | done (read + profile update) |
