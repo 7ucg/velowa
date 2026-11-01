@@ -22,6 +22,9 @@ import { AppStateSync, interpret } from './features/appstate-sync.js'
 import * as act from './features/chat-actions.js'
 import type { RangeMessage } from './features/chat-actions.js'
 import type { AppStateEvent, ChatUpdate, ContactUpdate } from './features/appstate-sync.js'
+import * as contacts from './features/contacts.js'
+import { parsePresence, parseReceipt } from './features/events.js'
+import type { PresenceEvent, ReceiptEvent } from './features/events.js'
 import { Groups, parseGroupNotification } from './features/groups.js'
 import type { GroupNotification } from './features/groups.js'
 import * as media from './features/media.js'
@@ -58,6 +61,10 @@ export type ClientEvents = {
 	'chat.update': ChatUpdate
 	/** A contact's saved name changed. */
 	'contact.update': ContactUpdate
+	/** Delivery / read / played receipts for messages we sent. */
+	receipt: ReceiptEvent
+	/** Online/offline and typing indicators (after `subscribePresence`, or in open chats). */
+	presence: PresenceEvent
 	/** A group changed (members, subject, settings). */
 	'group.update': GroupNotification
 	/** Any server notification, parsed or not (account_sync, devices, picture, ...). */
@@ -272,6 +279,32 @@ export class Client {
 	/** Default disappearing-messages timer for a 1:1 chat, in seconds (0 = off). */
 	setChatEphemeral = (jid: string, seconds: number) => this.#push(act.chatEphemeral(jid, seconds))
 
+	#q = async (node: BinaryNode) => (await this.#live()).receiver.request(node)
+	#sid = async () => (await this.#live()).receiver.nextId()
+
+	/** Which phone numbers are registered on WhatsApp? */
+	async onWhatsApp(...numbers: string[]) {
+		return contacts.onWhatsApp(this.#q, await this.#sid(), numbers)
+	}
+	/** Profile "About" text of users. */
+	async fetchStatus(...jids: string[]) {
+		return contacts.fetchStatus(this.#q, await this.#sid(), jids)
+	}
+	/** LIDs for phone-number JIDs. */
+	async lidsFor(...jids: string[]) {
+		return contacts.lidsFor(this.#q, await this.#sid(), jids)
+	}
+	profilePictureUrl = (jid: string, type: 'preview' | 'image' = 'preview') =>
+		contacts.profilePictureUrl(this.#q, jid, type)
+	/** Set our own "About" text. */
+	updateProfileStatus = (text: string) => contacts.updateStatus(this.#q, text)
+	fetchBlocklist = () => contacts.fetchBlocklist(this.#q)
+	blockUser = (jid: string) => contacts.updateBlockStatus(this.#q, jid, 'block')
+	unblockUser = (jid: string) => contacts.updateBlockStatus(this.#q, jid, 'unblock')
+	fetchPrivacySettings = () => contacts.fetchPrivacySettings(this.#q)
+	updatePrivacy = (name: contacts.PrivacyCategory, value: contacts.PrivacyValue) =>
+		contacts.updatePrivacy(this.#q, name, value)
+
 	/** Remember the account's display name (used for presence). */
 	setName(name: string): void {
 		if (!this.#creds.me) throw new Error('not paired')
@@ -353,6 +386,11 @@ export class Client {
 		const child = (tag: string) =>
 			Array.isArray(node.content) ? node.content.find((c) => c.tag === tag) : undefined
 
+		if (node.tag === 'presence' || node.tag === 'chatstate') {
+			const p = parsePresence(node)
+			if (p) this.#events.emit('presence', p)
+			return
+		}
 		const dirty = node.tag === 'ib' ? child('dirty') : undefined
 		if (dirty) {
 			if (dirty.attrs['type'] === 'account_sync') void this.#appState?.sync()
@@ -463,6 +501,7 @@ export class Client {
 			logger: this.logger,
 			send: (n) => conn.send(n),
 			onMessage: (m) => this.#events.emit('message', m),
+			onReceipt: (node) => this.#events.emit('receipt', parseReceipt(node)),
 			onAppStateKeys: (keys) => {
 				this.#appState?.addKeys(keys)
 				void this.#appState?.sync()

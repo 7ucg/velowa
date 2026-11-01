@@ -24,6 +24,8 @@ export interface ReceiverDeps {
 	onMessage?(m: DecodedMessage): void
 	/** Called with every notification (after it was acked). */
 	onNotification?(n: BinaryNode): void
+	/** Called with every receipt (after it was acked). */
+	onReceipt?(n: BinaryNode): void
 	/** Sync keys shared by the primary phone (`appStateSyncKeyShare`). */
 	onAppStateKeys?(keys: { keyId: Uint8Array; keyData: Uint8Array }[]): void
 }
@@ -236,6 +238,7 @@ export class Receiver {
 		}
 		if (node.tag === 'receipt') {
 			this.#sendSafe(buildAck(node, meId))
+			this.d.onReceipt?.(node)
 			return
 		}
 		await this.#processMessage(node)
