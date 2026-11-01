@@ -125,6 +125,79 @@ describe('Sender: groups', () => {
 	})
 })
 
+describe('Sender: retry receipts', () => {
+	it('re-encrypts a sent message for exactly the device that asked, using its fresh key bundle', async () => {
+		const { sender, stanzas, bob1 } = await world()
+		const id = await sender.sendText('4915611111111@s.whatsapp.net', 'please resend')
+		// bob1 lost its session: it answers with a retry receipt carrying a new bundle
+		const bundle = bob1.userNode.content as BinaryNode[]
+		const retry: BinaryNode = {
+			tag: 'receipt',
+			attrs: { from: bob1.jid, id, type: 'retry' },
+			content: [
+				{ tag: 'retry', attrs: { count: '2', id, v: '1', error: '1' } },
+				bundle.find((c) => c.tag === 'registration')!,
+				{
+					tag: 'keys',
+					attrs: {},
+					content: [
+						{ tag: 'type', attrs: {}, content: Buffer.from([5]) },
+						...bundle.filter((c) => c.tag !== 'registration'),
+						{ tag: 'device-identity', attrs: {}, content: new Uint8Array([1]) },
+					],
+				},
+			],
+		}
+		expect(await sender.handleRetryReceipt(retry)).toBe(true)
+		const st = stanzas.at(-1)!
+		expect(st.attrs).toMatchObject({ id, to: bob1.jid, device_fanout: 'false', type: 'text' })
+		const enc = kids(st, 'enc')[0]!
+		expect(enc.attrs).toMatchObject({ v: '2', type: 'pkmsg', count: '2' })
+		expect(kids(st, 'device-identity')).toHaveLength(1)
+		const out = decodeMsg(
+			(await bob1.cipher.decrypt('4915600000000', 23, 'pkmsg', enc.content as Uint8Array))
+				.plaintext,
+		)
+		expect(out['extendedTextMessage'].text).toBe('please resend')
+	})
+
+	it('ignores retries for messages it never sent and absurd counts', async () => {
+		const { sender, bob0 } = await world()
+		expect(
+			await sender.handleRetryReceipt({
+				tag: 'receipt',
+				attrs: { from: bob0.jid, id: 'nope', type: 'retry' },
+				content: [{ tag: 'retry', attrs: { count: '1' } }],
+			}),
+		).toBe(false)
+		const id = await sender.sendText('4915611111111@s.whatsapp.net', 'x')
+		expect(
+			await sender.handleRetryReceipt({
+				tag: 'receipt',
+				attrs: { from: bob0.jid, id, type: 'retry' },
+				content: [{ tag: 'retry', attrs: { count: '99' } }],
+			}),
+		).toBe(false)
+	})
+
+	it('addresses a group member by participant', async () => {
+		const { sender, stanzas, bob0 } = await world()
+		const group = '120363000000000001@g.us'
+		const id = await sender.sendText(group, 'hi group')
+		const bundle = bob0.userNode.content as BinaryNode[]
+		await sender.handleRetryReceipt({
+			tag: 'receipt',
+			attrs: { from: group, participant: bob0.jid, id, type: 'retry' },
+			content: [
+				{ tag: 'retry', attrs: { count: '2' } },
+				bundle.find((c) => c.tag === 'registration')!,
+				{ tag: 'keys', attrs: {}, content: bundle.filter((c) => c.tag !== 'registration') },
+			],
+		})
+		expect(stanzas.at(-1)!.attrs).toMatchObject({ id, to: group, participant: bob0.jid })
+	})
+})
+
 describe('Sender: channels', () => {
 	it('posts plain protobuf in a <plaintext> node and waits for the ack', async () => {
 		const { sender, stanzas } = await world()

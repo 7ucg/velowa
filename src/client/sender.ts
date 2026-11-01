@@ -11,6 +11,8 @@ import type { Receiver } from './receiver.js'
 import { reportingNode } from './reporting.js'
 
 const S_WHATSAPP_NET = 's.whatsapp.net'
+const SENT_CACHE_SIZE = 500
+const MAX_RESEND_COUNT = 5
 
 const children = (n: BinaryNode, tag?: string): BinaryNode[] =>
 	Array.isArray(n.content) ? n.content.filter((c) => tag === undefined || c.tag === tag) : []
@@ -69,6 +71,8 @@ export interface SenderDeps {
  * encryption for 1:1 chats, sender-key fan-out for groups. Resolves once the server acked.
  */
 export class Sender {
+	/** Recently sent messages, kept so a device that could not decrypt one can be answered (retry receipts). */
+	readonly #sent = new Map<string, { to: string; message: Record<string, unknown> }>()
 	readonly #memory: Record<string, string[]>
 
 	constructor(private readonly d: SenderDeps) {
@@ -110,6 +114,7 @@ export class Sender {
 			this.d.logger.event('send.acked', { id, to })
 			return id
 		}
+		this.#remember(id, to, withSecret)
 		const stanza = to.endsWith('@g.us')
 			? await this.#groupStanza(id, to, withSecret, opts)
 			: await this.#directStanza(id, to, withSecret, opts)
@@ -117,6 +122,90 @@ export class Sender {
 		await this.d.receiver.sendAndWaitAck(stanza)
 		this.d.logger.event('send.acked', { id, to })
 		return id
+	}
+
+	#remember(id: string, to: string, message: Record<string, unknown>): void {
+		this.#sent.set(id, { to, message })
+		if (this.#sent.size > SENT_CACHE_SIZE) this.#sent.delete(this.#sent.keys().next().value!)
+	}
+
+	/**
+	 * A device told us (`<receipt type="retry">`) that it could not decrypt one of our messages: re-encrypt
+	 * it for exactly that device, with a fresh session when the receipt carries a key bundle.
+	 */
+	async handleRetryReceipt(receipt: BinaryNode): Promise<boolean> {
+		const { creds, logger } = this.d
+		const id = receipt.attrs['id'] ?? ''
+		const cached = this.#sent.get(id)
+		const target = receipt.attrs['participant'] ?? receipt.attrs['from'] ?? ''
+		if (!cached || !target) {
+			logger.event('retry.unknown-message', { id, target })
+			return false
+		}
+		const retry = children(receipt, 'retry')[0]
+		const count = Number(retry?.attrs['count'] ?? 1)
+		if (!(count >= 1 && count <= MAX_RESEND_COUNT)) return false
+
+		const keys = children(receipt, 'keys')[0]
+		if (keys) {
+			const registration = children(receipt, 'registration')[0]?.content
+			const node: BinaryNode = {
+				tag: 'user',
+				attrs: { jid: target },
+				content: [
+					...(registration ? [{ tag: 'registration', attrs: {}, content: registration }] : []),
+					...(Array.isArray(keys.content)
+						? keys.content.filter((c) => c.tag !== 'device-identity')
+						: []),
+				],
+			}
+			const a = signalAddress(target)
+			await this.d.cipher.processPreKeyBundle(a.name, a.device, parseBundle(node))
+			logger.event('retry.session-from-keys', { id, target })
+		} else {
+			await this.assertSessions([target])
+		}
+
+		const { user: meUser } = jidDecode(creds.me!.id)
+		const targetIsMe =
+			jidDecode(target).user === meUser ||
+			(!!creds.me?.lid && jidDecode(target).user === jidDecode(creds.me.lid).user)
+		const body = targetIsMe
+			? {
+					deviceSentMessage: { destinationJid: cached.to, message: cached.message },
+					...(cached.message['messageContextInfo']
+						? { messageContextInfo: cached.message['messageContextInfo'] }
+						: {}),
+				}
+			: cached.message
+		const a = signalAddress(target)
+		const enc = await this.d.cipher.encrypt(
+			a.name,
+			a.device,
+			padRandomMax16(encodeProto('Message', body)),
+		)
+		const isGroup = cached.to.endsWith('@g.us')
+		const attrs: Record<string, string> = { id, type: messageType(cached.message) }
+		if (isGroup) {
+			attrs['to'] = cached.to
+			attrs['participant'] = target
+		} else {
+			attrs['to'] = target
+			attrs['device_fanout'] = 'false'
+			if (targetIsMe) attrs['recipient'] = cached.to
+		}
+		const content: BinaryNode[] = [
+			{
+				tag: 'enc',
+				attrs: { v: '2', type: enc.type, count: String(count) },
+				content: enc.ciphertext,
+			},
+		]
+		if (creds.account) content.push({ tag: 'device-identity', attrs: {}, content: creds.account })
+		if (cached.to.endsWith('@s.whatsapp.net')) content.push({ tag: 'bot', attrs: { biz_bot: '1' } })
+		await this.d.receiver.sendAndWaitAck({ tag: 'message', attrs, content })
+		logger.event('retry.resent', { id, target, count })
+		return true
 	}
 
 	// ---- devices -------------------------------------------------------------------------------
