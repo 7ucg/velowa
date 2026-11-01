@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Security: media `{ url }` in `client.send` is http(s) only and can no longer read a local file; local files need the explicit `{ path }`.
 - Bots: `client.send(jid, content)` (one call for text, media, polls, buttons, lists, location, contacts, reactions, edits, forwards), a `connection` event (state, QR, pairing code, close reason), `serialize()` for a received message, `GroupCache`/`isGroupAdmin`, JID and content helpers, runnable bot examples (cases and plugins) in `examples/bots/`. README rewritten with an index, a feature guide and checked examples (`npm run check:docs`).
 - Log storage: runs are grouped by day with a `session.json` each and `logs/latest` links, big files rotate, runs older than a day are gzipped, old runs are pruned by age and total size (`ProtocolLoggerOptions.retention`), `npm run logs` lists/migrates/compresses/prunes/pins them, and the logger keeps its files open instead of reopening them per entry.
 - Release build: `tsup` produces ESM (`dist/index.js`) and CommonJS (`dist/index.cjs`) with matching type files and no source maps; `exports` map with `import`/`require`; `npm run check:package` (publint + attw) is clean.

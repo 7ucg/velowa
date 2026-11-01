@@ -110,18 +110,25 @@ describe('client.send content', () => {
 })
 
 describe('media sources', () => {
-	it('reads bytes, a file path, a file URL and a stream', async () => {
+	it('reads bytes, a local file by path and a stream', async () => {
 		const dir = mkdtempSync(join(tmpdir(), 'velowa-src-'))
 		const file = join(dir, 'a.bin')
 		writeFileSync(file, Buffer.from('file'))
 		expect(Buffer.from(await toBytes(new Uint8Array([104, 105]))).toString()).toBe('hi')
-		expect(Buffer.from(await toBytes({ url: file })).toString()).toBe('file')
-		expect(Buffer.from(await toBytes({ url: `file://${file}` })).toString()).toBe('file')
+		expect(Buffer.from(await toBytes({ path: file })).toString()).toBe('file')
 		expect(
 			Buffer.from(
 				await toBytes({ stream: Readable.from([Buffer.from('ab'), Buffer.from('cd')]) }),
 			).toString(),
 		).toBe('abcd')
+	})
+
+	it('never turns a url into a local file read', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'velowa-src-'))
+		const file = join(dir, 'secret.txt')
+		writeFileSync(file, 'secret')
+		for (const url of [file, `file://${file}`, '/etc/passwd', '../secret', 'ftp://example.com/x'])
+			await expect(toBytes({ url })).rejects.toThrow(/http\(s\)/)
 	})
 
 	it('does not fetch from a private address', async () => {

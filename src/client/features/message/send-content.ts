@@ -10,8 +10,12 @@ import type { MessageKey, Quoted } from './messages.js'
 //   await client.send(jid, { image: fs.readFileSync('a.jpg'), caption: 'look' }, { quoted: m })
 //   await client.send(jid, { poll: { name: 'Pizza?', values: ['yes', 'no'] } })
 
-/** Media as bytes, a file path or http(s) URL, or a stream. */
-export type MediaSource = Uint8Array | { url: string } | { stream: Readable }
+/**
+ * Media as bytes, an `http(s)` URL, a local file, or a stream. `{ url }` can only ever be fetched from the network;
+ * a local file needs the explicit `{ path }`, so a link that came from outside can never read a file off this machine.
+ * Only pass `{ path }` for paths you chose yourself.
+ */
+export type MediaSource = Uint8Array | { url: string } | { path: string } | { stream: Readable }
 
 interface Common {
 	/** JIDs to @mention (the text needs `@<number>` for each). */
@@ -59,18 +63,17 @@ export interface SendContentOptions {
 
 const MAX_DOWNLOAD = 128 * 1024 * 1024
 
-/** The bytes behind a media source. URLs go through the guarded fetch (no private addresses, size cap). */
+/** The bytes behind a media source. URLs go through the guarded fetch (http(s) only, no private addresses, size cap). */
 export async function toBytes(src: MediaSource): Promise<Uint8Array> {
 	if (src instanceof Uint8Array) return src
 	if ('url' in src) {
-		const url = src.url
-		if (/^https?:\/\//i.test(url)) {
-			const res = await guardedFetch(60_000, MAX_DOWNLOAD)(url)
-			if (!res.ok) throw new Error(`could not fetch ${url}: ${res.status}`)
-			return new Uint8Array(await res.arrayBuffer())
-		}
-		return readFile(url.startsWith('file://') ? new URL(url) : url)
+		if (!/^https?:\/\//i.test(src.url))
+			throw new Error('url must be http(s); use { path } for a local file')
+		const res = await guardedFetch(60_000, MAX_DOWNLOAD)(src.url)
+		if (!res.ok) throw new Error(`could not fetch ${src.url}: ${res.status}`)
+		return new Uint8Array(await res.arrayBuffer())
 	}
+	if ('path' in src) return readFile(src.path)
 	if ('stream' in src) {
 		const chunks: Buffer[] = []
 		let size = 0

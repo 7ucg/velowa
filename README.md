@@ -186,7 +186,7 @@ One call, the content object says what to send. It returns the message id.
 await client.send(jid, { text: 'hello' })
 await client.send(jid, { image: fs.readFileSync('cat.jpg'), caption: 'look' })
 await client.send(jid, { video: { url: 'https://example.com/clip.mp4' } }) // URLs are fetched safely
-await client.send(jid, { audio: { url: './voice.ogg' }, voiceNote: true }) // file paths work too
+await client.send(jid, { audio: { path: './voice.ogg' }, voiceNote: true }) // a local file needs { path }
 await client.send(jid, { poll: { name: 'Pizza?', values: ['yes', 'no'] } })
 await client.send(jid, { text: 'thanks', mentions: ['4915...@s.whatsapp.net'] }, { quoted: m.asQuoted })
 ```
@@ -206,8 +206,9 @@ await client.send(jid, { text: 'thanks', mentions: ['4915...@s.whatsapp.net'] },
 | buttons | `text`, `buttons: [{ id, text }]` (up to 3), `footer?`, `title?` |
 | list | `text`, `title`, `buttonText`, `sections: [{ title, rows: [{ id, title, description? }] }]` |
 
-A media source is bytes (`Buffer`/`Uint8Array`), `{ url }` (an `http(s)` URL, a file path or `file://`) or
-`{ stream }`. URL downloads refuse private network addresses and cap the size.
+A media source is bytes (`Buffer`/`Uint8Array`), `{ url }` (an `http(s)` URL only), `{ path }` (a local file) or
+`{ stream }`. URL downloads refuse private network addresses and cap the size. `{ url }` never reads local files, so
+a link taken from a chat message is safe to pass; only give `{ path }` paths you chose yourself.
 
 Options (third argument): `quoted` (reply to a message), `expiration` (disappearing-message seconds).
 
