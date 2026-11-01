@@ -23,3 +23,23 @@ Not a plan - the shape of "done". Sizes are lines of the reference JS. Order of 
 | Antiban / fingerprint | antiban.js, Utils/browser-utils | Phase 8 |
 | WAM telemetry | WAM/ | Phase 8 |
 | VoIP rekey | Utils/voip-rekey.js | Phase 8 |
+
+## Status against baron-baileys-v2 (2026-11-01)
+
+Legend: **done** = implemented with tests; **live** = also exercised against a real account; **open** = not built.
+
+| Area | Status |
+| --- | --- |
+| Connection, Noise, keepalive, QR + pairing-code login | done; QR/login **live**, pairing code verified against a simulated phone only |
+| Receive pipeline (1:1, groups, channels, Meta AI, retries, receipts, acks, history, polls) | done; decryption/acks/retries/Meta AI **live** |
+| Send pipeline (1:1, groups, status, channels, media, polls, interactive, forward, edit/revoke/react) | done; text to own number **live**, rest loopback-tested |
+| Chats / app-state sync (read + write), labels, presence | done (loopback + real captures of key share) |
+| Groups, AI-group bot, communities | done (request-level tests) |
+| Newsletters | done (w:mex; ids may be stale) |
+| Business profile, catalog, collections | done (read + profile update) |
+| Privacy, contacts, blocklist, username | done |
+| Mex / GraphQL | generic `client.mex(queryId, variables, path)`; no typed wrappers for the ~hundreds of Baileys query ids |
+| Registration (primary device) | open (not needed for a companion client) |
+| Interop, managed accounts, payments/passkey, ads | open (use `client.mex` with the ids from Baileys) |
+| Link previews, thumbnails, waveforms, audio duration | open (no image/ffmpeg dependency bundled) |
+| Antiban / fingerprinting, WAM telemetry, VoIP rekey | open (Phase 8) |

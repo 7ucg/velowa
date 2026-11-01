@@ -36,8 +36,7 @@ live protocol logging.
 
 Implemented and covered by unit/loopback tests only (not yet exercised against the live server): sending to other
 contacts and groups, media upload/download, reactions/edit/delete, polls, group management, communities, newsletters,
-app-state sync and chat actions, history sync, privacy/contacts. Not implemented: business profiles, registration,
-username, interop, managed accounts, status/stories posting, pairing-code linking. See `TODO.md` for the exact status of each item.
+app-state sync and chat actions, history sync, privacy/contacts. Also built: pairing-code linking, status posting, interactive (button/list) messages, business profile/catalog, usernames, forwarding, a generic `client.mex()`. Not implemented: registration, interop, managed accounts, typed mex wrappers beyond the above, link previews/thumbnails, antiban, WAM telemetry, VoIP. See `TODO.md` for the exact status of each item.
 
 ## Quick start
 
