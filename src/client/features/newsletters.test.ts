@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { BinaryNode } from '../../codec/index.js'
 import { MexError, mexFor, mexQuery } from './mex.js'
-import { NEWSLETTER_QUERY, Newsletters, parseNewsletter } from './newsletters.js'
+import {
+	NEWSLETTER_QUERY,
+	Newsletters,
+	parseChannelStatus,
+	parseNewsletter,
+} from './newsletters.js'
 
 const mexReply = (obj: unknown): BinaryNode => ({
 	tag: 'iq',
@@ -160,5 +165,53 @@ describe('post labels', () => {
 				'xwa2_newsletter_label_paid_partnership',
 			],
 		])
+	})
+})
+
+describe('channel status', () => {
+	const decode = (b: Uint8Array) => ({ len: b.length })
+	it('parses a reaction and a media status', () => {
+		expect(
+			parseChannelStatus(
+				{
+					tag: 'status',
+					attrs: {
+						from: '1@newsletter',
+						type: 'reaction',
+						id: 'A',
+						t: '10',
+						is_sender: 'true',
+						server_id: '174',
+					},
+					content: [{ tag: 'reaction', attrs: { code: '💚' } }],
+				},
+				decode,
+			),
+		).toEqual({
+			channel: '1@newsletter',
+			id: 'A',
+			serverId: 174,
+			timestamp: 10,
+			fromMe: true,
+			type: 'reaction',
+			reaction: '💚',
+		})
+		const m = parseChannelStatus(
+			{
+				tag: 'status',
+				attrs: { from: '1@newsletter', type: 'media', id: 'B' },
+				content: [{ tag: 'plaintext', attrs: { mediatype: 'image' }, content: new Uint8Array(3) }],
+			},
+			decode,
+		)
+		expect(m).toMatchObject({
+			type: 'media',
+			mediaType: 'image',
+			message: { len: 3 },
+			fromMe: false,
+		})
+		expect(
+			parseChannelStatus({ tag: 'status', attrs: { from: 'x@g.us', id: 'C' } }, decode),
+		).toBeUndefined()
 	})
 })

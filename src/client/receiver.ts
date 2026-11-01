@@ -30,6 +30,8 @@ export interface ReceiverDeps {
 	onNotification?(n: BinaryNode): void
 	/** Called with every incoming call stanza (after it was acked). */
 	onCall?(n: BinaryNode): void
+	/** Called with every channel `<status>` stanza (after it was acked). */
+	onChannelStatus?(n: BinaryNode): void
 	/** Called with every receipt (after it was acked). */
 	onReceipt?(n: BinaryNode): void
 	/** The phone announced a history chunk (`historySyncNotification`). */
@@ -137,6 +139,16 @@ export class Receiver {
 				return true
 			}
 			return false
+		}
+		if (node.tag === 'status') {
+			// Channel status: acked with class=status and the stanza's own type.
+			const type = node.attrs['edit'] ? 'revoke' : (node.attrs['type'] ?? 'text')
+			this.#sendSafe({
+				tag: 'ack',
+				attrs: { id: node.attrs['id'] ?? '', to: node.attrs['from'] ?? '', class: 'status', type },
+			})
+			this.d.onChannelStatus?.(node)
+			return true
 		}
 		if (node.tag === 'call') {
 			this.#sendSafe(callAck(node))

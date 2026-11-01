@@ -41,12 +41,14 @@ import {
 import { loadHistory } from './features/history.js'
 import type { HistoryChunk } from './features/history.js'
 import { mexFor } from './features/mex.js'
-import { Newsletters } from './features/newsletters.js'
+import { Newsletters, parseChannelStatus } from './features/newsletters.js'
+import type { ChannelStatusEvent } from './features/newsletters.js'
 import { Usernames } from './features/username.js'
 import type { GroupNotification } from './features/groups.js'
 import * as media from './features/media.js'
 import type { MediaOptions, MediaType } from './features/media.js'
 import * as msg from './features/messages.js'
+import { protoType } from './proto.js'
 import type { ChatState, MessageKey, ReceiptType, TextOptions } from './features/messages.js'
 
 export interface ClientOptions {
@@ -88,6 +90,8 @@ export type ClientEvents = {
 	presence: PresenceEvent
 	/** An incoming (or ended) call. Decline with `rejectCall`. */
 	call: extras.CallEvent
+	/** A channel status (or a reaction / edit / revoke of one) pushed by the server. */
+	'channel.status': ChannelStatusEvent
 	/** A chunk of chat history announced by the phone after linking (chats, messages, push names). */
 	history: HistoryChunk
 	/** A group changed (members, subject, settings). */
@@ -872,6 +876,13 @@ export class Client {
 						this.#events.emit('history', chunk)
 					})
 					.catch((error) => this.logger.event('history.error', error))
+			},
+			onChannelStatus: (node) => {
+				const T = protoType('Message')
+				const e = parseChannelStatus(node, (b) =>
+					T.toObject(T.decode(b), { longs: String, enums: String }),
+				)
+				if (e) this.#events.emit('channel.status', e)
 			},
 			onCall: (node) => {
 				const c = extras.parseCall(node)

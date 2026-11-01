@@ -172,3 +172,69 @@ export class Newsletters {
 		})
 	}
 }
+
+// ---- channel status ---------------------------------------------------------------------------
+
+export interface ChannelStatusEvent {
+	channel: string
+	id: string
+	serverId?: number
+	timestamp?: number
+	/** True when this account (on another device) is the sender. */
+	fromMe: boolean
+	/** `text`, `media` or `reaction`; edits and revokes carry `edit` (`1`, `7`, `8`). */
+	type: string
+	edit?: string
+	/** Decoded WAProto message for `text` / `media`. */
+	message?: Record<string, unknown>
+	mediaType?: string
+	/** Emoji of a `reaction`. */
+	reaction?: string
+	meta?: Record<string, string>
+	viewsCount?: number
+	reactions?: { code: string; count: number }[]
+}
+
+const childOf = (n: BinaryNode, tag: string): BinaryNode | undefined =>
+	Array.isArray(n.content) ? n.content.find((c) => c.tag === tag) : undefined
+
+/** Parse a `<status>` stanza the server pushes for a channel ("channel status"). */
+export function parseChannelStatus(
+	node: BinaryNode,
+	decode: (bytes: Uint8Array) => Record<string, unknown>,
+): ChannelStatusEvent | undefined {
+	const a = node.attrs
+	if (!a['from']?.endsWith('@newsletter') || !a['id']) return undefined
+	const type = a['type'] ?? 'text'
+	const plain = childOf(node, 'plaintext')
+	const meta = childOf(node, 'meta')
+	const views = childOf(node, 'views_count')
+	const reactions = childOf(node, 'reactions')
+	let message: Record<string, unknown> | undefined
+	if (plain?.content instanceof Uint8Array && !a['edit']) {
+		try {
+			message = decode(plain.content)
+		} catch {
+			/* an undecodable payload is still reported without its message */
+		}
+	}
+	return {
+		channel: a['from'],
+		id: a['id'],
+		...(a['server_id'] && { serverId: Number(a['server_id']) }),
+		...(a['t'] && { timestamp: Number(a['t']) }),
+		fromMe: a['is_sender'] === 'true',
+		type,
+		...(a['edit'] && { edit: a['edit'] }),
+		...(message && { message }),
+		...(plain?.attrs['mediatype'] && { mediaType: plain.attrs['mediatype'] }),
+		...(type === 'reaction' && { reaction: childOf(node, 'reaction')?.attrs['code'] ?? '' }),
+		...(meta && { meta: meta.attrs }),
+		...(views?.attrs['count'] && { viewsCount: Number(views.attrs['count']) }),
+		...(Array.isArray(reactions?.content) && {
+			reactions: reactions.content
+				.filter((r) => r.tag === 'reaction')
+				.map((r) => ({ code: r.attrs['code'] ?? '', count: Number(r.attrs['count'] ?? 0) })),
+		}),
+	}
+}
