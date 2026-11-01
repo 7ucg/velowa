@@ -137,8 +137,9 @@ export class Receiver {
 			const p = this.#callAcks.get(node.attrs['id'] ?? '')
 			if (p) {
 				this.#callAcks.delete(node.attrs['id']!)
-				if (node.attrs['error'])
-					p.reject(new Error(`call rejected by server (error ${node.attrs['error']})`))
+				// 207 = served, with some entries failing (a group offer where one person cannot be reached).
+				const failed = node.attrs['error'] && node.attrs['error'] !== '207'
+				if (failed) p.reject(new Error(`call rejected by server (error ${node.attrs['error']})`))
 				else p.resolve(node)
 				return true
 			}
