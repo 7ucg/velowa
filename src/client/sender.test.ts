@@ -190,7 +190,10 @@ describe('Sender: 1:1', () => {
 				'4915611111111@s.whatsapp.net',
 			].sort(),
 		)
-		expect(st.attrs['phash']).toBe(participantHash(parts.map((p) => p.attrs['jid']!)))
+		expect(st.attrs['phash']).toBeUndefined() // Baileys does not put phash on the stanza
+		expect(kids(st, 'reporting')).toHaveLength(1)
+		expect(kids(kids(st, 'reporting')[0]!, 'reporting_token')[0]!.attrs['v']).toBe('2')
+		expect(kids(st, 'bot')[0]!.attrs).toEqual({ biz_bot: '1' })
 		expect(kids(st, 'device-identity')).toHaveLength(1) // first contact => pkmsg => identity attached
 
 		for (const dev of [bob0, bob1]) {
@@ -200,7 +203,7 @@ describe('Sender: 1:1', () => {
 			)[0]!
 			expect(enc.attrs['type']).toBe('pkmsg')
 			const res = await dev.cipher.decrypt('4915600000000', 23, 'pkmsg', enc.content as Uint8Array)
-			expect(decodeMsg(res.plaintext)['conversation']).toBe('hello bob')
+			expect(decodeMsg(res.plaintext)['extendedTextMessage'].text).toBe('hello bob')
 		}
 		const phoneEnc = kids(
 			parts.find((p) => p.attrs['jid'] === phone.jid)!,
@@ -211,7 +214,8 @@ describe('Sender: 1:1', () => {
 				.plaintext,
 		)
 		expect(own['deviceSentMessage'].destinationJid).toBe('4915611111111@s.whatsapp.net')
-		expect(own['deviceSentMessage'].message.conversation).toBe('hello bob')
+		expect(own['deviceSentMessage'].message.extendedTextMessage.text).toBe('hello bob')
+		expect(own['messageContextInfo'].messageSecret).toHaveLength(32)
 	})
 
 	it('keeps sending pkmsg until the peer answers, and every message decrypts in order', async () => {
@@ -224,7 +228,7 @@ describe('Sender: 1:1', () => {
 			const enc = kids(to, 'enc')[0]!
 			expect(enc.attrs['type']).toBe('pkmsg') // no reply from bob yet => still the pre-key form
 			const res = await bob0.cipher.decrypt('4915600000000', 23, 'pkmsg', enc.content as Uint8Array)
-			texts.push(decodeMsg(res.plaintext)['conversation'])
+			texts.push(decodeMsg(res.plaintext)['extendedTextMessage'].text)
 		}
 		expect(texts).toEqual(['one', 'two'])
 	})
@@ -239,7 +243,7 @@ describe('Sender: 1:1', () => {
 			(await phone.cipher.decrypt('4915600000000', 23, 'pkmsg', enc.content as Uint8Array))
 				.plaintext,
 		)
-		expect(msg['deviceSentMessage'].message.conversation).toBe('note to self')
+		expect(msg['deviceSentMessage'].message.extendedTextMessage.text).toBe('note to self')
 	})
 
 	it('rejects when the server answers with an ack error', async () => {
@@ -285,7 +289,7 @@ describe('Sender: groups', () => {
 				'4915600000000.23',
 				sk.content as Uint8Array,
 			)
-			expect(decodeMsg(plain)['conversation']).toBe(text)
+			expect(decodeMsg(plain)['extendedTextMessage'].text).toBe(text)
 		}
 		void creds
 	})

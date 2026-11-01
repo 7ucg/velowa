@@ -8,6 +8,7 @@ import { jidDecode, signalAddress, signalAddressString } from '../jid.js'
 import type { ProtocolLogger } from '../logging/protocol-logger.js'
 import { encodeProto } from './proto.js'
 import type { Receiver } from './receiver.js'
+import { reportingNode } from './reporting.js'
 
 const S_WHATSAPP_NET = 's.whatsapp.net'
 
@@ -69,7 +70,8 @@ export class Sender {
 
 	/** Send plain text to a user or group JID. Returns the message id. */
 	async sendText(to: string, text: string): Promise<string> {
-		return this.sendMessage(to, { conversation: text })
+		// Like Baileys: plain text goes out as extendedTextMessage.
+		return this.sendMessage(to, { extendedTextMessage: { text } })
 	}
 
 	/** Send an arbitrary WAProto `Message` (plain object form). */
@@ -77,9 +79,11 @@ export class Sender {
 		const { creds } = this.d
 		if (!creds.me) throw new Error('not paired')
 		const id = generateMessageId(creds.me.id)
+		// WhatsApp Web gives every message (except reactions etc.) a random secret; reply keys and the reporting token derive from it.
+		const withSecret = withMessageSecret(message)
 		const stanza = to.endsWith('@g.us')
-			? await this.#groupStanza(id, to, message)
-			: await this.#directStanza(id, to, message)
+			? await this.#groupStanza(id, to, withSecret)
+			: await this.#directStanza(id, to, withSecret)
 		this.d.logger.event('send.message', { id, to })
 		await this.d.receiver.sendAndWaitAck(stanza)
 		this.d.logger.event('send.acked', { id, to })
@@ -198,7 +202,12 @@ export class Sender {
 		if (!others.length && !selfChat) throw new Error(`no devices found for ${to} (user ${toUser})`)
 		await this.assertSessions([...mine, ...others].map((d) => d.jid))
 
-		const dsm = { deviceSentMessage: { destinationJid: to, message } }
+		const dsm = {
+			deviceSentMessage: { destinationJid: to, message },
+			...(message['messageContextInfo']
+				? { messageContextInfo: message['messageContextInfo'] }
+				: {}),
+		}
 		const participants: BinaryNode[] = []
 		let needsIdentity = false
 		for (const [targets, msg] of [
@@ -220,16 +229,11 @@ export class Sender {
 		const content: BinaryNode[] = [{ tag: 'participants', attrs: {}, content: participants }]
 		if (needsIdentity && creds.account)
 			content.push({ tag: 'device-identity', attrs: {}, content: creds.account })
-		return {
-			tag: 'message',
-			attrs: {
-				id,
-				to,
-				type: messageType(message),
-				phash: participantHash([...mine, ...others].map((d) => d.jid)),
-			},
-			content,
-		}
+		const reporting = this.#reporting(id, to, message)
+		if (reporting) content.push(reporting)
+		// WA Web marks 1:1 sends to phone-number JIDs with <bot biz_bot="1"/>.
+		if (to.endsWith('@s.whatsapp.net')) content.push({ tag: 'bot', attrs: { biz_bot: '1' } })
+		return { tag: 'message', attrs: { id, to, type: messageType(message) }, content }
 	}
 
 	// ---- groups --------------------------------------------------------------------------------
@@ -310,6 +314,22 @@ export class Sender {
 		}
 	}
 
+	/** Reporting token over the unpadded message, keyed like Baileys does (destination as both ends). */
+	#reporting(
+		id: string,
+		destination: string,
+		message: Record<string, unknown>,
+	): BinaryNode | undefined {
+		const secret = (message['messageContextInfo'] as { messageSecret?: Uint8Array } | undefined)
+			?.messageSecret
+		if (!secret || message['reactionMessage']) return undefined
+		return reportingNode(encodeProto('Message', message), secret, {
+			id,
+			from: destination,
+			to: destination,
+		})
+	}
+
 	#saveMemory(): void {
 		const path = this.d.senderKeyMemoryPath
 		if (!path) return
@@ -317,6 +337,14 @@ export class Sender {
 		writeFileSync(`${path}.tmp`, JSON.stringify(this.#memory), { mode: 0o600 })
 		renameSync(`${path}.tmp`, path)
 	}
+}
+
+function withMessageSecret(message: Record<string, unknown>): Record<string, unknown> {
+	if (message['reactionMessage'] || message['encReactionMessage'] || message['pollUpdateMessage'])
+		return message
+	const info = (message['messageContextInfo'] ?? {}) as Record<string, unknown>
+	if (info['messageSecret']) return message
+	return { ...message, messageContextInfo: { ...info, messageSecret: randomBytes(32) } }
 }
 
 function messageType(message: Record<string, unknown>): string {
