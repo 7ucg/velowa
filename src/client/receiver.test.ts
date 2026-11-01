@@ -528,3 +528,79 @@ describe('Receiver: poll votes', () => {
 		})
 	})
 })
+
+describe('Receiver: poll data cannot be poisoned by peers', () => {
+	it('a peer reusing the id of our poll changes neither its secret nor its options', async () => {
+		const { receiver, messages, alice } = await setup()
+		const secret = Buffer.alloc(32, 8)
+		const pollId = '3EB0POLLX'
+		receiver.rememberOwn(pollId, 'alice:2@s.whatsapp.net', {
+			messageContextInfo: { messageSecret: secret },
+			pollCreationMessageV3: {
+				name: 'Echt?',
+				options: [{ optionName: 'Ja' }, { optionName: 'Nein' }],
+			},
+		})
+		// Mallory sends a message that reuses our poll's id, with a different secret and fake options
+		const fake = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					messageContextInfo: { messageSecret: Buffer.alloc(32, 1) },
+					pollCreationMessage: {
+						name: 'Fake',
+						options: [{ optionName: 'X' }, { optionName: 'Y' }],
+					},
+				}),
+			),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: pollId, type: 'text' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: fake.type }, content: fake.ciphertext }],
+		})
+		await receiver.idle()
+		expect(messages).toHaveLength(1)
+
+		const voter = 'alice:2@s.whatsapp.net'
+		const sign = Buffer.concat([
+			Buffer.from(pollId),
+			Buffer.from('4915600000000:23@s.whatsapp.net'),
+			Buffer.from(voter),
+			Buffer.from('Poll Vote'),
+			Buffer.from([1]),
+		])
+		const key = createHmac('sha256', createHmac('sha256', Buffer.alloc(32)).update(secret).digest())
+			.update(sign)
+			.digest()
+		const iv = Buffer.alloc(12, 6)
+		const c = createCipheriv('aes-256-gcm', key, iv)
+		c.setAAD(Buffer.from(`${pollId}\0${voter}`))
+		const h = createHash('sha256').update('Ja').digest()
+		const encPayload = Buffer.concat([
+			c.update(Buffer.concat([Buffer.from([0x0a, h.length]), h])),
+			c.final(),
+			c.getAuthTag(),
+		])
+		const enc = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					pollUpdateMessage: {
+						pollCreationMessageKey: { id: pollId, fromMe: false, remoteJid: 'attacker@lid' },
+						vote: { encPayload, encIv: iv },
+					},
+				}),
+			),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: voter, id: 'V9', type: 'poll' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
+		})
+		await receiver.idle()
+		expect(messages[1]!.message['pollVote']).toMatchObject({ pollId, options: ['Ja'] })
+	})
+})

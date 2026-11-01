@@ -1,5 +1,6 @@
 import { createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
 import type { BinaryNode } from '../../codec/index.js'
+import { protoType } from '../proto.js'
 import type { SendOptions } from '../sender.js'
 
 /** A poll. Voters' answers are end-to-end encrypted with the poll's `messageSecret` (added automatically on send). */
@@ -145,26 +146,7 @@ export function decryptPollVote(
 		d.update(vote.encPayload.subarray(0, vote.encPayload.length - 16)),
 		d.final(),
 	])
-	return decodePollVote(plain)
-}
-
-/** `PollVoteMessage { repeated bytes selectedOptions = 1 }` without needing the schema. */
-function decodePollVote(buf: Buffer): string[] {
-	const out: string[] = []
-	let i = 0
-	while (i < buf.length) {
-		const tag = buf[i++]!
-		if (tag !== 0x0a) throw new Error('unexpected field in poll vote')
-		let len = 0
-		let shift = 0
-		for (;;) {
-			const b = buf[i++]!
-			len |= (b & 0x7f) << shift
-			if ((b & 0x80) === 0) break
-			shift += 7
-		}
-		out.push(buf.subarray(i, i + len).toString('hex'))
-		i += len
-	}
-	return out
+	const T = protoType('Message.PollVoteMessage')
+	const decoded = T.toObject(T.decode(plain), { bytes: Buffer }) as { selectedOptions?: Buffer[] }
+	return (decoded.selectedOptions ?? []).map((b) => Buffer.from(b).toString('hex'))
 }

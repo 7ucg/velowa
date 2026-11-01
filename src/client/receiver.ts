@@ -102,7 +102,10 @@ export class Receiver {
 	readonly #acks = new Map<string, { resolve(n: BinaryNode): void; reject(e: Error): void }>()
 	readonly #retryCounts = new Map<string, number>()
 	readonly #secrets = new MessageSecrets()
-	readonly #polls = new Map<string, string[]>()
+	/** poll id -> options and who created it (from our own state or the creation message's author). */
+	readonly #polls = new Map<string, { options: string[]; creator: string }>()
+	/** ids of messages we sent: nothing a peer sends may overwrite their secret or poll data. */
+	readonly #ownIds = new Set<string>()
 	#queue: Promise<void> = Promise.resolve()
 	#idCounter = 0
 
@@ -148,21 +151,24 @@ export class Receiver {
 
 	/** Remember what we sent: its secret (replies, votes) and, for polls, the option texts. */
 	rememberOwn(id: string, chat: string, message: Loose): void {
+		this.#ownIds.add(id)
+		if (this.#ownIds.size > 2000) this.#ownIds.delete(this.#ownIds.values().next().value!)
 		const secret = message['messageContextInfo']?.messageSecret
 		if (secret) this.#secrets.set(id, secret, chat)
-		this.#notePoll(id, message)
+		this.#notePoll(id, message, this.d.creds.me?.id ?? '', true)
 	}
 
-	#notePoll(id: string, message: Loose): void {
+	#notePoll(id: string, message: Loose, creator: string, own = false): void {
+		if (!own && this.#ownIds.has(id)) return // a peer reusing the id of one of our messages must not rewrite it
 		const poll =
 			message['pollCreationMessage'] ??
 			message['pollCreationMessageV2'] ??
 			message['pollCreationMessageV3']
 		if (poll?.options) {
-			this.#polls.set(
-				id,
-				poll.options.map((o: { optionName: string }) => o.optionName),
-			)
+			this.#polls.set(id, {
+				options: poll.options.map((o: { optionName: string }) => o.optionName),
+				creator,
+			})
 			if (this.#polls.size > 500) this.#polls.delete(this.#polls.keys().next().value!)
 		}
 	}
@@ -374,26 +380,31 @@ export class Receiver {
 		const key = upd?.pollCreationMessageKey
 		const vote = upd?.vote
 		if (!key?.id || !vote?.encPayload || !vote?.encIv) return undefined
-		const secret = this.#secrets.candidates([key.id], chat)[0]
-		const known = this.#polls.get(key.id)
-		if (!secret) return { pollId: key.id, error: 'poll secret unknown' }
-		try {
-			const creator = key.fromMe
-				? (this.d.creds.me?.id ?? '')
-				: (key.participant ?? key.remoteJid ?? chat)
-			const hashes = decryptPollVote(
-				{ encPayload: new Uint8Array(vote.encPayload), encIv: new Uint8Array(vote.encIv) },
-				{ pollCreatorJid: creator, pollMsgId: key.id, pollSecret: secret, voterJid: voter },
-			)
-			const names = known
-				? hashes
-						.map((h) => known.find((n) => pollOptionHash(n) === h))
-						.filter((n): n is string => !!n)
-				: undefined
-			return { pollId: key.id, selected: hashes, ...(names && { options: names }) }
-		} catch (e) {
-			return { pollId: key.id, error: (e as Error).message }
+		const poll = this.#polls.get(key.id)
+		const secrets = this.#secrets.candidates([key.id], chat)
+		if (!secrets.length) return { pollId: key.id, error: 'poll secret unknown' }
+		// The creator comes from what we remembered about the poll, not from fields of the incoming vote.
+		const creator =
+			poll?.creator ??
+			(key.fromMe ? (this.d.creds.me?.id ?? '') : (key.participant ?? key.remoteJid ?? chat))
+		let lastError = 'poll vote did not decrypt'
+		for (const secret of secrets) {
+			try {
+				const hashes = decryptPollVote(
+					{ encPayload: new Uint8Array(vote.encPayload), encIv: new Uint8Array(vote.encIv) },
+					{ pollCreatorJid: creator, pollMsgId: key.id, pollSecret: secret, voterJid: voter },
+				)
+				const names = poll
+					? hashes
+							.map((h) => poll.options.find((n) => pollOptionHash(n) === h))
+							.filter((n): n is string => !!n)
+					: undefined
+				return { pollId: key.id, selected: hashes, ...(names && { options: names }) }
+			} catch (e) {
+				lastError = (e as Error).message
+			}
 		}
+		return { pollId: key.id, error: lastError }
 	}
 
 	/** A peer-category stanza (the phone talking to its linked devices) from our own account. */
@@ -499,7 +510,7 @@ export class Receiver {
 			}
 		}
 		const secret = raw.messageContextInfo?.messageSecret
-		if (secret) this.#secrets.set(id, secret, chat)
+		if (secret && !this.#ownIds.has(id)) this.#secrets.set(id, secret, chat)
 		const shared = raw.protocolMessage?.appStateSyncKeyShare?.keys
 		if (shared?.length && this.d.onAppStateKeys && !this.#isOwnPeer(node, author)) {
 			// Whoever holds these keys can forge our chat/contact state, so only our own account may hand them out.
@@ -551,7 +562,7 @@ export class Receiver {
 			)
 			this.d.logger.event('sender-key.installed', { group: skdm.groupId, author })
 		}
-		this.#notePoll(id, asJson as Loose)
+		this.#notePoll(id, asJson as Loose, author)
 		const vote = this.#pollVote(raw, author, chat)
 		if (vote) asJson['pollVote'] = vote
 		const text = lenient ? extractMetaAiText(asJson) : undefined
