@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Workflows: every action pinned to a commit SHA, the release split into a `build` job (no secrets, no cache) and a `publish` job (the token, only GitHub's own actions, publishes the exact tarball that was built), Dependabot for actions, npm and cargo; `tests/package` enforces it.
 - Package rules: `npm install velowa` installs only `dist/` (14 files, 1.5 MB), runs no install script and needs no Rust; the pairing helper's `qrcode-terminal` is optional; `velowa-pair` and `velowa-logs` command line tools; npm metadata and provenance; a `prepublishOnly` gate; `tests/package` enforces all of it; `.gitattributes`, `CONTRIBUTING.md` (git and npm rules, release steps), a CI `package` job and a release workflow.
 - Examples for the public: `echo-bot`, `cases-bot`, `plugin-bot/`, `notifier`, `channel-post`, `group-admin`, `calls` and `tour`, configured by environment variables (no ids or numbers in the code), with an index in `examples/README.md`; the old internal live-test scripts and the placeholder `basic-bot` are gone. `npm run check:docs` type-checks the README and the examples against the built package.
 - Security: media `{ url }` in `client.send` is http(s) only and can no longer read a local file; local files need the explicit `{ path }`.

@@ -1,26 +1,30 @@
 name: release
 # Publishes to npm when a GitHub release is published. Needs the repository secret NPM_TOKEN (an npm automation token).
+#
+# Two jobs, so the token never meets third-party code:
+#   build    builds and checks the package from scratch and uploads the tarball. No secrets, no cache restored.
+#   publish  downloads that tarball and publishes it. Uses only actions made by GitHub; no build step runs here.
+# Every action is pinned to a commit (the tag is in the comment); Dependabot proposes the updates.
 on:
   release:
     types: [published]
 
-permissions:
-  contents: read
-  id-token: write # npm provenance
+permissions: {}
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.94
-        with: { targets: wasm32-unknown-unknown }
-      - uses: Swatinem/rust-cache@v2
-      - uses: jetli/wasm-pack-action@v0.4.0
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@ee868d7805ade43a1b47dd054727ab76c9108b4f # 1.94
+        with: { targets: wasm32-unknown-unknown }
+      - uses: jetli/wasm-pack-action@0d096b08b4e5a7de8c28de67e11e945404e9eefa # v0.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
       - run: npm ci
       - name: The tag must be the version in package.json
         run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
@@ -29,6 +33,30 @@ jobs:
       - run: npm run build
       - run: npm run check:package
       - run: npm run check:docs
-      - run: npm publish --provenance --access public
+      - name: Pack what will be published
+        run: npm pack --ignore-scripts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: package
+          path: velowa-*.tgz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Create an environment called "npm" in the repository settings and add required reviewers to it if a person
+    # should confirm every publish.
+    environment: npm
+    permissions:
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: package
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm publish ./velowa-*.tgz --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

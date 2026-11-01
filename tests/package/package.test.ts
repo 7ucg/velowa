@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { builtinModules } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -190,5 +190,35 @@ describe.skipIf(!built)('what is in the package', () => {
 			readFileSync(join(root, 'dist/index.js'), 'utf8') +
 			readFileSync(join(root, 'dist/index.cjs'), 'utf8')
 		for (const name of OPTIONAL_DEPENDENCIES) expect(lib).not.toContain(name)
+	})
+})
+
+describe('the GitHub workflows', () => {
+	const dir = join(root, '.github/workflows')
+	const workflows = readdirSync(dir)
+		.filter((f) => f.endsWith('.yml'))
+		.map((f) => ({ file: f, text: readFileSync(join(dir, f), 'utf8') }))
+	const uses = (text: string) => [...text.matchAll(/^\s*-?\s*uses:\s*(\S+)/gm)].map((m) => m[1]!)
+
+	it('pins every action to a full commit, so a moved tag cannot change what runs', () => {
+		for (const { file, text } of workflows)
+			for (const u of uses(text))
+				if (!u.startsWith('./')) expect(u, `${file}: ${u}`).toMatch(/@[0-9a-f]{40}$/)
+	})
+
+	it('keeps the npm token away from third-party code and from caches that pull requests can write', () => {
+		const release = workflows.find((w) => w.file === 'release.yml')!.text
+		const [, publish = ''] = release.split(/^ {2}publish:/m)
+		expect(publish).toContain('secrets.NPM_TOKEN')
+		expect(release.split(/^ {2}publish:/m)[0]).not.toContain('secrets.') // the build job never sees a secret
+		for (const u of uses(publish)) expect(u, u).toMatch(/^actions\//) // only actions made by GitHub publish
+		expect(release).not.toMatch(/rust-cache/) // a release never restores a cache
+		expect(release.match(/id-token: write/g)).toHaveLength(1) // provenance is allowed in the publish job only
+		expect(publish).toContain('id-token: write')
+		expect(publish).not.toMatch(/npm (ci|install|run)/) // nothing is built where the token lives
+	})
+
+	it('has Dependabot refresh the pins', () => {
+		expect(readFileSync(join(root, '.github/dependabot.yml'), 'utf8')).toContain('github-actions')
 	})
 })

@@ -70,12 +70,21 @@ bundle (see `src/client/proto.ts`).
 1. Everything merged and green: `npm run lint && npm test && npm run build && npm run check:package && npm run check:docs`.
 2. Move the `## Unreleased` entries in `CHANGELOG.md` under a heading for the new version.
 3. `npm version <patch|minor|major>` (updates `package.json`, commits, and tags `vX.Y.Z`); `git push --follow-tags`.
-4. Create a GitHub release for the tag. The **release workflow** (`.github/workflows/release.yml`) builds from scratch,
-   runs the whole gate, checks that the tag equals the version in `package.json`, and publishes with provenance. It needs the
-   repository secret `NPM_TOKEN` (an npm automation token).
+4. Create a GitHub release for the tag. The **release workflow** (`.github/workflows/release.yml`) has two jobs: `build`
+   builds from scratch, runs the whole gate, checks that the tag equals the version in `package.json` and uploads the
+   tarball; `publish` downloads exactly that tarball and publishes it with provenance. It needs the repository secret
+   `NPM_TOKEN` (an npm automation token). Add required reviewers to the repository environment `npm` if a person should
+   confirm every publish.
 5. Publishing by hand also works: `npm publish` first runs the same gate (`prepublishOnly`) and refuses to publish if it fails.
 
 While the version is `0.x` the API can still change between releases; every change is in `CHANGELOG.md`.
+
+## Workflows
+
+- Every GitHub Action is pinned to a full commit SHA with the tag in a comment (`uses: owner/action@<sha> # v4`); a tag can
+  be moved, a commit cannot. Dependabot (`.github/dependabot.yml`) proposes the new pins.
+- The npm token exists only in the `publish` job, which runs no build and uses only actions made by GitHub. A release never
+  restores a build cache. `tests/package` checks all of this.
 
 ## Security
 
