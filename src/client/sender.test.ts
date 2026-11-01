@@ -125,6 +125,21 @@ describe('Sender: groups', () => {
 	})
 })
 
+describe('Sender: channels', () => {
+	it('posts plain protobuf in a <plaintext> node and waits for the ack', async () => {
+		const { sender, stanzas } = await world()
+		await sender.sendText('1203630000@newsletter', 'hello channel')
+		const st = stanzas[0]!
+		expect(st.attrs['to']).toBe('1203630000@newsletter')
+		expect(st.attrs['type']).toBe('text')
+		const body = kids(st, 'plaintext')[0]!.content as Uint8Array
+		expect(decodeMsg(Uint8Array.from([...body, 1]))['extendedTextMessage'].text).toBe(
+			'hello channel',
+		)
+		expect(kids(st, 'participants')).toHaveLength(0)
+	})
+})
+
 describe('helpers', () => {
 	it('pads to 1-16 bytes and the receiver unpads it', () => {
 		for (let i = 0; i < 50; i++) {

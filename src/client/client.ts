@@ -26,6 +26,8 @@ import * as contacts from './features/contacts.js'
 import { parsePresence, parseReceipt } from './features/events.js'
 import type { PresenceEvent, ReceiptEvent } from './features/events.js'
 import { Groups, parseGroupNotification } from './features/groups.js'
+import { mexFor } from './features/mex.js'
+import { Newsletters } from './features/newsletters.js'
 import type { GroupNotification } from './features/groups.js'
 import * as media from './features/media.js'
 import type { MediaOptions, MediaType } from './features/media.js'
@@ -278,6 +280,17 @@ export class Client {
 		this.#push(act.labelMessage(jid, labelId, messageId, labeled))
 	/** Default disappearing-messages timer for a 1:1 chat, in seconds (0 = off). */
 	setChatEphemeral = (jid: string, seconds: number) => this.#push(act.chatEphemeral(jid, seconds))
+
+	/** Channels: `client.newsletters.metadata('invite', code)`, `.follow(jid)`, ... (posting: `sendText(jid, ...)`). */
+	readonly newsletters: Newsletters = new Newsletters(
+		(queryId, variables, dataPath) =>
+			mexFor(
+				async (n) => (await this.#live()).receiver.request(n),
+				() => `mex-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+			)(queryId, variables, dataPath),
+		async (n) => (await this.#live()).receiver.request(n),
+		() => `nl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+	)
 
 	#q = async (node: BinaryNode) => (await this.#live()).receiver.request(node)
 	#sid = async () => (await this.#live()).receiver.nextId()

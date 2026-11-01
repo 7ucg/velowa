@@ -95,6 +95,21 @@ export class Sender {
 		const id = generateMessageId(creds.me.id)
 		// WhatsApp Web gives every message (except reactions etc.) a random secret; reply keys and the reporting token derive from it.
 		const withSecret = withMessageSecret(message)
+		if (to.endsWith('@newsletter')) {
+			// Channels are not end-to-end encrypted: the message goes out as plain protobuf.
+			const stanza: BinaryNode = {
+				tag: 'message',
+				attrs: { id, to, type: messageType(message), ...opts.stanzaAttrs },
+				content: [
+					{ tag: 'plaintext', attrs: {}, content: encodeProto('Message', message) },
+					...(opts.extraNodes ?? []),
+				],
+			}
+			this.d.logger.event('send.message', { id, to })
+			await this.d.receiver.sendAndWaitAck(stanza)
+			this.d.logger.event('send.acked', { id, to })
+			return id
+		}
 		const stanza = to.endsWith('@g.us')
 			? await this.#groupStanza(id, to, withSecret, opts)
 			: await this.#directStanza(id, to, withSecret, opts)

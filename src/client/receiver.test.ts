@@ -400,3 +400,28 @@ describe('Receiver: app-state key shares', () => {
 		expect(await shareFrom('4915699999999@s.whatsapp.net')).toHaveLength(0)
 	})
 })
+
+describe('Receiver: channel posts', () => {
+	it('decodes <plaintext> posts without padding and without a delivery receipt', async () => {
+		const { receiver, sent, messages } = await setup()
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: '1203630000@newsletter', id: 'N1', type: 'text', server_id: '77' },
+			content: [{ tag: 'plaintext', attrs: {}, content: text('post') }],
+		})
+		await receiver.idle()
+		expect(messages[0]!.message['conversation']).toBe('post')
+		expect(sent.map((n) => n.tag)).toEqual(['ack'])
+	})
+
+	it('does not ask for a retry when a plaintext post is malformed', async () => {
+		const { receiver, sent } = await setup()
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: '1203630000@newsletter', id: 'N2', type: 'text' },
+			content: [{ tag: 'plaintext', attrs: {}, content: new Uint8Array([0xff, 0xff, 0xff]) }],
+		})
+		await receiver.idle()
+		expect(sent.some((n) => n.attrs['type'] === 'retry')).toBe(false)
+	})
+})

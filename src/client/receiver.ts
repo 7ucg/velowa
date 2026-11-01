@@ -250,11 +250,17 @@ export class Receiver {
 		const id = node.attrs['id'] ?? ''
 		const participant = node.attrs['participant']
 		const author = participant ?? from
+		// Channel posts (and a few server messages) arrive as <plaintext>, treated like a decrypted envelope.
+		const plaintexts = children(node, 'plaintext').filter((e) => e.content instanceof Uint8Array)
 		const encs = children(node, 'enc').filter((e) => e.content instanceof Uint8Array)
 		const isGroupEnc = (e: BinaryNode) =>
 			e.attrs['type'] === 'skmsg' || e.attrs['type'] === 'frskmsg'
 		// Unicast first: a pkmsg may carry the sender-key distribution the skmsg needs.
-		const ordered = [...encs.filter((e) => !isGroupEnc(e)), ...encs.filter(isGroupEnc)]
+		const ordered = [
+			...plaintexts.map((p) => ({ ...p, attrs: { ...p.attrs, type: 'plaintext' } })),
+			...encs.filter((e) => !isGroupEnc(e)),
+			...encs.filter(isGroupEnc),
+		]
 
 		let decrypted = 0
 		let retryable = 0
@@ -262,13 +268,15 @@ export class Receiver {
 		for (const enc of ordered) {
 			const type = enc.attrs['type'] ?? ''
 			// A retry can re-key Signal envelopes, but never a Meta AI msmsg (its key is the original message's secret).
-			if (type !== 'msmsg') retryable++
+			if (type !== 'msmsg' && type !== 'plaintext') retryable++
 			try {
 				const data = enc.content as Uint8Array
 				const plain =
-					type === 'msmsg'
-						? this.#decryptMsmsg(node, author, data)
-						: await this.#decryptEnc(from, author, type, data)
+					type === 'plaintext'
+						? data
+						: type === 'msmsg'
+							? this.#decryptMsmsg(node, author, data)
+							: await this.#decryptEnc(from, author, type, data)
 				const msg = await this.#decodeAndApply(plain, author, id, from, type === 'msmsg')
 				decrypted++
 				logger.event('message.decrypted', { id, from, participant, type, message: msg.json })
@@ -285,7 +293,7 @@ export class Receiver {
 		}
 
 		if (failures.length > 0 && decrypted === 0 && retryable > 0) await this.#sendRetry(node)
-		else if (decrypted > 0 && node.attrs['type'] !== 'peer_msg') {
+		else if (decrypted > 0 && node.attrs['type'] !== 'peer_msg' && !from.endsWith('@newsletter')) {
 			const attrs: Record<string, string> = { id, to: from }
 			if (participant) attrs['participant'] = participant
 			this.#sendSafe({ tag: 'receipt', attrs })
