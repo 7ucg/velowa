@@ -30,10 +30,14 @@ fresh design rather than a port of `baron-baileys-v2`.
 
 ## Status
 
-Rust bindings for all four subsystems exist and are tested offline (WABinary, Noise XX + framing,
-Signal sessions/sender keys, app-state). The client spine (connect, pair, reconnect, send/receive)
-and feature breadth are **not written yet**, and nothing has been verified against a live WhatsApp
-server. See `TODO.md` for exactly what is and is not proven.
+Working and verified against a real account: Noise handshake, QR pairing, login/re-login, pre-key upload, receiving and
+decrypting 1:1/group/channel messages and Meta AI replies, sending text to the own number (round trip with a reply),
+live protocol logging.
+
+Implemented and covered by unit/loopback tests only (not yet exercised against the live server): sending to other
+contacts and groups, media upload/download, reactions/edit/delete, polls, group management, communities, newsletters,
+app-state sync and chat actions, history sync, privacy/contacts. Not implemented: business profiles, registration,
+username, interop, managed accounts, status/stories posting, pairing-code linking. See `TODO.md` for the exact status of each item.
 
 ## Quick start
 
@@ -49,6 +53,21 @@ import { encodeNode, decodeNode, createSignalCipher, MemorySignalStorage, newIde
 const bytes = encodeNode({ tag: 'iq', attrs: { id: '1', type: 'get' } })
 const node = decodeNode(bytes)
 ```
+
+```ts
+import { Client } from 'velowa'
+
+const client = new Client({ authDir: 'auth' })
+client.on('qr', ({ qr }) => console.log('scan:', qr))
+client.on('message', (m) => console.log(m.from, m.message))
+await client.connect()
+await client.ready()
+await client.sendText('4915...@s.whatsapp.net', 'hi')
+await client.groups.fetchAll()
+```
+
+A dev console that exercises everything (`help` lists the commands) and logs every frame, stanza and HTTP call:
+`npm run pair` (logs go to `logs/`, credentials to `auth/`; both are git-ignored and contain account secrets).
 
 Design departures from Baileys and the reasoning behind each binding are in
 [`docs/design-decisions.md`](docs/design-decisions.md).
