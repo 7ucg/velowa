@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { decodeMsg, kids, world } from '../world.testkit.js'
 import {
+	MAX_DOWNLOAD_BYTES,
+	safeMediaUrls,
 	decryptMedia,
 	downloadMedia,
 	encryptMedia,
@@ -100,7 +102,7 @@ describe('upload / download', () => {
 		const out = await downloadMedia(
 			{
 				directPath: '/v/t62/x',
-				url: 'https://cdn.example/x',
+				url: 'https://media.whatsapp.net/alt',
 				mediaKey: enc.mediaKey,
 				fileSha256: enc.fileSha256,
 				fileEncSha256: enc.fileEncSha256,
@@ -112,6 +114,81 @@ describe('upload / download', () => {
 		await expect(downloadMedia({ mediaKey: enc.mediaKey }, 'document', fakeFetch)).rejects.toThrow(
 			/neither/,
 		)
+	})
+})
+
+describe('download safety', () => {
+	it('only accepts WhatsApp media hosts and plain paths', () => {
+		expect(
+			safeMediaUrls({
+				mediaKey: new Uint8Array(),
+				directPath: '/v/t62.7118-24/a?ccb=11-4&oh=x&oe=1',
+			}),
+		).toEqual(['https://mmg.whatsapp.net/v/t62.7118-24/a?ccb=11-4&oh=x&oe=1'])
+		for (const bad of [
+			'//evil.example/x',
+			'/..%2f',
+			'/a/../b',
+			'/a@evil.example',
+			'/a\\b',
+			'http://x',
+			'v/x',
+			'/a b',
+		]) {
+			expect(() => safeMediaUrls({ mediaKey: new Uint8Array(), directPath: bad }), bad).toThrow(
+				/unsafe/,
+			)
+		}
+		const okUrl = safeMediaUrls({ mediaKey: new Uint8Array(), url: 'https://mmg.whatsapp.net/x' })
+		expect(okUrl).toEqual(['https://mmg.whatsapp.net/x'])
+		for (const bad of [
+			'http://mmg.whatsapp.net/x',
+			'https://evil.example/x',
+			'https://mmg.whatsapp.net.evil.example/x',
+			'https://u:p@mmg.whatsapp.net/x',
+			'https://mmg.whatsapp.net:8443/x',
+			'https://127.0.0.1/x',
+			'not a url',
+		]) {
+			expect(safeMediaUrls({ mediaKey: new Uint8Array(), url: bad }), bad).toEqual([])
+		}
+	})
+
+	it('refuses to fetch an attacker-supplied internal URL at all', async () => {
+		let called = false
+		const f = (async () => ((called = true), new Response('x'))) as unknown as typeof fetch
+		await expect(
+			downloadMedia(
+				{ mediaKey: new Uint8Array(32), url: 'https://169.254.169.254/latest' },
+				'image',
+				f,
+			),
+		).rejects.toThrow(/usable/)
+		expect(called).toBe(false)
+	})
+
+	it('caps the download by declared size and by an absolute maximum', async () => {
+		const enc = encryptMedia(plain, 'image')
+		const big = (async () =>
+			new Response(new Uint8Array(enc.encrypted.length + 100))) as unknown as typeof fetch
+		await expect(
+			downloadMedia(
+				{ directPath: '/v/x', mediaKey: enc.mediaKey, fileLength: enc.fileLength },
+				'image',
+				big,
+			),
+		).rejects.toThrow()
+		const ok = (async () => new Response(new Uint8Array(enc.encrypted))) as unknown as typeof fetch
+		expect(
+			(
+				await downloadMedia(
+					{ directPath: '/v/x', mediaKey: enc.mediaKey, fileLength: enc.fileLength },
+					'image',
+					ok,
+				)
+			).equals(plain),
+		).toBe(true)
+		expect(MAX_DOWNLOAD_BYTES).toBeGreaterThan(0)
 	})
 })
 

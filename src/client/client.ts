@@ -18,6 +18,8 @@ import type { ClientConfig } from './pairing.js'
 import { Receiver } from './receiver.js'
 import type { DecodedMessage } from './receiver.js'
 import { Sender } from './sender.js'
+import { AppStateSync, interpret } from './features/appstate-sync.js'
+import type { AppStateEvent, ChatUpdate, ContactUpdate } from './features/appstate-sync.js'
 import { Groups, parseGroupNotification } from './features/groups.js'
 import type { GroupNotification } from './features/groups.js'
 import * as media from './features/media.js'
@@ -48,6 +50,12 @@ export type ClientEvents = {
 	close: { code?: number; reason: string; willReconnect: boolean }
 	/** A decrypted incoming message. */
 	message: DecodedMessage
+	/** Raw app-state change from the phone (mute, pin, archive, contact, settings, labels, ...). */
+	'app-state': AppStateEvent
+	/** A chat was muted / archived / pinned / read / deleted on another device. */
+	'chat.update': ChatUpdate
+	/** A contact's saved name changed. */
+	'contact.update': ContactUpdate
 	/** A group changed (members, subject, settings). */
 	'group.update': GroupNotification
 	/** Any server notification, parsed or not (account_sync, devices, picture, ...). */
@@ -81,6 +89,7 @@ export class Client {
 	#stopped = false
 	#isOpen = false
 	#mediaConn: media.MediaConn | undefined
+	#appState: AppStateSync | undefined
 	#ready: Promise<void> = Promise.resolve()
 
 	constructor(options: ClientOptions = {}) {
@@ -268,6 +277,7 @@ export class Client {
 		clearInterval(this.#keepAlive)
 		this.#receiver = undefined
 		this.#sender = undefined
+		this.#appState = undefined
 		this.#isOpen = false
 	}
 
@@ -305,6 +315,30 @@ export class Client {
 		const child = (tag: string) =>
 			Array.isArray(node.content) ? node.content.find((c) => c.tag === tag) : undefined
 
+		const dirty = node.tag === 'ib' ? child('dirty') : undefined
+		if (dirty) {
+			if (dirty.attrs['type'] === 'account_sync') void this.#appState?.sync()
+			// Tell the server we handled the dirty bit so it does not repeat it.
+			conn.send({
+				tag: 'iq',
+				attrs: {
+					to: 's.whatsapp.net',
+					type: 'set',
+					xmlns: 'urn:xmpp:whatsapp:dirty',
+					id: this.#receiver?.nextId() ?? 'dirty',
+				},
+				content: [
+					{
+						tag: 'clean',
+						attrs: {
+							type: dirty.attrs['type'] ?? '',
+							...(dirty.attrs['timestamp'] && { timestamp: dirty.attrs['timestamp'] }),
+						},
+					},
+				],
+			})
+			return
+		}
 		const pairDevice = node.tag === 'iq' && child('pair-device')
 		if (pairDevice) {
 			conn.send({
@@ -363,6 +397,17 @@ export class Client {
 		}
 	}
 
+	#onAppState(e: AppStateEvent): void {
+		this.#events.emit('app-state', e)
+		const i = interpret(e)
+		if (i.chat) this.#events.emit('chat.update', i.chat)
+		if (i.contact) this.#events.emit('contact.update', i.contact)
+		if (i.pushName && this.#creds.me && this.#creds.me.name !== i.pushName) {
+			this.#creds.me.name = i.pushName
+			saveAuthCreds(this.#credsPath, this.#creds)
+		}
+	}
+
 	async #onLoggedIn(conn: Connection): Promise<void> {
 		const creds = this.#creds
 		const storage = new FileSignalStorage(
@@ -380,14 +425,31 @@ export class Client {
 			logger: this.logger,
 			send: (n) => conn.send(n),
 			onMessage: (m) => this.#events.emit('message', m),
+			onAppStateKeys: (keys) => {
+				this.#appState?.addKeys(keys)
+				void this.#appState?.sync()
+			},
 			onNotification: (node) => {
 				const type = node.attrs['type'] ?? ''
 				this.#events.emit('notification', { type, node })
 				if (type === 'w:gp2')
 					for (const n of parseGroupNotification(node)) this.#events.emit('group.update', n)
+				if (type === 'server_sync') {
+					const names = (Array.isArray(node.content) ? node.content : [])
+						.filter((c) => c.tag === 'collection')
+						.map((c) => c.attrs['name'] ?? '')
+						.filter(Boolean)
+					void this.#appState?.sync(names)
+				}
 			},
 		})
 		this.#receiver = receiver
+		this.#appState = new AppStateSync({
+			dir: join(this.#signalDir, '..', 'app-state'),
+			request: (n) => receiver.request(n),
+			logger: this.logger,
+			onEvent: (e) => this.#onAppState(e),
+		})
 		this.#sender = new Sender({
 			creds,
 			storage,
@@ -403,6 +465,7 @@ export class Client {
 				content: [{ tag: 'active', attrs: {} }],
 			})
 			await receiver.ensurePreKeys()
+			if (this.#appState.keyCount > 0) void this.#appState.sync()
 		} catch (error) {
 			this.logger.event('login.setup-failed', error)
 		}

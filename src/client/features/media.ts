@@ -11,8 +11,12 @@ import type { BinaryNode } from '../../codec/index.js'
 
 /** Media kinds that have their own key-derivation label, upload path and message field. */
 export type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
+/** Blobs the server hands out for sync (downloaded the same way, but never uploaded by us). */
+export type BlobType = MediaType | 'md-app-state' | 'md-msg-hist'
 
-const HKDF_LABEL: Record<MediaType, string> = {
+const HKDF_LABEL: Record<BlobType, string> = {
+	'md-app-state': 'App State',
+	'md-msg-hist': 'History',
 	image: 'Image',
 	video: 'Video',
 	audio: 'Audio',
@@ -31,7 +35,7 @@ const ORIGIN = 'https://web.whatsapp.com'
 const MAC_LENGTH = 10
 
 /** iv, AES key and HMAC key from a 32-byte media key: HKDF-SHA256 -> 112 bytes. */
-export function mediaKeys(mediaKey: Uint8Array, type: MediaType) {
+export function mediaKeys(mediaKey: Uint8Array, type: BlobType) {
 	const okm = Buffer.from(
 		hkdfSync('sha256', mediaKey, Buffer.alloc(0), `WhatsApp ${HKDF_LABEL[type]} Keys`, 112),
 	)
@@ -70,7 +74,7 @@ export function encryptMedia(
 export function decryptMedia(
 	encrypted: Uint8Array,
 	mediaKey: Uint8Array,
-	type: MediaType,
+	type: BlobType,
 	expect: { fileSha256?: Uint8Array; fileEncSha256?: Uint8Array } = {},
 ): Buffer {
 	if (encrypted.length <= MAC_LENGTH) throw new Error('media payload too short')
@@ -177,25 +181,83 @@ export interface MediaRef {
 	mediaKey: Uint8Array
 	fileSha256?: Uint8Array
 	fileEncSha256?: Uint8Array
+	/** Plaintext length announced by the sender; bounds the download. */
+	fileLength?: number
+}
+
+/** Hard ceiling for any single download (the largest WhatsApp media is 2 GB; this client buffers in memory). */
+export const MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
+
+/**
+ * Media references come from other users, so they are not trusted: the target is always a WhatsApp media
+ * host (`directPath` is joined onto the known host and re-checked; `url` must already be https on a
+ * `*.whatsapp.net` host with no credentials or custom port).
+ */
+export function safeMediaUrls(ref: MediaRef): string[] {
+	const urls: string[] = []
+	const dp = ref.directPath
+	if (dp !== undefined) {
+		if (!dp.startsWith('/') || dp.startsWith('//') || /[\\@\s]|\.\.|[\u0000-\u001f]/.test(dp))
+			throw new Error('unsafe media directPath')
+		const u = new URL(dp, `https://${MEDIA_HOST}`)
+		if (u.hostname !== MEDIA_HOST || u.protocol !== 'https:' || u.username || u.password || u.port)
+			throw new Error('unsafe media directPath')
+		urls.push(u.toString())
+	}
+	if (ref.url) {
+		try {
+			const u = new URL(ref.url)
+			const okHost = u.hostname === MEDIA_HOST || u.hostname.endsWith('.whatsapp.net')
+			if (u.protocol === 'https:' && okHost && !u.username && !u.password && !u.port)
+				urls.push(u.toString())
+		} catch {
+			/* ignore a malformed url; directPath may still work */
+		}
+	}
+	return urls
+}
+
+/** Read a response body, aborting once it exceeds `limit` bytes. */
+async function readCapped(res: Response, limit: number): Promise<Uint8Array> {
+	const declared = Number(res.headers.get('content-length'))
+	if (declared > limit) throw new Error(`media too large (${declared} > ${limit} bytes)`)
+	if (!res.body) return new Uint8Array(await res.arrayBuffer())
+	const chunks: Uint8Array[] = []
+	let total = 0
+	const reader = res.body.getReader()
+	for (;;) {
+		const { done, value } = await reader.read()
+		if (done) break
+		total += value.length
+		if (total > limit) {
+			await reader.cancel()
+			throw new Error(`media too large (> ${limit} bytes)`)
+		}
+		chunks.push(value)
+	}
+	return Buffer.concat(chunks)
 }
 
 /** Download and decrypt one media message's payload. */
 export async function downloadMedia(
 	ref: MediaRef,
-	type: MediaType,
+	type: BlobType,
 	fetchImpl: Fetch = fetch,
 ): Promise<Buffer> {
-	const urls = [
-		ref.directPath ? `https://${MEDIA_HOST}${ref.directPath}` : undefined,
-		ref.url?.startsWith('https://') ? ref.url : undefined,
-	].filter((u): u is string => !!u)
-	if (!urls.length) throw new Error('media message has neither directPath nor https url')
+	const urls = safeMediaUrls(ref)
+	if (!urls.length)
+		throw new Error('media message has neither a usable directPath nor a WhatsApp https url')
+	// AES-CBC output is at most one block longer than the input, plus the 10-byte MAC.
+	const limit = Math.min(
+		MAX_DOWNLOAD_BYTES,
+		ref.fileLength !== undefined ? ref.fileLength + 16 + MAC_LENGTH : MAX_DOWNLOAD_BYTES,
+	)
 	let lastError: unknown
 	for (const url of [...new Set(urls)]) {
 		try {
-			const res = await fetchImpl(url, { headers: { Origin: ORIGIN } })
+			const res = await fetchImpl(url, { headers: { Origin: ORIGIN }, redirect: 'error' })
 			if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`)
-			return decryptMedia(new Uint8Array(await res.arrayBuffer()), ref.mediaKey, type, {
+			return decryptMedia(await readCapped(res, limit), ref.mediaKey, type, {
 				...(ref.fileSha256 && { fileSha256: ref.fileSha256 }),
 				...(ref.fileEncSha256 && { fileEncSha256: ref.fileEncSha256 }),
 			})
@@ -332,6 +394,7 @@ export function mediaOf(
 				ref: {
 					url: m['url'] as string | undefined,
 					directPath: m['directPath'] as string | undefined,
+					...(m['fileLength'] !== undefined && { fileLength: Number(m['fileLength']) }),
 					mediaKey: b(m['mediaKey'])!,
 					...(b(m['fileSha256']) && { fileSha256: b(m['fileSha256'])! }),
 					...(b(m['fileEncSha256']) && { fileEncSha256: b(m['fileEncSha256'])! }),

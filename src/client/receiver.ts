@@ -24,6 +24,8 @@ export interface ReceiverDeps {
 	onMessage?(m: DecodedMessage): void
 	/** Called with every notification (after it was acked). */
 	onNotification?(n: BinaryNode): void
+	/** Sync keys shared by the primary phone (`appStateSyncKeyShare`). */
+	onAppStateKeys?(keys: { keyId: Uint8Array; keyData: Uint8Array }[]): void
 }
 
 export interface DecodedMessage {
@@ -380,9 +382,23 @@ export class Receiver {
 				axolotlSenderKeyDistributionMessage?: Buffer
 			}
 			messageContextInfo?: { messageSecret?: Buffer }
+			protocolMessage?: {
+				appStateSyncKeyShare?: {
+					keys?: { keyId?: { keyId?: Buffer }; keyData?: { keyData?: Buffer } }[]
+				}
+			}
 		}
 		const secret = raw.messageContextInfo?.messageSecret
 		if (secret) this.#secrets.set(id, secret, chat)
+		const shared = raw.protocolMessage?.appStateSyncKeyShare?.keys
+		if (shared?.length && this.d.onAppStateKeys) {
+			const keys = shared.flatMap((k) =>
+				k.keyId?.keyId && k.keyData?.keyData
+					? [{ keyId: new Uint8Array(k.keyId.keyId), keyData: new Uint8Array(k.keyData.keyData) }]
+					: [],
+			)
+			if (keys.length) this.d.onAppStateKeys(keys)
+		}
 		const skdm = raw.senderKeyDistributionMessage
 		if (skdm?.axolotlSenderKeyDistributionMessage && skdm.groupId) {
 			await this.d.cipher.processSenderKeyDistribution(
