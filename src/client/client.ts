@@ -760,36 +760,42 @@ export class Client {
 			} catch (e) {
 				this.logger.event('call.group-update-failed', e)
 			}
-		} else if (c.status === 'enc_rekey' && st.direction === 'incoming') {
-			void this.#installEpoch(st, action).catch((e: unknown) =>
+		} else if (c.status === 'enc_rekey') {
+			void this.#installEpoch(st, action, c.from).catch((e: unknown) =>
 				this.logger.event('call.epoch-failed', e),
 			)
 		}
 	}
 
 	/** Decrypt a shared key delivered to us and give it to the engine. */
-	async #installEpoch(st: callSig.CallState, action: BinaryNode): Promise<void> {
+	async #installEpoch(st: callSig.CallState, action: BinaryNode, from: string): Promise<void> {
 		const { receiver } = await this.#live()
 		const r = parseGroupEncRekey(encodeNode(action)) as {
 			transaction_id: number
 			enc_type: string
 			ciphertext: number[]
 		}
-		const raw = await receiver.decryptCallKey(st.creator, r.enc_type, Uint8Array.from(r.ciphertext))
+		// The envelope is a Signal message from the device that sent the stanza, not from the call creator.
+		const raw = await receiver.decryptCallKey(from, r.enc_type, Uint8Array.from(r.ciphertext))
 		if (!raw) throw new Error('the epoch envelope holds no key')
 		st.groupEngine?.applyGroupEpoch(r.transaction_id, raw)
 		st.epochTx = r.transaction_id
 	}
 
 	#trackCall(c: extras.CallEvent, node?: BinaryNode): void {
-		if (node && (c.status === 'group_update' || c.status === 'enc_rekey'))
-			this.#groupCallTraffic(c, node)
 		const userOf = (jid: string): string => jid.split('@')[0]!.replace(/[:.]\d+$/, '')
 		const st = this.#calls.get(c.callId)
 		if (st) {
 			// Only the other side of this very call may move it: a stanza from anyone else (or from a different
-			// account that guessed the call id) is ignored.
-			const allowed = st.group ? c.from === st.group : userOf(c.from) === userOf(st.peer)
+			// account that guessed the call id) is ignored. In a group call that means the call service
+			// (`<call-id>@call`) or one of the people in the call.
+			const fromService = c.from === `${c.callId}@call`
+			const fromMember = !!st.members?.has(userOf(c.from) + '@lid')
+			const allowed = st.groupSession
+				? fromService || fromMember
+				: st.group
+					? c.from === st.group
+					: userOf(c.from) === userOf(st.peer)
 			if (!allowed) {
 				this.logger.event('call.ignored-stanza', {
 					callId: c.callId,
@@ -798,12 +804,21 @@ export class Client {
 				})
 				return
 			}
+			// Roster updates only from the service; shared keys only from people in the call.
+			if (node && st.groupSession) {
+				if (c.status === 'group_update' && fromService) this.#groupCallTraffic(c, node)
+				if (c.status === 'enc_rekey' && fromMember) this.#groupCallTraffic(c, node)
+			}
 			if (c.status === 'preaccept' || c.status === 'ringing') st.status = 'ringing'
 			else if (c.status === 'accept') {
 				st.status = 'connected'
-				// The answering device's LID decides the keys we receive with.
-				st.media?.rekeyRecv(c.from)
-			} else if (c.status === 'reject' || c.status === 'terminate') this.#finishCall(st, c.status)
+				// The answering device's LID decides the keys we receive with (1:1 calls; groups share one epoch).
+				if (!st.groupSession) st.media?.rekeyRecv(c.from)
+			} else if (c.status === 'reject' || c.status === 'terminate') {
+				// In a group call one person hanging up is not the end of the call; only the service ends it.
+				if (st.groupSession && !fromService) return
+				this.#finishCall(st, c.status)
+			}
 			return
 		}
 		if (c.status !== 'offer') return
