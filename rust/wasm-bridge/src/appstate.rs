@@ -14,9 +14,11 @@
 
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use std::sync::Arc;
-use wacore_appstate::hash::HashState;
+use wacore_appstate::encode::encode_record;
+use wacore_appstate::hash::{HashState, generate_patch_mac};
 use wacore_appstate::processor::{AppStateMutationMAC, process_patch, process_snapshot};
 use wacore_appstate::{AppStateError, ExpandedAppStateKeys, Mutation, expand_app_state_keys};
+use waproto::whatsapp as wa;
 use waproto::whatsapp::syncd_mutation::SyncdOperation;
 use wasm_bindgen::prelude::*;
 
@@ -44,8 +46,33 @@ export interface AppStateResult {
 }
 "#;
 
+#[wasm_bindgen(typescript_custom_section)]
+const TS_APPSTATE_OUT: &str = r#"
+/** One change to send to the other devices. `index` is the JSON-encoded index array. */
+export interface OutgoingMutation {
+  operation: 'set' | 'remove';
+  /** e.g. JSON.stringify(['archive', '4915...@s.whatsapp.net']) */
+  index: string;
+  /** Encoded SyncActionValue protobuf. */
+  value: Uint8Array;
+  /** The action's schema version (WA Web stamps each action type; most are 2, labels 3). */
+  version: number;
+}
+export interface BuiltPatch {
+  /** Encoded SyncdPatch to put into the `<patch>` node. */
+  patch: Uint8Array;
+  version: number;
+  addedMacs: AppStateMac[];
+  removedIndexMacs: Uint8Array[];
+}
+"#;
+
 #[wasm_bindgen]
 extern "C" {
+    #[wasm_bindgen(typescript_type = "OutgoingMutation[]")]
+    pub type JsOutgoingMutations;
+    #[wasm_bindgen(typescript_type = "BuiltPatch")]
+    pub type JsBuiltPatch;
     #[wasm_bindgen(typescript_type = "AppStateKeyLookup")]
     pub type JsKeyLookup;
     #[wasm_bindgen(typescript_type = "PreviousValueMacLookup")]
@@ -137,6 +164,8 @@ fn result_obj(
 pub struct AppStateCollection {
     name: String,
     state: HashState,
+    /// State after an outgoing patch built by `buildPatch`, applied by `commitPending`.
+    pending: Option<HashState>,
 }
 
 #[wasm_bindgen]
@@ -147,6 +176,7 @@ impl AppStateCollection {
         AppStateCollection {
             name: name.to_owned(),
             state: HashState::default(),
+            pending: None,
         }
     }
 
@@ -157,6 +187,7 @@ impl AppStateCollection {
         Ok(AppStateCollection {
             name: name.to_owned(),
             state,
+            pending: None,
         })
     }
 
@@ -269,5 +300,130 @@ impl AppStateCollection {
             &out.added_macs,
             &out.removed_index_macs,
         ))
+    }
+
+    /// Build, encrypt and sign a patch carrying `mutations` on top of the current state. The new
+    /// state is held as pending: call `commitPending()` once the server accepted the patch, or
+    /// `discardPending()` if it did not.
+    #[wasm_bindgen(js_name = buildPatch)]
+    pub fn build_patch(
+        &mut self,
+        key_id: &[u8],
+        key_data: &[u8],
+        mutations: JsOutgoingMutations,
+        get_previous_value_mac: JsMacLookup,
+    ) -> Result<JsBuiltPatch, JsError> {
+        use rand::Rng;
+        let keys = expand_app_state_keys(key_data);
+        let get_prev: JsValue = get_previous_value_mac.into();
+        let list: Array = JsValue::from(mutations).unchecked_into();
+        if list.length() == 0 {
+            return Err(err("no mutations"));
+        }
+        let mut built = Vec::new();
+        let mut added = Vec::new();
+        let mut removed = Vec::new();
+        for item in list.iter() {
+            let op = match Reflect::get(&item, &"operation".into())
+                .ok()
+                .and_then(|v| v.as_string())
+                .as_deref()
+            {
+                Some("set") => SyncdOperation::SET,
+                Some("remove") => SyncdOperation::REMOVE,
+                _ => return Err(err("operation must be 'set' or 'remove'")),
+            };
+            let index = Reflect::get(&item, &"index".into())
+                .ok()
+                .and_then(|v| v.as_string())
+                .ok_or_else(|| err("index must be a JSON string"))?;
+            let value_bytes = Uint8Array::new(
+                &Reflect::get(&item, &"value".into()).map_err(|_| err("value missing"))?,
+            )
+            .to_vec();
+            let version = Reflect::get(&item, &"version".into())
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(2.0) as i32;
+            let value = waproto::codec::sync_action_value_decode(&value_bytes).map_err(err)?;
+            let mut iv = [0u8; 16];
+            rand::rng().fill_bytes(&mut iv);
+            let (mutation, value_mac) =
+                encode_record(op, index.as_bytes(), &value, &keys, key_id, &iv, version);
+            let index_mac = mutation.record.index.blob.clone().unwrap_or_default();
+            if op == SyncdOperation::SET {
+                added.push((index_mac, value_mac.to_vec()));
+            } else {
+                removed.push(index_mac);
+            }
+            built.push(mutation);
+        }
+
+        let mut next = self.state.clone();
+        let (_, folded) = next.update_hash(&built, |index_mac, _| {
+            let v = call1(&get_prev, index_mac)
+                .map_err(|_| anyhow::anyhow!("previous value lookup failed"))?;
+            Ok(if v.is_undefined() || v.is_null() {
+                None
+            } else {
+                Some(Uint8Array::new(&v).to_vec())
+            })
+        });
+        folded.map_err(err)?;
+        next.version += 1;
+
+        let mut patch = wa::SyncdPatch {
+            version: buffa::MessageField::some(wa::SyncdVersion {
+                version: Some(next.version),
+            }),
+            mutations: built,
+            key_id: buffa::MessageField::some(wa::KeyId {
+                id: Some(key_id.to_vec()),
+            }),
+            snapshot_mac: Some(next.generate_snapshot_mac(&self.name, &keys.snapshot_mac)),
+            ..Default::default()
+        };
+        patch.patch_mac = Some(generate_patch_mac(
+            &patch,
+            &self.name,
+            &keys.patch_mac,
+            next.version,
+        ));
+
+        let out = Object::new();
+        set(
+            &out,
+            "patch",
+            &Uint8Array::from(waproto::codec::syncd_patch_to_vec(&patch).as_slice()),
+        );
+        set(&out, "version", &JsValue::from_f64(next.version as f64));
+        let macs = Array::new();
+        for (i, v) in &added {
+            let o = Object::new();
+            set(&o, "indexMac", &Uint8Array::from(i.as_slice()));
+            set(&o, "valueMac", &Uint8Array::from(v.as_slice()));
+            macs.push(&o);
+        }
+        set(&out, "addedMacs", &macs);
+        let rem = Array::new();
+        for i in &removed {
+            rem.push(&Uint8Array::from(i.as_slice()));
+        }
+        set(&out, "removedIndexMacs", &rem);
+        self.pending = Some(next);
+        Ok(out.unchecked_into())
+    }
+
+    /// The server accepted the patch from `buildPatch`: make its state current.
+    #[wasm_bindgen(js_name = commitPending)]
+    pub fn commit_pending(&mut self) -> Result<(), JsError> {
+        self.state = self.pending.take().ok_or_else(|| err("no pending patch"))?;
+        Ok(())
+    }
+
+    /// Drop the state from `buildPatch` (the server rejected the patch).
+    #[wasm_bindgen(js_name = discardPending)]
+    pub fn discard_pending(&mut self) {
+        self.pending = None;
     }
 }

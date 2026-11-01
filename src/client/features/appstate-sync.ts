@@ -13,7 +13,7 @@ import {
 	newAppStateCollection,
 	restoreAppStateCollection,
 } from '../../crypto/appstate.js'
-import type { AppStateMutation } from '../../crypto/appstate.js'
+import type { AppStateMutation, OutgoingMutation } from '../../crypto/appstate.js'
 import type { ProtocolLogger } from '../../logging/protocol-logger.js'
 import { encodeProto, protoType } from '../proto.js'
 import { downloadMedia } from './media.js'
@@ -21,7 +21,7 @@ import type { MediaRef } from './media.js'
 
 export const APP_STATE_COLLECTIONS = [
 	'critical_block',
-	'critical_unblock_to_primary',
+	'critical_unblock_low',
 	'regular_high',
 	'regular_low',
 	'regular',
@@ -63,13 +63,17 @@ export class AppStateSync {
 	readonly #keys = new Map<string, Uint8Array>()
 	readonly #collections = new Map<string, AppStateCollection>()
 	readonly #macs = new Map<string, Map<string, string>>()
+	#latestKeyId: string | undefined
 	#running: Promise<void> = Promise.resolve()
 
 	constructor(private readonly d: SyncDeps) {
 		mkdirSync(join(d.dir, 'keys'), { recursive: true, mode: 0o700 })
 		for (const f of readdirSync(join(d.dir, 'keys'))) {
+			if (f === '.latest') continue
 			this.#keys.set(decodeURIComponent(f), new Uint8Array(readFileSync(join(d.dir, 'keys', f))))
 		}
+		const latest = join(d.dir, 'keys', '.latest')
+		if (existsSync(latest)) this.#latestKeyId = readFileSync(latest, 'utf8')
 	}
 
 	get keyCount(): number {
@@ -82,8 +86,82 @@ export class AppStateSync {
 			const id = b64(k.keyId)
 			this.#keys.set(id, k.keyData)
 			this.#write(join(this.d.dir, 'keys', encodeURIComponent(id)), k.keyData)
+			this.#latestKeyId = id
 		}
+		if (this.#latestKeyId) this.#write(join(this.d.dir, 'keys', '.latest'), this.#latestKeyId)
 		this.d.logger.event('appstate.keys-added', { count: keys.length })
+	}
+
+	/**
+	 * Send changes to the other devices: bring the collection up to date, build + sign the patch,
+	 * push it and only then adopt the new state (a rejected patch leaves everything untouched).
+	 */
+	async push(collection: string, mutations: OutgoingMutation[]): Promise<void> {
+		const run = async () => {
+			const keyId = this.#latestKeyId
+			const keyData = keyId ? this.#keys.get(keyId) : undefined
+			if (!keyId || !keyData)
+				throw new Error('no app-state sync key yet: the phone shares it after linking')
+			await this.#sync([collection])
+			const c = this.#collection(collection)
+			const macs = this.#macsOf(collection)
+			const built = c.buildPatch(
+				new Uint8Array(Buffer.from(keyId, 'base64')),
+				keyData,
+				mutations,
+				(indexMac) => {
+					const v = macs.get(b64(indexMac))
+					return v ? new Uint8Array(Buffer.from(v, 'base64')) : undefined
+				},
+			)
+			try {
+				await this.d.request({
+					tag: 'iq',
+					attrs: { to: 's.whatsapp.net', type: 'set', xmlns: 'w:sync:app:state' },
+					content: [
+						{
+							tag: 'sync',
+							attrs: {},
+							content: [
+								{
+									tag: 'collection',
+									attrs: {
+										name: collection,
+										version: String(built.version - 1),
+										return_snapshot: 'false',
+									},
+									content: [{ tag: 'patch', attrs: {}, content: built.patch }],
+								},
+							],
+						},
+					],
+				})
+			} catch (error) {
+				c.discardPending()
+				throw error
+			}
+			c.commitPending()
+			for (const m of built.addedMacs) macs.set(b64(m.indexMac), b64(m.valueMac))
+			for (const r of built.removedIndexMacs) macs.delete(b64(r))
+			this.#persist(collection)
+			for (const m of mutations) {
+				this.d.onEvent(
+					toEvent(collection, {
+						index: JSON.parse(m.index) as string[],
+						operation: m.operation,
+						value: m.value,
+					}),
+				)
+			}
+			this.d.logger.event('appstate.pushed', {
+				collection,
+				version: built.version,
+				mutations: mutations.length,
+			})
+		}
+		const result = this.#running.then(run)
+		this.#running = result.catch(() => undefined)
+		return result
 	}
 
 	/** Sync the given collections (serialised: concurrent calls queue up). */

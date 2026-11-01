@@ -19,6 +19,8 @@ import { Receiver } from './receiver.js'
 import type { DecodedMessage } from './receiver.js'
 import { Sender } from './sender.js'
 import { AppStateSync, interpret } from './features/appstate-sync.js'
+import * as act from './features/chat-actions.js'
+import type { RangeMessage } from './features/chat-actions.js'
 import type { AppStateEvent, ChatUpdate, ContactUpdate } from './features/appstate-sync.js'
 import { Groups, parseGroupNotification } from './features/groups.js'
 import type { GroupNotification } from './features/groups.js'
@@ -233,6 +235,42 @@ export class Client {
 
 	/** Group management: `client.groups.create(...)`, `.updateParticipants(...)`, `.metadata(...)`, ... */
 	readonly groups: Groups = new Groups(async (node) => (await this.#live()).receiver.request(node))
+
+	async #push(p: act.PlannedMutation): Promise<void> {
+		await this.#live()
+		if (!this.#appState) throw new Error('not connected')
+		await this.#appState.push(p.collection, [act.toOutgoing(p)])
+	}
+
+	/** Archive / unarchive a chat on all devices. */
+	archiveChat = (jid: string, archived = true, last?: RangeMessage[]) =>
+		this.#push(act.archive(jid, archived, last))
+	/** Mute until the given unix-millisecond time (`-1` = forever), or `null` to unmute. */
+	muteChat = (jid: string, untilMs: number | null) => this.#push(act.mute(jid, untilMs))
+	pinChat = (jid: string, pinned = true) => this.#push(act.pin(jid, pinned))
+	/** Mark a chat read / unread on all devices. */
+	markChatRead = (jid: string, read = true, last?: RangeMessage[]) =>
+		this.#push(act.markRead(jid, read, last))
+	starMessage = (key: MessageKey, starred = true) => this.#push(act.star(key, starred))
+	deleteChat = (jid: string, last?: RangeMessage[]) => this.#push(act.deleteChat(jid, last))
+	clearChat = (jid: string, last?: RangeMessage[]) => this.#push(act.clearChat(jid, last))
+	deleteMessageForMe = (key: MessageKey, timestamp: number, deleteMedia = false) =>
+		this.#push(act.deleteMessageForMe(key, timestamp, deleteMedia))
+	/** Save a contact in the phone's address book, or remove it with `null`. */
+	saveContact = (jid: string, c: { fullName?: string; firstName?: string } | null) =>
+		this.#push(act.contact(jid, c))
+	/** Change the account's display name (push name). */
+	async updateProfileName(name: string): Promise<void> {
+		await this.#push(act.pushName(name))
+		this.setName(name)
+	}
+	addLabel = (l: Parameters<typeof act.addLabel>[0]) => this.#push(act.addLabel(l))
+	labelChat = (jid: string, labelId: string, labeled = true) =>
+		this.#push(act.labelChat(jid, labelId, labeled))
+	labelMessage = (jid: string, labelId: string, messageId: string, labeled = true) =>
+		this.#push(act.labelMessage(jid, labelId, messageId, labeled))
+	/** Default disappearing-messages timer for a 1:1 chat, in seconds (0 = off). */
+	setChatEphemeral = (jid: string, seconds: number) => this.#push(act.chatEphemeral(jid, seconds))
 
 	/** Remember the account's display name (used for presence). */
 	setName(name: string): void {

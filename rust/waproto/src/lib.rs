@@ -181,6 +181,13 @@ pub mod codec {
     }
 
     #[inline(never)]
+    pub fn sync_action_value_decode(
+        bytes: &[u8],
+    ) -> Result<whatsapp::SyncActionValue, buffa::DecodeError> {
+        whatsapp::SyncActionValue::decode_from_slice(bytes)
+    }
+
+    #[inline(never)]
     pub fn sync_action_value_to_vec(value: &whatsapp::SyncActionValue) -> Vec<u8> {
         value.encode_to_vec()
     }

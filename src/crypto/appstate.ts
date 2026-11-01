@@ -8,10 +8,14 @@ import type {
 	AppStateMac,
 	AppStateMutation,
 	AppStateResult,
+	BuiltPatch,
+	OutgoingMutation,
 	PreviousValueMacLookup,
 } from '../wasm/velowa_wasm_bridge.js'
 
 export type {
+	BuiltPatch,
+	OutgoingMutation,
 	AppStateKeyLookup,
 	AppStateMac,
 	AppStateMutation,
@@ -20,7 +24,7 @@ export type {
 }
 export { AppStateCollection }
 
-/** A never-synced collection (`regular`, `regular_low`, `regular_high`, `critical_block`, `critical_unblock_to_primary`). */
+/** A never-synced collection (`regular`, `regular_low`, `regular_high`, `critical_block`, `critical_unblock_low`). */
 export function newAppStateCollection(name: string): AppStateCollection {
 	ensureWasm()
 	return new AppStateCollection(name)
