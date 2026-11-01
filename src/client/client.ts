@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { initAuthCreds, loadAuthCreds, saveAuthCreds } from '../auth/creds.js'
 import type { AuthCreds } from '../auth/creds.js'
@@ -51,6 +52,7 @@ import type { GroupNotification } from './features/groups.js'
 import * as media from './features/media.js'
 import type { MediaOptions, MediaType } from './features/media.js'
 import * as msg from './features/messages.js'
+import * as callSig from './features/calls.js'
 import * as buttons from './features/buttons.js'
 import { richResponse } from './features/rich-response.js'
 import type { RichResponseOptions } from './features/rich-response.js'
@@ -622,6 +624,106 @@ export class Client {
 		})
 		return sender.sendMessage(group, gs.message, gs.opts)
 	}
+	// ---- calls ---------------------------------------------------------------------------------
+
+	readonly #calls = new Map<string, callSig.CallState>()
+
+	/** Calls this client knows about (placed or received), by call id. */
+	get calls(): ReadonlyMap<string, callSig.CallState> {
+		return this.#calls
+	}
+
+	/**
+	 * Place a voice (or video) call and let the callee's devices ring. Resolves with the call once the server accepted
+	 * the offer; follow it through the `call` events (`preaccept` = ringing, `accept`, `reject`, `terminate`).
+	 * Media is not connected here: without it the callee can answer but hears nothing, and the call ends.
+	 */
+	async startCall(to: string, o: { video?: boolean } = {}): Promise<callSig.CallState> {
+		const { sender, receiver } = await this.#live()
+		const own = this.#creds.me?.lid
+		if (!own) throw new Error('no own LID yet; wait for the login to finish')
+		// The call key is bound to LIDs, so a phone-number callee is resolved first.
+		let peer = to.replace(/:\d+@/, '@')
+		if (!peer.endsWith('@lid')) {
+			const found = (await this.lidsFor(peer)).find((x) => x.pn === peer)
+			if (!found) throw new Error(`no LID known for ${peer}`)
+			peer = found.lid
+		}
+		const devices = await sender.getDevices([peer])
+		const ring = devices.map((d) => d.jid)
+		if (!ring.length) throw new Error(`no devices found for ${peer}`)
+		const callKey = new Uint8Array(randomBytes(32))
+		const keys = await sender.encryptForDevices(ring, { call: { callKey } })
+		if (!keys.length) throw new Error('could not encrypt the call key for any device')
+		const callId = callSig.newCallId()
+		const id = receiver.nextId()
+		const offer = callSig.buildOffer({
+			callId,
+			to: peer,
+			creator: own,
+			keys: keys.map((k) => ({ jid: k.jid, type: k.type, ciphertext: k.ciphertext })),
+			multiDevice: ring.length > 1,
+			video: !!o.video,
+			id,
+			...(keys.some((k) => k.type === 'pkmsg') &&
+				this.#creds.account && { deviceIdentity: this.#creds.account }),
+		})
+		const state: callSig.CallState = {
+			callId,
+			peer,
+			creator: own,
+			direction: 'outgoing',
+			video: !!o.video,
+			devices: ring,
+			status: 'calling',
+			startedAt: Date.now(),
+			callKey,
+		}
+		this.#calls.set(callId, state)
+		try {
+			const ack = await receiver.sendCallAndWait(offer)
+			const relay = (Array.isArray(ack.content) ? ack.content : []).find((c) => c.tag === 'relay')
+			if (relay) state.relay = relay
+		} catch (e) {
+			state.status = 'ended'
+			throw e
+		}
+		return state
+	}
+
+	#trackCall(c: extras.CallEvent, node: BinaryNode): void {
+		const st = this.#calls.get(c.callId)
+		if (st) {
+			if (c.status === 'preaccept' || c.status === 'ringing') st.status = 'ringing'
+			else if (c.status === 'accept') st.status = 'connected'
+			else if (c.status === 'reject' || c.status === 'terminate') st.status = 'ended'
+			return
+		}
+		if (c.status === 'offer')
+			this.#calls.set(c.callId, {
+				callId: c.callId,
+				peer: (c.creator ?? c.from).replace(/:\d+@/, '@'),
+				creator: c.creator ?? c.from,
+				direction: 'incoming',
+				video: !!c.isVideo,
+				devices: [c.creator ?? c.from],
+				status: 'ringing',
+				startedAt: Date.now(),
+				...(c.isGroup && { group: c.from }),
+			})
+		void node
+	}
+
+	/** Hang up a call we placed or answered (also cancels one that is still ringing). */
+	async endCall(callId: string): Promise<void> {
+		const c = this.#calls.get(callId)
+		if (!c) throw new Error(`unknown call ${callId}`)
+		const { receiver } = await this.#live()
+		for (const device of c.devices)
+			receiver.sendNode(callSig.buildTerminate(callId, device, c.creator, receiver.nextId()))
+		c.status = 'ended'
+	}
+
 	// ---- buttons, lists, templates, rich answers ----------------------------------------------
 
 	/** Up to three reply buttons under a text (`buttonsMessage`). The tap arrives as a `message` event; see `parseButtonReply`. */
@@ -1163,6 +1265,7 @@ export class Client {
 			},
 			onCall: (node) => {
 				const c = extras.parseCall(node)
+				if (c) this.#trackCall(c, node)
 				if (c) this.#events.emit('call', c)
 			},
 			onReceipt: (node) => {

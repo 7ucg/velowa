@@ -440,6 +440,29 @@ export class Sender {
 		}
 	}
 
+	/**
+	 * Encrypt one message (e.g. a call key) separately for each device. Sessions are fetched first; a device that
+	 * cannot be keyed is skipped, as the app does, so one broken device does not stop the rest.
+	 */
+	async encryptForDevices(
+		jids: string[],
+		message: Record<string, unknown>,
+	): Promise<{ jid: string; type: 'msg' | 'pkmsg'; ciphertext: Uint8Array }[]> {
+		await this.assertSessions(jids)
+		const plain = padRandomMax16(encodeProto('Message', message))
+		const out: { jid: string; type: 'msg' | 'pkmsg'; ciphertext: Uint8Array }[] = []
+		for (const jid of jids) {
+			try {
+				const a = this.addr(jid)
+				const enc = await this.d.cipher.encrypt(a.name, a.device, plain)
+				out.push({ jid, type: enc.type as 'msg' | 'pkmsg', ciphertext: enc.ciphertext })
+			} catch (e) {
+				this.d.logger.event('call.encrypt-skipped', { jid, error: e })
+			}
+		}
+		return out
+	}
+
 	// ---- 1:1 -----------------------------------------------------------------------------------
 
 	async #directStanza(

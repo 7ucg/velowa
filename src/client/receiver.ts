@@ -107,6 +107,8 @@ export function buildAck(node: BinaryNode, meId?: string): BinaryNode {
 export class Receiver {
 	readonly #pending = new Map<string, { resolve(n: BinaryNode): void; reject(e: Error): void }>()
 	readonly #acks = new Map<string, { resolve(n: BinaryNode): void; reject(e: Error): void }>()
+	/** Acks of our own `<call>` stanzas (class=call), by stanza id. */
+	readonly #callAcks = new Map<string, { resolve(n: BinaryNode): void; reject(e: Error): void }>()
 	readonly #retryCounts = new Map<string, number>()
 	readonly #secrets = new MessageSecrets()
 	/** poll id -> options and who created it (from our own state or the creation message's author). */
@@ -126,6 +128,17 @@ export class Receiver {
 				this.#pending.delete(node.attrs['id']!)
 				if (node.attrs['type'] === 'error')
 					p.reject(new Error(`iq error: ${JSON.stringify(node.content)}`))
+				else p.resolve(node)
+				return true
+			}
+			return false
+		}
+		if (node.tag === 'ack' && node.attrs['class'] === 'call') {
+			const p = this.#callAcks.get(node.attrs['id'] ?? '')
+			if (p) {
+				this.#callAcks.delete(node.attrs['id']!)
+				if (node.attrs['error'])
+					p.reject(new Error(`call rejected by server (error ${node.attrs['error']})`))
 				else p.resolve(node)
 				return true
 			}
@@ -239,6 +252,28 @@ export class Receiver {
 	}
 
 	/** Send a message stanza and resolve with the server's `<ack class="message">`. */
+	/** Send a `<call>` stanza and wait for the server's `<ack class=call>` to it (the offer's carries the relay). */
+	sendCallAndWait(node: BinaryNode, timeoutMs = 20_000): Promise<BinaryNode> {
+		const id = node.attrs['id'] ?? ''
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				this.#callAcks.delete(id)
+				reject(new Error(`no server ack for call stanza ${id}`))
+			}, timeoutMs)
+			this.#callAcks.set(id, {
+				resolve: (n) => (clearTimeout(timer), resolve(n)),
+				reject: (e) => (clearTimeout(timer), reject(e)),
+			})
+			try {
+				this.d.send(node)
+			} catch (e) {
+				clearTimeout(timer)
+				this.#callAcks.delete(id)
+				reject(e as Error)
+			}
+		})
+	}
+
 	sendAndWaitAck(node: BinaryNode): Promise<BinaryNode> {
 		const id = node.attrs['id'] ?? ''
 		return new Promise((resolve, reject) => {
