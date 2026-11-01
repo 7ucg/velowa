@@ -20,6 +20,7 @@ describe('rich response', () => {
 			table: { rows: [['a', 'b']] },
 			latex: 'x^2',
 			map: { latitude: 1, longitude: 2 },
+			html: '<b>hi</b>',
 			imageUrl: 'https://example.com/a.png',
 		})
 		const rich = (r.message['botForwardedMessage'] as { message: { richResponseMessage: any } })
@@ -31,6 +32,7 @@ describe('rich response', () => {
 			'GenAITableUXPrimitive',
 			'GenAILatexUXPrimitive',
 			'GenAIMapUXPrimitive',
+			'FOAHtmlPrimitiveDemoDONOTUSE',
 			'GenAIInlineImageUXPrimitive',
 		])
 		expect(rich.contextInfo.forwardedAiBotMessageInfo.botJid).toMatch(/@bot$/)

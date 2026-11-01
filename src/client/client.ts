@@ -658,6 +658,9 @@ export class Client {
 		return sender.sendMessage(to, m.message, m.opts)
 	}
 
+	/** Raw HTML as a Meta AI answer (experimental on WhatsApp's side). */
+	sendHtml = (to: string, html: string) => this.sendRichResponse(to, { html })
+
 	// ---- reports ----------------------------------------------------------------------------
 
 	readonly #reports = new report.ReportStore()

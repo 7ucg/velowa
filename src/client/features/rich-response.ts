@@ -81,6 +81,8 @@ export interface RichResponseOptions {
 		title?: string
 		annotations?: unknown[]
 	}
+	/** Raw HTML shown in the answer (an experimental surface WhatsApp ships under an internal name). */
+	html?: string
 	imageUrl?: string
 	imageUrls?: string[]
 	/** The bot the answer is attributed to (default: Meta AI). */
@@ -89,6 +91,7 @@ export interface RichResponseOptions {
 }
 
 const section = (primitive: Record<string, unknown>, typename: string) => ({
+	__typename: 'GenAIUnifiedResponseSection',
 	view_model: {
 		primitive: { ...primitive, __typename: typename },
 		__typename: 'GenAISingleLayoutViewModel',
@@ -138,13 +141,21 @@ export function richResponse(o: RichResponseOptions): {
 				'GenAIMapUXPrimitive',
 			),
 		)
+	if (o.html !== undefined)
+		sections.push(
+			section({ trusted_sources: [], payload: o.html.trim() }, 'FOAHtmlPrimitiveDemoDONOTUSE'),
+		)
 	if (o.imageUrl) sections.push(section({ url: o.imageUrl }, 'GenAIInlineImageUXPrimitive'))
 	if (o.imageUrls?.length)
 		sections.push(
 			section({ urls: o.imageUrls.map((url) => ({ url })) }, 'GenAIGridImageUXPrimitive'),
 		)
 	if (!sections.length) sections.push(section({ text: '' }, 'GenAIMarkdownTextUXPrimitive'))
-	const data = { response_id: o.responseId ?? randomUUID(), sections }
+	const data = {
+		__typename: 'GenAIUnifiedResponse',
+		response_id: o.responseId ?? randomUUID(),
+		sections,
+	}
 	return {
 		message: {
 			messageContextInfo: {
@@ -159,10 +170,10 @@ export function richResponse(o: RichResponseOptions): {
 						messageType: 1,
 						unifiedResponse: { data: Buffer.from(JSON.stringify(data)) },
 						contextInfo: {
-							forwardingScore: 2,
+							forwardingScore: 1,
 							isForwarded: true,
-							forwardedAiBotMessageInfo: { botJid: o.botJid ?? '259786046210223@bot' },
-							botMessageSharingInfo: { botEntryPointOrigin: 1, forwardScore: 2 },
+							forwardOrigin: 4,
+							forwardedAiBotMessageInfo: { botJid: o.botJid ?? '867051314767696@bot' },
 						},
 					},
 				},
