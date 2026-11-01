@@ -43,7 +43,7 @@
 		"@types/node": "^22.0.0",
 		"@types/qrcode-terminal": "^0.12.2",
 		"@types/ws": "^8.18.2",
-		"eslint": "^9",
+		"eslint": "^10",
 		"eslint-config-prettier": "^10.1.8",
 		"prettier": "^3.5.3",
 		"publint": "^0.3.25",
