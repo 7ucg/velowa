@@ -52,6 +52,7 @@ import type { GroupNotification } from './features/groups.js'
 import * as media from './features/media.js'
 import type { MediaOptions, MediaType } from './features/media.js'
 import * as msg from './features/messages.js'
+import { MediaSession } from './call-media.js'
 import * as callSig from './features/calls.js'
 import * as buttons from './features/buttons.js'
 import { richResponse } from './features/rich-response.js'
@@ -638,7 +639,10 @@ export class Client {
 	 * the offer; follow it through the `call` events (`preaccept` = ringing, `accept`, `reject`, `terminate`).
 	 * Media is not connected here: without it the callee can answer but hears nothing, and the call ends.
 	 */
-	async startCall(to: string, o: { video?: boolean } = {}): Promise<callSig.CallState> {
+	async startCall(
+		to: string,
+		o: { video?: boolean; audioIn?: Int16Array } = {},
+	): Promise<callSig.CallState> {
 		const { sender, receiver } = await this.#live()
 		const own = this.#creds.me?.lid
 		if (!own) throw new Error('no own LID yet; wait for the login to finish')
@@ -683,7 +687,22 @@ export class Client {
 		try {
 			const ack = await receiver.sendCallAndWait(offer)
 			const relay = (Array.isArray(ack.content) ? ack.content : []).find((c) => c.tag === 'relay')
-			if (relay) state.relay = relay
+			if (relay) {
+				state.relay = relay
+				// The media path: allocate on the relay now, so audio flows the moment the callee picks up.
+				const media = new MediaSession({
+					callId,
+					direction: 'outgoing',
+					selfLid: own,
+					peerLid: peer,
+					callKey,
+					relay,
+					...(o.audioIn && { audioIn: o.audioIn }),
+				})
+				state.media = media
+				media.on('closed', () => void 0)
+				media.start()
+			}
 		} catch (e) {
 			state.status = 'ended'
 			throw e
@@ -691,27 +710,68 @@ export class Client {
 		return state
 	}
 
-	#trackCall(c: extras.CallEvent, node: BinaryNode): void {
+	#trackCall(c: extras.CallEvent): void {
+		const userOf = (jid: string): string => jid.split('@')[0]!.replace(/[:.]\d+$/, '')
 		const st = this.#calls.get(c.callId)
 		if (st) {
+			// Only the other side of this very call may move it: a stanza from anyone else (or from a different
+			// account that guessed the call id) is ignored.
+			const allowed = st.group ? c.from === st.group : userOf(c.from) === userOf(st.peer)
+			if (!allowed) {
+				this.logger.event('call.ignored-stanza', {
+					callId: c.callId,
+					from: c.from,
+					status: c.status,
+				})
+				return
+			}
 			if (c.status === 'preaccept' || c.status === 'ringing') st.status = 'ringing'
-			else if (c.status === 'accept') st.status = 'connected'
-			else if (c.status === 'reject' || c.status === 'terminate') st.status = 'ended'
+			else if (c.status === 'accept') {
+				st.status = 'connected'
+				// The answering device's LID decides the keys we receive with.
+				st.media?.rekeyRecv(c.from)
+			} else if (c.status === 'reject' || c.status === 'terminate') this.#finishCall(st, c.status)
 			return
 		}
-		if (c.status === 'offer')
-			this.#calls.set(c.callId, {
-				callId: c.callId,
-				peer: (c.creator ?? c.from).replace(/:\d+@/, '@'),
-				creator: c.creator ?? c.from,
-				direction: 'incoming',
-				video: !!c.isVideo,
-				devices: [c.creator ?? c.from],
-				status: 'ringing',
-				startedAt: Date.now(),
-				...(c.isGroup && { group: c.from }),
-			})
-		void node
+		if (c.status !== 'offer') return
+		// The creator named in the offer has to be the account the stanza really came from (groups: the group).
+		const creator = c.creator ?? c.from
+		if (!c.isGroup && userOf(creator) !== userOf(c.from)) {
+			this.logger.event('call.ignored-offer', { callId: c.callId, from: c.from, creator })
+			return
+		}
+		this.#calls.set(c.callId, {
+			callId: c.callId,
+			peer: creator.replace(/:\d+@/, '@'),
+			creator,
+			direction: 'incoming',
+			video: !!c.isVideo,
+			devices: [creator],
+			status: 'ringing',
+			startedAt: Date.now(),
+			...(c.isGroup && { group: c.from }),
+		})
+		this.#pruneCalls()
+	}
+
+	/** Mark a call over: stop its media, forget its key. */
+	#finishCall(st: callSig.CallState, reason: string): void {
+		st.status = 'ended'
+		st.media?.close(reason)
+		delete st.media
+		st.callKey?.fill(0)
+		delete st.callKey
+		this.#pruneCalls()
+	}
+
+	/** Keep the call table small: at most 200 entries, ended calls go first. */
+	#pruneCalls(): void {
+		if (this.#calls.size <= 200) return
+		for (const [id, c] of this.#calls) {
+			if (c.status === 'ended') this.#calls.delete(id)
+			if (this.#calls.size <= 200) return
+		}
+		while (this.#calls.size > 200) this.#calls.delete(this.#calls.keys().next().value!)
 	}
 
 	/** Hang up a call we placed or answered (also cancels one that is still ringing). */
@@ -721,7 +781,7 @@ export class Client {
 		const { receiver } = await this.#live()
 		for (const device of c.devices)
 			receiver.sendNode(callSig.buildTerminate(callId, device, c.creator, receiver.nextId()))
-		c.status = 'ended'
+		this.#finishCall(c, 'hangup')
 	}
 
 	// ---- buttons, lists, templates, rich answers ----------------------------------------------
@@ -1265,7 +1325,7 @@ export class Client {
 			},
 			onCall: (node) => {
 				const c = extras.parseCall(node)
-				if (c) this.#trackCall(c, node)
+				if (c) this.#trackCall(c)
 				if (c) this.#events.emit('call', c)
 			},
 			onReceipt: (node) => {

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { BinaryNode } from '../../codec/index.js'
+import type { MediaSession } from '../call-media.js'
 
 // Call signaling (`<call>` stanzas). Builders follow wacore's stanza/call.rs; child order and attributes matter:
 // the server answers 439 for an offer whose children are out of order.
@@ -57,6 +58,8 @@ export interface OfferOptions {
 	/** The callee has more than one device even if only one key survived: keep the addressed shape. */
 	multiDevice?: boolean
 	video?: boolean
+	/** Announce standard Opus instead of MLow. */
+	opus?: boolean
 	/** Signaling rates in preference order. */
 	audioRates?: string[]
 	/** Stanza id; the relay for the media path comes back in the ack to this id. */
@@ -156,4 +159,6 @@ export interface CallState {
 	callKey?: Uint8Array
 	/** The server's `<relay>` block from the offer ack (outgoing) or the offer (incoming). */
 	relay?: BinaryNode
+	/** The media path (relay socket + engine) once the call has a relay. */
+	media?: MediaSession
 }

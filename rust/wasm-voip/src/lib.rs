@@ -1,0 +1,305 @@
+//! wasm-bindgen bridge for the vendored call stack. It owns no socket and no clock: JavaScript feeds relay datagrams,
+//! microphone frames and timer ticks in, and drains the engine's outputs (datagrams to send, PCM to play, events).
+
+mod relay;
+
+use wacore_voip::voip::{
+    AudioConfig, CallConfig, CallDirection, CallEngine as CoreCallEngine, CallEvent, Input, NEVER,
+    Output, TxIdSource,
+};
+use wacore_voip::voip_control::relay_parse;
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen(start)]
+pub fn start() {
+    console_error_panic_hook::set_once();
+}
+
+fn to_js_object<T: serde::Serialize + ?Sized>(value: &T) -> Result<JsValue, JsValue> {
+    let serializer = serde_wasm_bindgen_like::Serializer;
+    serializer.to_js(value)
+}
+
+/// Minimal serde -> JS object serializer built on JSON (plain objects, byte arrays as number arrays).
+mod serde_wasm_bindgen_like {
+    use wasm_bindgen::JsValue;
+    pub struct Serializer;
+    impl Serializer {
+        pub fn to_js<T: serde::Serialize + ?Sized>(&self, value: &T) -> Result<JsValue, JsValue> {
+            let json = serde_json::to_string(value).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            js_sys::JSON::parse(&json)
+        }
+    }
+}
+
+/// Parse the `<relay>` block of an encoded `<ack>` (or `<offer>`-carrying) node and return what the engine needs to
+/// allocate the media relay: `relay_ip`, `relay_port`, `relay_token`, `auth_token`, `integrity_key`, `warp_mi_tag_len`.
+#[wasm_bindgen(js_name = parseRelayFromNode)]
+pub fn parse_relay_from_node(encoded_node: &[u8]) -> Result<JsValue, JsValue> {
+    let unpacked = wacore_binary::util::unpack(encoded_node)
+        .map_err(|e| JsValue::from_str(&format!("unpack error: {e}")))?;
+    let node = wacore_binary::marshal::unmarshal_ref(&unpacked)
+        .map_err(|e| JsValue::from_str(&format!("decode error: {e}")))?;
+    let relay_data = relay_parse::parse_relay_data_from_ack(&node)
+        .ok_or_else(|| JsValue::from_str("no <relay> child on this node"))?;
+    let endpoint = relay_parse::get_media_relay_endpoint(&relay_data)
+        .ok_or_else(|| JsValue::from_str("relay has no usable media endpoint"))?;
+    let (relay_ip, relay_port) = relay_parse::get_primary_ipv4_address(endpoint)
+        .ok_or_else(|| JsValue::from_str("relay endpoint has no IPv4 address"))?;
+    let relay_token = relay_data
+        .relay_tokens
+        .get(endpoint.token_id as usize)
+        .filter(|t| !t.is_empty())
+        .cloned()
+        .ok_or_else(|| JsValue::from_str("relay has no token for this endpoint"))?;
+    let auth_token = relay_data
+        .auth_tokens
+        .get(endpoint.auth_token_id as usize)
+        .filter(|t| !t.is_empty())
+        .cloned()
+        .unwrap_or_default();
+    let integrity_key = relay_data
+        .relay_key_ascii
+        .clone()
+        .ok_or_else(|| JsValue::from_str("relay has no <key> (STUN integrity key)"))?;
+    #[derive(serde::Serialize)]
+    struct RelayConfig {
+        relay_ip: String,
+        relay_port: u16,
+        relay_token: Vec<u8>,
+        auth_token: Vec<u8>,
+        integrity_key: Vec<u8>,
+        warp_mi_tag_len: u32,
+    }
+    to_js_object(&RelayConfig {
+        relay_ip,
+        relay_port,
+        relay_token,
+        auth_token,
+        integrity_key,
+        warp_mi_tag_len: relay_data.warp_mi_tag_len.unwrap_or(4),
+    })
+}
+
+/// The participant SSRC the engine derives for `slot_word` (0 = audio, 1 = video).
+#[wasm_bindgen(js_name = deriveCallParticipantSsrc)]
+pub fn derive_call_participant_ssrc(call_id: &str, self_lid: &str, slot_word: u32) -> u32 {
+    let participant_id = wacore_voip::voip_control::ssrc::format_e2e_srtp_participant_id(self_lid);
+    wacore_voip::voip_control::ssrc::derive_wasm_participant_ssrc(call_id, &participant_id, slot_word)
+}
+
+struct RngTxIds;
+impl TxIdSource for RngTxIds {
+    fn next_tx_id(&mut self) -> [u8; 12] {
+        rand::random()
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct EngineConfigJson {
+    call_id: String,
+    /// "incoming" or "outgoing".
+    direction: String,
+    self_lid: String,
+    peer_lid: String,
+    call_key: Vec<u8>,
+    ssrc: u32,
+    relay_token: Vec<u8>,
+    #[serde(default)]
+    auth_token: Vec<u8>,
+    relay_ip: String,
+    relay_port: u16,
+    integrity_key: Vec<u8>,
+    warp_mi_tag_len: usize,
+    enable_media: bool,
+    #[serde(default)]
+    enable_video: bool,
+    enable_sframe: bool,
+}
+
+fn call_config_from_json(json: &str) -> Result<CallConfig, String> {
+    let c: EngineConfigJson =
+        serde_json::from_str(json).map_err(|e| format!("invalid engine config JSON: {e}"))?;
+    let direction = match c.direction.as_str() {
+        "incoming" => CallDirection::Incoming,
+        "outgoing" => CallDirection::Outgoing,
+        other => return Err(format!("direction must be incoming|outgoing, got {other:?}")),
+    };
+    Ok(CallConfig {
+        call_id: c.call_id,
+        direction,
+        self_lid: c.self_lid,
+        peer_lid: c.peer_lid,
+        call_key: c.call_key,
+        ssrc: c.ssrc,
+        audio: AudioConfig::MLOW_PCM,
+        relay_token: c.relay_token,
+        auth_token: c.auth_token,
+        relay_ip: c.relay_ip,
+        relay_port: c.relay_port,
+        integrity_key: c.integrity_key,
+        warp_mi_tag_len: c.warp_mi_tag_len,
+        enable_media: c.enable_media,
+        enable_video: c.enable_video,
+        enable_sframe: c.enable_sframe,
+    })
+}
+
+/// What `pollOutput` yields.
+const OUT_TIMEOUT: i32 = 0;
+const OUT_TRANSMIT: i32 = 1;
+const OUT_PLAYOUT: i32 = 2;
+const OUT_EVENT: i32 = 3;
+const OUT_VIDEO: i32 = 4;
+const OUT_OTHER: i32 = 5;
+
+/// Sans-IO call engine: the relay control plane (STUN allocate, keepalive) and the media plane (MLow PCM, E2E-SRTP).
+/// Feed inputs, then drain `pollOutput` until it returns 0 and arm one timer for `lastTimeout`.
+#[wasm_bindgen]
+pub struct CallEngine {
+    inner: CoreCallEngine,
+    last: Option<Output>,
+}
+
+#[wasm_bindgen]
+impl CallEngine {
+    #[wasm_bindgen(js_name = create)]
+    pub fn create(config_json: &str) -> Result<CallEngine, JsValue> {
+        let cfg = call_config_from_json(config_json).map_err(|e| JsValue::from_str(&e))?;
+        CoreCallEngine::new(cfg, Box::new(RngTxIds))
+            .map(|inner| CallEngine { inner, last: None })
+            .map_err(|e| JsValue::from_str(&format!("CallEngine.create: {e}")))
+    }
+
+    /// Start the call (relay allocate). `now` is monotonic ms, `wallclockMs` unix epoch ms.
+    pub fn start(&mut self, now: f64, wallclock_ms: f64) {
+        self.inner.start(now as u64, wallclock_ms as u64);
+    }
+
+    #[wasm_bindgen(js_name = handleRelayPacket)]
+    pub fn handle_relay_packet(&mut self, now: f64, packet: &[u8]) {
+        self.inner.handle_input(now as u64, Input::RelayPacket(packet));
+    }
+
+    /// One 60 ms mic frame: exactly 960 samples, 16 kHz mono.
+    #[wasm_bindgen(js_name = handleMicFrame)]
+    pub fn handle_mic_frame(&mut self, now: f64, pcm: &[i16]) {
+        self.inner.handle_input(now as u64, Input::MicFrame(pcm));
+    }
+
+    /// One H.264 Annex-B access unit (video calls).
+    #[wasm_bindgen(js_name = handleVideoFrame)]
+    pub fn handle_video_frame(&mut self, now: f64, frame: &[u8]) {
+        self.inner.handle_input(now as u64, Input::VideoFrame(frame));
+    }
+
+    #[wasm_bindgen(js_name = handleTimeout)]
+    pub fn handle_timeout(&mut self, now: f64) {
+        self.inner.handle_input(now as u64, Input::Timeout);
+    }
+
+    /// Drain one output: 0 = drained (timer armed), 1 = datagram to send, 2 = PCM to play, 3 = event, 4 = video
+    /// access unit from the peer, 5 = something else (ignore).
+    #[wasm_bindgen(js_name = pollOutput)]
+    pub fn poll_output(&mut self) -> i32 {
+        let out = self.inner.poll_output();
+        let kind = match &out {
+            Output::Timeout(_) => OUT_TIMEOUT,
+            Output::Transmit(_) | Output::RetransmitVideo(_) => OUT_TRANSMIT,
+            Output::Playout(_) => OUT_PLAYOUT,
+            Output::Event(_) => OUT_EVENT,
+            Output::VideoPlayout(_) => OUT_VIDEO,
+            _ => OUT_OTHER,
+        };
+        self.last = Some(out);
+        kind
+    }
+
+    #[wasm_bindgen(js_name = takeTransmit)]
+    pub fn take_transmit(&mut self) -> Option<Vec<u8>> {
+        match self.last.take() {
+            Some(Output::Transmit(b)) | Some(Output::RetransmitVideo(b)) => Some(b.to_vec()),
+            other => {
+                self.last = other;
+                None
+            }
+        }
+    }
+
+    #[wasm_bindgen(js_name = takePlayout)]
+    pub fn take_playout(&mut self) -> Option<Vec<i16>> {
+        match self.last.take() {
+            Some(Output::Playout(p)) => Some(p),
+            other => {
+                self.last = other;
+                None
+            }
+        }
+    }
+
+    /// The peer's video access unit (Annex-B bytes) of the last `4` output.
+    #[wasm_bindgen(js_name = takeVideo)]
+    pub fn take_video(&mut self) -> Option<Vec<u8>> {
+        match self.last.take() {
+            Some(Output::VideoPlayout(v)) => Some(v.data.to_vec()),
+            other => {
+                self.last = other;
+                None
+            }
+        }
+    }
+
+    /// Name of the last `3` output's event (`RelayAllocated`, `MediaConnected`, ...); empty if none.
+    #[wasm_bindgen(js_name = eventName)]
+    pub fn event_name(&self) -> String {
+        match &self.last {
+            Some(Output::Event(e)) => {
+                let d = format!("{e:?}");
+                d.split(['(', ' ', '{']).next().unwrap_or("").to_string()
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// STUN error code of a `RelayAllocateFailed` event, or -1.
+    #[wasm_bindgen(js_name = eventCode)]
+    pub fn event_code(&self) -> i32 {
+        match &self.last {
+            Some(Output::Event(CallEvent::RelayAllocateFailed(c))) => *c as i32,
+            _ => -1,
+        }
+    }
+
+    /// Deadline (ms) of the last `0` output, or -1 for none.
+    #[wasm_bindgen(js_name = lastTimeout)]
+    pub fn last_timeout(&self) -> f64 {
+        match &self.last {
+            Some(Output::Timeout(m)) if *m != NEVER => *m as f64,
+            _ => -1.0,
+        }
+    }
+
+    #[wasm_bindgen(js_name = pollTimeout)]
+    pub fn poll_timeout(&self) -> f64 {
+        match self.inner.poll_timeout() {
+            Some(m) if m != NEVER => m as f64,
+            _ => -1.0,
+        }
+    }
+
+    /// Re-derive the receive keys once the answering device is known.
+    #[wasm_bindgen(js_name = rekeyRecv)]
+    pub fn rekey_recv(&mut self, answering_peer_lid: &str) -> bool {
+        self.inner.rekey_recv(answering_peer_lid)
+    }
+
+    #[wasm_bindgen(js_name = isAllocated)]
+    pub fn is_allocated(&self) -> bool {
+        self.inner.is_allocated()
+    }
+
+    #[wasm_bindgen(js_name = isTerminated)]
+    pub fn is_terminated(&self) -> bool {
+        self.inner.is_terminated()
+    }
+}

@@ -17,14 +17,15 @@
 	"license": "MIT",
 	"scripts": {
 		"build:wasm": "wasm-pack build rust/wasm-bridge --target web --out-dir ../../src/wasm",
-		"build": "npm run build:wasm && tsc -p tsconfig.json && rm -rf dist/wasm && cp -r src/wasm dist/wasm && rm -f dist/wasm/.gitignore dist/wasm/package.json",
+		"build": "npm run build:wasm && npm run build:wasm-voip && tsc -p tsconfig.json && rm -rf dist/wasm dist/wasm-voip && cp -r src/wasm dist/wasm && cp -r src/wasm-voip dist/wasm-voip && rm -f dist/wasm/.gitignore dist/wasm/package.json dist/wasm-voip/.gitignore dist/wasm-voip/package.json",
 		"typecheck": "tsc --noEmit",
 		"lint": "tsc --noEmit && eslint src",
 		"format": "prettier --write src",
 		"test": "vitest run",
 		"prepack": "npm run build",
 		"pair": "tsc -p tsconfig.json && node dist/cli/pair.js",
-		"example": "npm run build && node examples/example.js"
+		"example": "npm run build && node examples/example.js",
+		"build:wasm-voip": "wasm-pack build rust/wasm-voip --target web --out-dir ../../src/wasm-voip"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",
