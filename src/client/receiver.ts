@@ -4,6 +4,7 @@ import { newPreKeys } from '../crypto/signal.js'
 import type { SignalCipher, SignalStorage } from '../crypto/signal.js'
 import { jidDecode, signalAddress, signalAddressString } from '../jid.js'
 import type { ProtocolLogger } from '../logging/protocol-logger.js'
+import { callAck } from './features/extras.js'
 import { MessageSecrets, decryptMsmsg, extractMetaAiText } from './meta-ai.js'
 import { protoType } from './proto.js'
 
@@ -24,6 +25,8 @@ export interface ReceiverDeps {
 	onMessage?(m: DecodedMessage): void
 	/** Called with every notification (after it was acked). */
 	onNotification?(n: BinaryNode): void
+	/** Called with every incoming call stanza (after it was acked). */
+	onCall?(n: BinaryNode): void
 	/** Called with every receipt (after it was acked). */
 	onReceipt?(n: BinaryNode): void
 	/** The phone announced a history chunk (`historySyncNotification`). */
@@ -123,6 +126,11 @@ export class Receiver {
 				return true
 			}
 			return false
+		}
+		if (node.tag === 'call') {
+			this.#sendSafe(callAck(node))
+			this.d.onCall?.(node)
+			return true
 		}
 		if (node.tag === 'message' || node.tag === 'receipt' || node.tag === 'notification') {
 			this.#queue = this.#queue

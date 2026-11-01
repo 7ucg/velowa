@@ -257,3 +257,37 @@ export async function updatePrivacy(
 		],
 	})
 }
+
+/**
+ * Set a profile picture for ourselves (no `jid`) or a group. WhatsApp wants a square JPEG (640x640 is
+ * what the apps send); no image library is bundled, so resize beforehand.
+ */
+export async function updateProfilePicture(
+	request: RequestFn,
+	jpeg: Uint8Array,
+	jid?: string,
+): Promise<void> {
+	if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) throw new Error('profile pictures must be JPEG')
+	await request({
+		tag: 'iq',
+		attrs: {
+			to: 's.whatsapp.net',
+			type: 'set',
+			xmlns: 'w:profile:picture',
+			...(jid && { target: jid }),
+		},
+		content: [{ tag: 'picture', attrs: { type: 'image' }, content: jpeg }],
+	})
+}
+
+export async function removeProfilePicture(request: RequestFn, jid?: string): Promise<void> {
+	await request({
+		tag: 'iq',
+		attrs: {
+			to: 's.whatsapp.net',
+			type: 'set',
+			xmlns: 'w:profile:picture',
+			...(jid && { target: jid }),
+		},
+	})
+}

@@ -496,6 +496,12 @@ function withMessageSecret(message: Record<string, unknown>): Record<string, unk
 function messageType(message: Record<string, unknown>): string {
 	if (message['reactionMessage']) return 'reaction'
 	if (
+		message['pollCreationMessage'] ||
+		message['pollCreationMessageV2'] ||
+		message['pollCreationMessageV3']
+	)
+		return 'poll'
+	if (
 		['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage'].some(
 			(k) => message[k],
 		)

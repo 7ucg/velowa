@@ -23,6 +23,7 @@ import * as act from './features/chat-actions.js'
 import type { RangeMessage } from './features/chat-actions.js'
 import type { AppStateEvent, ChatUpdate, ContactUpdate } from './features/appstate-sync.js'
 import * as contacts from './features/contacts.js'
+import * as extras from './features/extras.js'
 import { parsePresence, parseReceipt } from './features/events.js'
 import type { PresenceEvent, ReceiptEvent } from './features/events.js'
 import { Communities } from './features/communities.js'
@@ -70,6 +71,8 @@ export type ClientEvents = {
 	receipt: ReceiptEvent
 	/** Online/offline and typing indicators (after `subscribePresence`, or in open chats). */
 	presence: PresenceEvent
+	/** An incoming (or ended) call. Decline with `rejectCall`. */
+	call: extras.CallEvent
 	/** A chunk of chat history announced by the phone after linking (chats, messages, push names). */
 	history: HistoryChunk
 	/** A group changed (members, subject, settings). */
@@ -204,7 +207,8 @@ export class Client {
 		const uploaded = await media.uploadMedia(await this.#getMediaConn(), type, enc)
 		const built = media.mediaMessage(type, enc, uploaded, opts)
 		const message = msg.withContext(built.message, to, opts, meId)
-		return sender.sendMessage(to, message, { encAttrs: { mediatype: built.mediaType } })
+		const wire = opts.viewOnce ? extras.viewOnce(message) : message
+		return sender.sendMessage(to, wire, { encAttrs: { mediatype: built.mediaType } })
 	}
 
 	sendImage = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
@@ -327,6 +331,33 @@ export class Client {
 	fetchPrivacySettings = () => contacts.fetchPrivacySettings(this.#q)
 	updatePrivacy = (name: contacts.PrivacyCategory, value: contacts.PrivacyValue) =>
 		contacts.updatePrivacy(this.#q, name, value)
+
+	/** Send a poll (2-12 options). Votes arrive encrypted as `pollUpdateMessage`. */
+	async sendPoll(to: string, name: string, values: string[], selectableCount = 1): Promise<string> {
+		const { sender } = await this.#live()
+		const p = extras.poll(name, values, selectableCount)
+		return sender.sendMessage(to, p.message, p.opts)
+	}
+	async sendLocation(
+		to: string,
+		latitude: number,
+		longitude: number,
+		o: { name?: string; address?: string } = {},
+	) {
+		return this.sendMessage(to, extras.location(latitude, longitude, o))
+	}
+	async sendContact(to: string, name: string, phoneE164: string) {
+		return this.sendMessage(to, extras.contactCard(name, extras.vcardFor(name, phoneE164)))
+	}
+	/** Decline an incoming call (`call.callId`, `call.creator ?? call.from`). */
+	async rejectCall(callId: string, callCreator: string): Promise<void> {
+		const { receiver } = await this.#live()
+		receiver.sendNode(extras.rejectCall(callId, callCreator, receiver.nextId()))
+	}
+	/** Set our own profile picture (square JPEG), or a group's when `jid` is given. */
+	updateProfilePicture = (jpeg: Uint8Array, jid?: string) =>
+		contacts.updateProfilePicture(this.#q, jpeg, jid)
+	removeProfilePicture = (jid?: string) => contacts.removeProfilePicture(this.#q, jid)
 
 	/** Remember the account's display name (used for presence). */
 	setName(name: string): void {
@@ -536,6 +567,10 @@ export class Client {
 						this.#events.emit('history', chunk)
 					})
 					.catch((error) => this.logger.event('history.error', error))
+			},
+			onCall: (node) => {
+				const c = extras.parseCall(node)
+				if (c) this.#events.emit('call', c)
 			},
 			onReceipt: (node) => {
 				// Receipts are keyed by (chat, id): a bare id is not unique across chats.

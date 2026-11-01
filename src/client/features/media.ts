@@ -279,6 +279,8 @@ export interface MediaOptions {
 	seconds?: number
 	/** Voice note (push-to-talk) instead of an audio file. */
 	ptt?: boolean
+	/** Open-once media (images / videos / voice notes). */
+	viewOnce?: boolean
 	/** Video as looping GIF. */
 	gifPlayback?: boolean
 	width?: number
