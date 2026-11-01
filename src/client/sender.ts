@@ -53,6 +53,8 @@ export interface SendOptions {
 	statusPrivacy?: 'contacts' | 'allowlist' | 'denylist'
 	/** Extra child nodes of `<message>` (e.g. `<meta .../>`). */
 	extraNodes?: BinaryNode[]
+	/** Use this message id instead of a fresh one (when another message has to point at it). */
+	messageId?: string
 }
 
 export interface DeviceTarget {
@@ -119,7 +121,7 @@ export class Sender {
 	): Promise<string> {
 		const { creds } = this.d
 		if (!creds.me) throw new Error('not paired')
-		const id = generateMessageId(creds.me.id)
+		const id = opts.messageId ?? generateMessageId(creds.me.id)
 		// WhatsApp Web gives every message (except reactions etc.) a random secret; reply keys and the reporting token derive from it.
 		const withSecret = withMessageSecret(message)
 		if (to.endsWith('@newsletter')) {
@@ -127,9 +129,12 @@ export class Sender {
 			// Channels render a plain `conversation`; an extendedTextMessage (and the secret we add to other chats)
 			// shows up as "your version of WhatsApp doesn't support it" on the phone.
 			// The phone sends channel posts without a messageSecret.
-			const { messageContextInfo: _info, ...bare } = message
-			void _info
-			const post = channelPost(bare)
+			const { messageContextInfo: info, ...bare } = message
+			const association = (info as { messageAssociation?: unknown } | undefined)?.messageAssociation
+			const post = channelPost({
+				...bare,
+				...(association ? { messageContextInfo: { messageAssociation: association } } : {}),
+			})
 			// Only the plaintext: extra nodes (e.g. the poll creation meta used in chats) are rejected here (479).
 			const stanza: BinaryNode = {
 				tag: 'message',
@@ -666,6 +671,7 @@ function messageType(message: Record<string, unknown>): string {
 		message['pollCreationMessageV5']
 	)
 		return 'poll'
+	if (message['pollCreationOptionImageMessage']) return 'media'
 	if (
 		['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage'].some(
 			(k) => message[k],

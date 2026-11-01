@@ -17,7 +17,7 @@ import {
 import type { ClientConfig } from './pairing.js'
 import { Receiver } from './receiver.js'
 import type { DecodedMessage } from './receiver.js'
-import { Sender } from './sender.js'
+import { Sender, generateMessageId } from './sender.js'
 import type { SendOptions } from './sender.js'
 import { AppStateSync, interpret } from './features/appstate-sync.js'
 import * as act from './features/chat-actions.js'
@@ -489,7 +489,10 @@ export class Client {
 		const p = extras.poll(name, values, 1, { correctAnswer })
 		return sender.sendMessage(to, p.message, p.opts)
 	}
-	/** Channel poll or quiz whose options are images (`images[i]` belongs to `values[i]`). */
+	/**
+	 * Channel poll or quiz whose options are images (`images[i]` belongs to `values[i]`). Like the phone, every option
+	 * image goes out first as its own post pointing at the poll's id, then the poll itself.
+	 */
 	async sendImagePoll(
 		to: string,
 		name: string,
@@ -498,16 +501,46 @@ export class Client {
 		o: { correctAnswer?: string } = {},
 	): Promise<string> {
 		if (images.length !== values.length) throw new Error('one image per option')
-		const { sender } = await this.#live()
+		const { sender, meId } = await this.#live()
 		const conn = await this.#getMediaConn()
+		const parentId = generateMessageId(meId)
 		const hashes: string[] = []
 		for (const [i, img] of images.entries()) {
 			const raw = media.rawMedia(img)
-			await media.uploadMedia(conn, 'image', raw, fetch, true)
+			const uploaded = await media.uploadMedia(conn, 'image', raw, fetch, true)
 			hashes.push(media.pollOptionHash(values[i]!, raw.fileSha256))
+			await sender.sendMessage(
+				to,
+				{
+					pollCreationOptionImageMessage: {
+						message: {
+							imageMessage: {
+								url: uploaded.url,
+								directPath: uploaded.directPath,
+								fileSha256: raw.fileSha256,
+								fileLength: raw.fileLength,
+								mimetype: 'image/jpeg',
+								caption: values[i],
+								...(uploaded.thumbnail && {
+									thumbnailDirectPath: uploaded.thumbnail.directPath,
+									thumbnailSha256: uploaded.thumbnail.sha256,
+								}),
+								contextInfo: { mediaDomainInfo: { mediaKeyDomain: 'MEDIA_KEY_DOMAIN_NON_E2EE' } },
+							},
+						},
+					},
+					messageContextInfo: {
+						messageAssociation: {
+							associationType: 'MEDIA_POLL',
+							parentMessageKey: { remoteJid: to, fromMe: true, id: parentId },
+						},
+					},
+				},
+				{ encAttrs: { mediatype: 'image' } },
+			)
 		}
 		const p = extras.poll(name, values, 1, { ...o, optionImageHashes: hashes })
-		return sender.sendMessage(to, p.message, p.opts)
+		return sender.sendMessage(to, p.message, { ...p.opts, messageId: parentId })
 	}
 	/** Send a question (the audience answers in a box). */
 	async sendQuestion(to: string, text: string): Promise<string> {
