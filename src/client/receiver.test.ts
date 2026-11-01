@@ -1,3 +1,4 @@
+import { createCipheriv, hkdfSync } from 'node:crypto'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,7 +24,7 @@ const pad = (b: Uint8Array) => {
 
 async function setup() {
 	const creds = initAuthCreds()
-	creds.me = { id: '4915600000000:23@s.whatsapp.net' }
+	creds.me = { id: '4915600000000:23@s.whatsapp.net', lid: '48615137533978:23@lid' }
 	creds.account = new Uint8Array([1, 2, 3])
 	const storage = new FileSignalStorage(
 		mkdtempSync(join(tmpdir(), 'velowa-sig-')),
@@ -176,8 +177,71 @@ describe('Receiver: failures', () => {
 	})
 })
 
-describe('Receiver: unsupported envelopes', () => {
-	it('acks an msmsg without asking for a retry', async () => {
+describe('Receiver: Meta AI msmsg', () => {
+	function encryptMsmsg(
+		secret: Buffer,
+		botJid: string,
+		ctx: { id: string; target: string },
+		plain: Uint8Array,
+	) {
+		const k1 = Buffer.from(hkdfSync('sha256', secret, Buffer.alloc(0), 'Bot Message', 32))
+		const id = Buffer.from(ctx.id)
+		const bot = Buffer.from(botJid)
+		const key = Buffer.from(
+			hkdfSync(
+				'sha256',
+				k1,
+				Buffer.alloc(0),
+				Buffer.concat([id, Buffer.from(ctx.target), bot]),
+				32,
+			),
+		)
+		const iv = Buffer.alloc(12, 3)
+		const c = createCipheriv('aes-256-gcm', key, iv)
+		c.setAAD(Buffer.concat([id, Buffer.from([0]), bot]))
+		const payload = Buffer.concat([c.update(plain), c.final(), c.getAuthTag()])
+		return encodeProto('MessageSecretMessage', { version: 2, encIv: iv, encPayload: payload })
+	}
+
+	it('decrypts a bot reply using the secret of the message it answers (1:1 chat: bot is `from`)', async () => {
+		const { receiver, sent, messages, alice, creds } = await setup()
+		const secret = Buffer.alloc(32, 5)
+		// 1) the original message (carrying messageContextInfo.messageSecret) arrives and is remembered
+		const orig = await alice.encrypt(
+			'bob',
+			1,
+			pad(text('@meta ai hi', { messageContextInfo: { messageSecret: secret } })),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: 'ORIG1', type: 'text' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: orig.type }, content: orig.ciphertext }],
+		})
+		// 2) the bot answers
+		const bot = '867051314767696@bot'
+		const target = creds.me!.lid!
+		const answer = encryptMsmsg(
+			secret,
+			bot,
+			{ id: 'BOTMSG1', target: target.replace(/:\d+@/, '@') },
+			text('42'),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: bot, id: 'BOTMSG1', type: 'text' },
+			content: [
+				{ tag: 'meta', attrs: { target_id: 'ORIG1' } },
+				{ tag: 'bot', attrs: { edit: 'full', edit_target_id: '' } },
+				{ tag: 'enc', attrs: { v: '2', type: 'msmsg' }, content: answer },
+			],
+		})
+		await receiver.idle()
+		expect(messages.map((m) => m.message['conversation'])).toEqual(['@meta ai hi', '42'])
+		expect(messages[1]!.message['metaAiText']).toBe('42')
+		expect(sent.filter((n) => n.tag === 'receipt' && n.attrs['type'] === 'retry')).toHaveLength(0)
+	})
+
+	it('acks an msmsg whose original secret is unknown, without a retry', async () => {
 		const { receiver, sent, messages } = await setup()
 		receiver.handle({
 			tag: 'message',
@@ -187,6 +251,20 @@ describe('Receiver: unsupported envelopes', () => {
 		await receiver.idle()
 		expect(messages).toHaveLength(0)
 		expect(sent.map((n) => n.tag)).toEqual(['ack'])
+	})
+
+	it('still retries a failed Signal envelope that sits next to an msmsg child', async () => {
+		const { receiver, sent } = await setup()
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'carol:1@s.whatsapp.net', id: 'M9', type: 'text', t: '1' },
+			content: [
+				{ tag: 'enc', attrs: { v: '2', type: 'msmsg' }, content: new Uint8Array(20) },
+				{ tag: 'enc', attrs: { v: '2', type: 'msg' }, content: new Uint8Array(40).fill(9) },
+			],
+		})
+		await receiver.idle()
+		expect(sent.some((n) => n.tag === 'receipt' && n.attrs['type'] === 'retry')).toBe(true)
 	})
 })
 
