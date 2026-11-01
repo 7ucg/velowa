@@ -11,6 +11,7 @@ import {
 	newPreKeys,
 	newSignedPreKey,
 } from '../crypto/signal.js'
+import { LidMap } from './lid-map.js'
 import { ProtocolLogger } from '../logging/protocol-logger.js'
 import { protoType } from './proto.js'
 import { Receiver, unpadRandomMax16 } from './receiver.js'
@@ -85,9 +86,11 @@ export async function world(opts: { ackError?: string } = {}) {
 		queueMicrotask(() =>
 			receiver.handle({ ...node, attrs: { id, from: 's.whatsapp.net', ...node.attrs } }),
 		)
+	const lids = new LidMap()
 	receiver = new Receiver({
 		creds,
 		saveCreds() {},
+		lids,
 		storage,
 		cipher: createSignalCipher(storage),
 		logger: new ProtocolLogger({ enabled: false }),
@@ -138,7 +141,14 @@ export async function world(opts: { ackError?: string } = {}) {
 			}
 			if (ns === 'encrypt') {
 				const wanted = kids(kids(n, 'key')[0]!, 'user').map((u) => u.attrs['jid']!)
-				const found = remotes.filter((r) => wanted.includes(r.jid)).map((r) => r.userNode)
+				const meLidUser = '111111111111'
+				const toPn = (j: string) =>
+					j.endsWith('@lid') && j.startsWith(meLidUser)
+						? j.replace(meLidUser, '4915600000000').replace('@lid', '@s.whatsapp.net')
+						: j
+				const found = remotes
+					.filter((r) => wanted.map(toPn).includes(r.jid))
+					.map((r) => ({ ...r.userNode, attrs: { jid: wanted.find((w) => toPn(w) === r.jid)! } }))
 				return reply(id, {
 					tag: 'iq',
 					attrs: { type: 'result' },
@@ -160,12 +170,13 @@ export async function world(opts: { ackError?: string } = {}) {
 	const sender = new Sender({
 		creds,
 		storage,
+		lids,
 		cipher: createSignalCipher(storage),
 		receiver,
 		logger: new ProtocolLogger({ enabled: false }),
 		senderKeyMemoryPath: join(dir, 'sk.json'),
 	})
-	return { sender, stanzas, phone, bob0, bob1, creds }
+	return { sender, stanzas, phone, bob0, bob1, creds, lids }
 }
 
 export const decodeMsg = (plain: Uint8Array) =>

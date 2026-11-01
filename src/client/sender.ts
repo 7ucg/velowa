@@ -7,6 +7,7 @@ import type { SignalCipher, SignalStorage } from '../crypto/signal.js'
 import { jidDecode, signalAddress, signalAddressString } from '../jid.js'
 import type { ProtocolLogger } from '../logging/protocol-logger.js'
 import { encodeProto } from './proto.js'
+import type { LidMap } from './lid-map.js'
 import type { Receiver } from './receiver.js'
 import { reportingNode } from './reporting.js'
 
@@ -68,6 +69,8 @@ export interface SenderDeps {
 	logger: ProtocolLogger
 	/** Where the per-group "already distributed our sender key to" memory lives (JSON). */
 	senderKeyMemoryPath?: string
+	/** Phone-number <-> LID mapping (Signal sessions live under the LID address once known). */
+	lids: LidMap
 	/** Called with every message we send (to remember secrets / poll options). */
 	onSent?(id: string, to: string, message: Record<string, unknown>): void
 }
@@ -166,7 +169,7 @@ export class Sender {
 			extraNodes: [{ tag: 'meta', attrs: { appdata: 'default' } }],
 		})
 		await this.assertSessions([meBare])
-		const a = signalAddress(meBare)
+		const a = this.addr(meBare)
 		const body = { deviceSentMessage: { destinationJid: meBare, message } }
 		const enc = await this.d.cipher.encrypt(
 			a.name,
@@ -186,6 +189,11 @@ export class Sender {
 			content,
 		})
 		return id
+	}
+
+	/** Signal address for a device JID, through the LID mapping. */
+	addr(jid: string): { name: string; device: number } {
+		return signalAddress(this.d.lids.resolve(jid))
 	}
 
 	/** Record who a message was actually sent to: only they may later ask for a resend. */
@@ -252,7 +260,7 @@ export class Sender {
 						: []),
 				],
 			}
-			const a = signalAddress(target)
+			const a = this.addr(target)
 			await this.d.cipher.processPreKeyBundle(a.name, a.device, parseBundle(node))
 			logger.event('retry.session-from-keys', { id, target })
 		} else {
@@ -271,7 +279,7 @@ export class Sender {
 						: {}),
 				}
 			: cached.message
-		const a = signalAddress(target)
+		const a = this.addr(target)
 		const enc = await this.d.cipher.encrypt(
 			a.name,
 			a.device,
@@ -350,7 +358,10 @@ export class Sender {
 			const jid = user.attrs['jid'] ?? ''
 			const { user: u, server } = jidDecode(jid)
 			const lid = children(user, 'lid')[0]?.attrs['val']
-			if (lid && server !== 'lid') this.#lidAlias.set(u, jidDecode(lid).user)
+			if (lid && server !== 'lid') {
+				this.#lidAlias.set(u, jidDecode(lid).user)
+				this.d.lids.set(jid, lid)
+			}
 			const deviceList = children(
 				children(children(user, 'devices')[0] ?? user, 'device-list')[0] ?? user,
 				'device',
@@ -376,7 +387,7 @@ export class Sender {
 	async assertSessions(jids: string[]): Promise<void> {
 		const missing: string[] = []
 		for (const jid of new Set(jids)) {
-			const a = signalAddress(jid)
+			const a = this.addr(jid)
 			if (!(await this.d.cipher.hasSession(a.name, a.device))) missing.push(jid)
 		}
 		if (!missing.length) return
@@ -384,7 +395,14 @@ export class Sender {
 			tag: 'iq',
 			attrs: { xmlns: 'encrypt', type: 'get', to: S_WHATSAPP_NET },
 			content: [
-				{ tag: 'key', attrs: {}, content: missing.map((jid) => ({ tag: 'user', attrs: { jid } })) },
+				{
+					tag: 'key',
+					attrs: {},
+					content: missing.map((jid) => ({
+						tag: 'user',
+						attrs: { jid: this.d.lids.resolve(jid) },
+					})),
+				},
 			],
 		})
 		for (const user of children(children(res, 'list')[0] ?? res, 'user')) {
@@ -394,7 +412,7 @@ export class Sender {
 				continue
 			}
 			const bundle = parseBundle(user)
-			const a = signalAddress(jid)
+			const a = this.addr(jid)
 			await this.d.cipher.processPreKeyBundle(a.name, a.device, bundle)
 			this.d.logger.event('send.session-created', { jid })
 		}
@@ -436,7 +454,7 @@ export class Sender {
 		] as const) {
 			const plain = padRandomMax16(encodeProto('Message', msg))
 			for (const t of targets) {
-				const a = signalAddress(t.jid)
+				const a = this.addr(t.jid)
 				const enc = await this.d.cipher.encrypt(a.name, a.device, plain)
 				if (enc.type === 'pkmsg') needsIdentity = true
 				participants.push({
@@ -480,6 +498,11 @@ export class Sender {
 		})
 		const g = children(res, 'group')[0]
 		if (!g) throw new Error(`no group metadata for ${group}`)
+		for (const p of children(g, 'participant')) {
+			const jid = p.attrs['jid'] ?? ''
+			const other = p.attrs['phone_number'] ?? p.attrs['lid']
+			if (jid && other) this.d.lids.set(jid, other)
+		}
 		return {
 			participants: children(g, 'participant')
 				.map((p) => p.attrs['jid'] ?? '')
@@ -528,7 +551,7 @@ export class Sender {
 				}),
 			)
 			for (const t of fresh) {
-				const a = signalAddress(t.jid)
+				const a = this.addr(t.jid)
 				const enc = await this.d.cipher.encrypt(a.name, a.device, dist)
 				if (enc.type === 'pkmsg') needsIdentity = true
 				nodes.push({

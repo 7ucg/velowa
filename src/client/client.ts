@@ -29,6 +29,7 @@ import { parsePresence, parseReceipt } from './features/events.js'
 import type { PresenceEvent, ReceiptEvent } from './features/events.js'
 import * as business from './features/business.js'
 import { Communities } from './features/communities.js'
+import { LidMap } from './lid-map.js'
 import { companionFinish, companionHello, generatePairingCode } from './features/pairing-code.js'
 import { Groups, parseGroupNotification } from './features/groups.js'
 import { loadHistory } from './features/history.js'
@@ -669,10 +670,13 @@ export class Client {
 		)
 		await storage.storeSignedPreKey(creds.signedPreKey.keyId, creds.signedPreKey.record)
 		const cipher = createSignalCipher(storage)
+		const lids = new LidMap(join(this.#signalDir, 'lid-map.json'))
+		if (creds.me?.lid) lids.set(creds.me.id, creds.me.lid)
 		const receiver = new Receiver({
 			creds,
 			saveCreds: () => saveAuthCreds(this.#credsPath, creds),
 			storage,
+			lids,
 			cipher,
 			logger: this.logger,
 			send: (n) => conn.send(n),
@@ -686,6 +690,7 @@ export class Client {
 							chats: chunk.chats.length,
 							messages: chunk.chats.reduce((a, c) => a + c.messages.length, 0),
 						})
+						for (const m of chunk.lidMappings) lids.set(m.pn, m.lid)
 						this.#events.emit('history', chunk)
 					})
 					.catch((error) => this.logger.event('history.error', error))
@@ -740,6 +745,7 @@ export class Client {
 		this.#sender = new Sender({
 			creds,
 			storage,
+			lids,
 			cipher,
 			receiver,
 			logger: this.logger,

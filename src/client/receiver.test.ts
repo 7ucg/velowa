@@ -12,6 +12,7 @@ import {
 	newIdentityKeyPair,
 	newPreKeys,
 } from '../crypto/signal.js'
+import { LidMap } from './lid-map.js'
 import { ProtocolLogger } from '../logging/protocol-logger.js'
 import { encodeProto } from './proto.js'
 import { Receiver, buildAck, unpadRandomMax16 } from './receiver.js'
@@ -40,6 +41,7 @@ async function setup() {
 	const receiver = new Receiver({
 		creds,
 		saveCreds() {},
+		lids: new LidMap(),
 		storage,
 		cipher: createSignalCipher(storage),
 		logger: new ProtocolLogger({ enabled: false }),
@@ -280,6 +282,7 @@ describe('Receiver: pre-keys', () => {
 		const receiver: Receiver = new Receiver({
 			creds,
 			saveCreds() {},
+			lids: new LidMap(),
 			storage,
 			cipher: createSignalCipher(storage),
 			logger: new ProtocolLogger({ enabled: false }),
@@ -321,6 +324,7 @@ describe('Receiver: pre-keys', () => {
 		const receiver: Receiver = new Receiver({
 			creds,
 			saveCreds() {},
+			lids: new LidMap(),
 			storage,
 			cipher: createSignalCipher(storage),
 			logger: new ProtocolLogger({ enabled: false }),
@@ -377,6 +381,7 @@ describe('Receiver: app-state key shares', () => {
 		const withHook = new Receiver({
 			creds: w.creds,
 			saveCreds() {},
+			lids: new LidMap(),
 			storage: w.storage,
 			cipher: createSignalCipher(w.storage),
 			logger: new ProtocolLogger({ enabled: false }),

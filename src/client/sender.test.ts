@@ -293,6 +293,34 @@ describe('Sender: group stanza details and statuses', () => {
 	})
 })
 
+describe('Sender: LID addressing', () => {
+	it('fetches keys for the LID of a known account but keeps the phone-number JIDs in the stanza', async () => {
+		const { sender, stanzas, phone, lids, creds } = await world()
+		lids.set(creds.me!.id, creds.me!.lid!)
+		await sender.sendText('4915600000000@s.whatsapp.net', 'note to self')
+		const to = kids(kids(stanzas[0]!, 'participants')[0]!, 'to')[0]!
+		expect(to.attrs['jid']).toBe('4915600000000@s.whatsapp.net') // stanza keeps the JID the server gave us
+		const enc = kids(to, 'enc')[0]!
+		const out = decodeMsg(
+			(await phone.cipher.decrypt('whoever', 1, 'pkmsg', enc.content as Uint8Array)).plaintext,
+		)
+		expect(out['deviceSentMessage'].message.extendedTextMessage.text).toBe('note to self')
+		// the session is stored under the LID address
+		expect(sender.addr('4915600000000@s.whatsapp.net')).toEqual({
+			name: '111111111111_1',
+			device: 0,
+		})
+		expect(sender.addr('4915600000000:5@s.whatsapp.net')).toEqual({
+			name: '111111111111_1',
+			device: 5,
+		})
+		expect(sender.addr('4915611111111@s.whatsapp.net')).toEqual({
+			name: '4915611111111',
+			device: 0,
+		})
+	})
+})
+
 describe('Sender: peer messages', () => {
 	it('sends a flat enc to our own phone (device 0) as category=peer, wrapped as deviceSentMessage', async () => {
 		const { sender, stanzas, phone } = await world()

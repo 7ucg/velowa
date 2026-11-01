@@ -5,6 +5,7 @@ import type { SignalCipher, SignalStorage } from '../crypto/signal.js'
 import { jidDecode, signalAddress, signalAddressString } from '../jid.js'
 import type { ProtocolLogger } from '../logging/protocol-logger.js'
 import { callAck, decryptPollVote, pollOptionHash } from './features/extras.js'
+import type { LidMap } from './lid-map.js'
 import { MessageSecrets, decryptMsmsg, extractMetaAiText } from './meta-ai.js'
 import { protoType } from './proto.js'
 
@@ -18,6 +19,8 @@ export interface ReceiverDeps {
 	creds: AuthCreds
 	saveCreds(): void
 	storage: SignalStorage
+	/** Phone-number <-> LID mapping: sessions are keyed by the LID address once it is known. */
+	lids: LidMap
 	cipher: SignalCipher
 	logger: ProtocolLogger
 	send(node: BinaryNode): void
@@ -379,7 +382,7 @@ export class Receiver {
 			)
 		}
 		if (type !== 'pkmsg' && type !== 'msg') throw new Error(`unsupported enc type "${type}"`)
-		const { name, device } = signalAddress(author)
+		const { name, device } = signalAddress(this.d.lids.resolve(author))
 		const res = await this.d.cipher.decrypt(name, device, type, data)
 		// The session is durable by now (decrypt awaited the store); only then drop the pre-key.
 		if (res.preKeyId !== undefined) await this.d.storage.removePreKey(res.preKeyId)
