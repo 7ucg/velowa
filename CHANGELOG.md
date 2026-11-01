@@ -20,3 +20,4 @@
 - AI-content label is only shown by the app on image/video channel posts (confirmed on the phone); paid partnership shows on all.
 - Channel `<status>` stanzas (reactions to channel posts, edits/revokes) are acked and emitted as the `channel.status` event.
 - Group status (captured from the phone): `sendGroupStatusText`, and `groupStatus: true` on `sendImage` / `sendVideo` / `sendAudio` / `sendMusic` (groupStatusMessageV2 + `<meta is_group_status>`, text-typed stanza, no enc mediatype).
+- Group status voice notes need real Opus audio (OGG) with `ptt: true`; verified on the phone.
