@@ -311,6 +311,35 @@ impl CallEngine {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Bring the video plane up in a running call. `gated` holds our outbound video back until the peer accepted.
+    #[wasm_bindgen(js_name = enableVideo)]
+    pub fn enable_video(&mut self, gated: bool) -> bool {
+        if gated {
+            self.inner.enable_video_gated()
+        } else {
+            self.inner.enable_video()
+        }
+    }
+
+    /// Stop sending and decoding video (the camera went off); audio carries on.
+    #[wasm_bindgen(js_name = disableVideo)]
+    pub fn disable_video(&mut self) {
+        self.inner.disable_video();
+    }
+
+    #[wasm_bindgen(js_name = isVideoEnabled)]
+    pub fn is_video_enabled(&self) -> bool {
+        self.inner.is_video_enabled()
+    }
+
+    /// React in a group call (an emoji; the empty string takes the reaction back).
+    #[wasm_bindgen(js_name = sendGroupReaction)]
+    pub fn send_group_reaction(&mut self, now: f64, emoji: &str) -> Result<(), JsValue> {
+        self.inner
+            .send_group_reaction(now as u64, emoji)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     /// The peer's encoded audio payload of the last `6` output (Opus mode).
     #[wasm_bindgen(js_name = takeEncodedAudio)]
     pub fn take_encoded_audio(&mut self) -> Option<Vec<u8>> {
@@ -343,6 +372,15 @@ impl CallEngine {
                 let d = format!("{e:?}");
                 d.split(['(', ' ', '{']).next().unwrap_or("").to_string()
             }
+            _ => String::new(),
+        }
+    }
+
+    /// The whole last event as text (e.g. who reacted with which emoji).
+    #[wasm_bindgen(js_name = eventDetail)]
+    pub fn event_detail(&self) -> String {
+        match &self.last {
+            Some(Output::Event(e)) => format!("{e:?}"),
             _ => String::new(),
         }
     }

@@ -843,6 +843,8 @@ export class Client {
 				if (c.status === 'group_update' && fromService) this.#groupCallTraffic(c, node)
 				if (c.status === 'enc_rekey' && fromMember) this.#groupCallTraffic(c, node)
 			}
+			if (c.status === 'video' && c.videoState !== undefined) this.#onVideoState(st, c)
+			if (c.status === 'accept' && !st.groupSession) st.peerDevice = c.from
 			if (c.status === 'preaccept' || c.status === 'ringing') st.status = 'ringing'
 			else if (c.status === 'accept') {
 				st.status = 'connected'
@@ -1252,6 +1254,145 @@ export class Client {
 			throw e
 		}
 		return state
+	}
+
+	/** Where in-call video changes go: the call service in a group call, otherwise the other side's device. */
+	#videoTarget(c: callSig.CallState): string {
+		if (c.groupSession) return `${c.callId}@call`
+		return c.peerDevice ?? c.offerFrom ?? c.creator
+	}
+
+	/** The other side changed its video: answer a request later with `acceptVideoUpgrade`, follow an accept. */
+	#onVideoState(st: callSig.CallState, c: extras.CallEvent): void {
+		const state = c.videoState
+		if (state === callSig.VIDEO_STATE.request || state === 3) {
+			st.videoRequest = true
+		} else if (state === callSig.VIDEO_STATE.accept) {
+			st.media?.releaseVideo()
+		} else if (state === callSig.VIDEO_STATE.enabled) {
+			// Their camera is on: make sure incoming video is decoded.
+			if (st.media) st.media.acceptVideo()
+		} else if (state === callSig.VIDEO_STATE.reject) {
+			st.media?.stopVideo()
+		}
+	}
+
+	/** Turn our camera on in a running call: asks the other side and sends once they accept. */
+	async enableCamera(
+		callId: string,
+		o: { videoFrames?: Uint8Array[]; videoFps?: number } & CallFileOptions = {},
+	): Promise<void> {
+		const c = this.#calls.get(callId)
+		if (!c?.media) throw new Error(`no running call ${callId}`)
+		o = await resolveCallFiles(o)
+		if (!o.videoFrames?.length) throw new Error('enableCamera needs videoFrames or videoFile')
+		const { receiver } = await this.#live()
+		if (!c.media.startVideo(o.videoFrames, o.videoFps ?? 15, true))
+			throw new Error('the call cannot carry video')
+		c.video = true
+		receiver.sendNode(
+			callSig.buildVideoState(
+				callId,
+				this.#videoTarget(c),
+				c.creator,
+				receiver.nextId(),
+				callSig.VIDEO_STATE.request,
+				{ dec: 'H264', orientation: 0 },
+			),
+		)
+	}
+
+	/** Turn our camera off; the call goes on with sound. */
+	async disableCamera(callId: string): Promise<void> {
+		const c = this.#calls.get(callId)
+		if (!c?.media) throw new Error(`no running call ${callId}`)
+		const { receiver } = await this.#live()
+		c.media.stopVideo()
+		receiver.sendNode(
+			callSig.buildVideoState(
+				callId,
+				this.#videoTarget(c),
+				c.creator,
+				receiver.nextId(),
+				callSig.VIDEO_STATE.stopped,
+			),
+		)
+	}
+
+	/** The other side asked to turn video on (see `call` events with `videoState` 11): accept, optionally sending our own picture. */
+	async acceptVideoUpgrade(
+		callId: string,
+		o: { videoFrames?: Uint8Array[]; videoFps?: number } & CallFileOptions = {},
+	): Promise<void> {
+		const c = this.#calls.get(callId)
+		if (!c?.media || !c.videoRequest) throw new Error(`no video request on call ${callId}`)
+		o = await resolveCallFiles(o)
+		const { receiver } = await this.#live()
+		c.videoRequest = false
+		c.video = true
+		const to = this.#videoTarget(c)
+		if (o.videoFrames?.length) c.media.startVideo(o.videoFrames, o.videoFps ?? 15)
+		else c.media.acceptVideo()
+		receiver.sendNode(
+			callSig.buildVideoState(
+				callId,
+				to,
+				c.creator,
+				receiver.nextId(),
+				callSig.VIDEO_STATE.accept,
+				{
+					dec: 'H264,AV1',
+					orientation: 0,
+				},
+			),
+		)
+		if (o.videoFrames?.length)
+			receiver.sendNode(
+				callSig.buildVideoState(
+					callId,
+					to,
+					c.creator,
+					receiver.nextId(),
+					callSig.VIDEO_STATE.enabled,
+					{
+						dec: 'H264',
+						orientation: 0,
+					},
+				),
+			)
+	}
+
+	/** Refuse the other side's request to turn video on. */
+	async rejectVideoUpgrade(callId: string): Promise<void> {
+		const c = this.#calls.get(callId)
+		if (!c || !c.videoRequest) throw new Error(`no video request on call ${callId}`)
+		const { receiver } = await this.#live()
+		c.videoRequest = false
+		receiver.sendNode(
+			callSig.buildVideoState(
+				callId,
+				this.#videoTarget(c),
+				c.creator,
+				receiver.nextId(),
+				callSig.VIDEO_STATE.reject,
+			),
+		)
+	}
+
+	/** Raise (or lower) the hand in a group call. */
+	async raiseHand(callId: string, raised = true): Promise<void> {
+		const c = this.#calls.get(callId)
+		if (!c?.groupSession) throw new Error(`${callId} is not a running group call`)
+		const { receiver } = await this.#live()
+		receiver.sendNode(callSig.buildRaiseHand(callId, c.creator, raised, receiver.nextId()))
+	}
+
+	/** React with an emoji in a group call (the empty string takes it back). */
+	async sendReaction(callId: string, emoji: string): Promise<void> {
+		const c = this.#calls.get(callId)
+		if (!c?.groupSession || !c.media) throw new Error(`${callId} is not a running group call`)
+		if (Buffer.byteLength(emoji, 'utf8') > 32) throw new Error('a reaction is a single emoji')
+		c.media.react(emoji)
 	}
 
 	/** Creator of a call link: require approval for joiners (or not). */

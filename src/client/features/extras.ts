@@ -215,6 +215,10 @@ export interface CallEvent {
 	creator?: string
 	isVideo?: boolean
 	isGroup?: boolean
+	/** `<video state>` of an in-call video change: 1 on, 3/11 upgrade request, 4 accept, 5 reject, 6 stopped. */
+	videoState?: number
+	/** `<user_action>` raise-hand: true raised, false lowered. */
+	handRaised?: boolean
 	/** The group a call was placed in (`group-jid`). */
 	group?: string
 	timestamp?: number
@@ -239,6 +243,14 @@ export function parseCall(node: BinaryNode): CallEvent | undefined {
 			isGroup: true,
 		}),
 		...(info.attrs['group-jid'] && { group: info.attrs['group-jid'] }),
+		...(info.tag === 'video' &&
+			/^\d{1,2}$/.test(info.attrs['state'] ?? '') && { videoState: Number(info.attrs['state']) }),
+		...(info.tag === 'user_action' &&
+			info.attrs['action'] === 'raise_hand' && {
+				handRaised:
+					(Array.isArray(info.content) ? info.content : []).find((k) => k.tag === 'raise_hand')
+						?.attrs['raise-hand-state'] === '1',
+			}),
 		...(node.attrs['t'] &&
 			/^\d{1,12}$/.test(node.attrs['t']) && { timestamp: Number(node.attrs['t']) }),
 	}

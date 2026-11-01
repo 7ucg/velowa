@@ -113,7 +113,7 @@ type MediaEvents = {
 	/** A 60 ms chunk of the peer's audio (16 kHz mono PCM). */
 	audio: Int16Array
 	/** Engine events by name (`RelayAllocated`, `MediaConnected`, ...). */
-	event: { name: string; code?: number }
+	event: { name: string; code?: number; detail?: string }
 	/** The media path ended (relay failed or the session was closed). */
 	closed: { reason: string }
 }
@@ -238,6 +238,49 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		this.#pump()
 	}
 
+	/** Our camera goes on in a running call: the frames are sent (looped) once the plane is up. */
+	startVideo(frames: Uint8Array[], fps = 15, gated = false): boolean {
+		if (this.#closed || !frames.length) return false
+		const ok = this.#engine.enableVideo(gated)
+		if (!ok) return false
+		this.#videoOut = frames
+		this.#videoFps = fps
+		if (this.#videoTimer) clearInterval(this.#videoTimer)
+		this.#videoTimer = undefined
+		this.#videoPos = 0
+		this.#startVideo()
+		this.#pump()
+		return true
+	}
+
+	/** The peer accepted our upgrade: let the (held back) outbound video go. */
+	releaseVideo(): void {
+		this.#engine.enableVideo(false)
+		this.#pump()
+	}
+
+	/** Our camera goes off; audio carries on. */
+	stopVideo(): void {
+		if (this.#videoTimer) clearInterval(this.#videoTimer)
+		this.#videoTimer = undefined
+		this.#videoOut = undefined
+		this.#engine.disableVideo()
+		this.#pump()
+	}
+
+	/** Prepare to receive the peer's video (they turned their camera on). */
+	acceptVideo(): boolean {
+		const ok = this.#engine.enableVideo(true)
+		this.#pump()
+		return ok
+	}
+
+	/** React in a group call; an empty emoji takes the reaction back. */
+	react(emoji: string): void {
+		this.#engine.sendGroupReaction(this.#now(), emoji)
+		this.#pump()
+	}
+
 	/** After the peer answered from a specific device, re-derive the keys we receive with. */
 	rekeyRecv(answeringPeerLid: string): boolean {
 		return this.#engine.rekeyRecv(answeringPeerLid)
@@ -340,7 +383,11 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 					} else if (kind === 3) {
 						const name = this.#engine.eventName()
 						const code = this.#engine.eventCode()
-						this.emit('event', { name, ...(code >= 0 && { code }) })
+						this.emit('event', {
+							name,
+							...(code >= 0 && { code }),
+							...(name === 'Reaction' && { detail: this.#engine.eventDetail() }),
+						})
 						if (name === 'MediaConnected' || name === 'RelayAllocated') {
 							this.emit('connected', undefined)
 							this.#startMic()

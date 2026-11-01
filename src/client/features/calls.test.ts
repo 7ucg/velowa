@@ -265,3 +265,46 @@ describe('call-link join', () => {
 		expect(callSig.buildWaitingRoomAdmit('C', 'x@lid', 'u@lid', 'a', true).content).toBeDefined()
 	})
 })
+
+describe('in-call video, hands and call events', () => {
+	it('builds the video state, raise-hand and reads them back', async () => {
+		const v = callSig.buildVideoState('C', 'p@lid', 'c@lid', 'i', callSig.VIDEO_STATE.request, {
+			dec: 'H264',
+			orientation: 0,
+		})
+		expect((v.content as { attrs: Record<string, string> }[])[0]!.attrs).toMatchObject({
+			state: '11',
+			dec: 'H264',
+			voip_settings: 'video',
+			device_orientation: '0',
+		})
+		const stop = callSig.buildVideoState('C', 'p@lid', 'c@lid', 'i', callSig.VIDEO_STATE.stopped)
+		expect(
+			(stop.content as { attrs: Record<string, string> }[])[0]!.attrs['voip_settings'],
+		).toBeUndefined()
+		const h = callSig.buildRaiseHand('C', 'c@lid', true, 'h')
+		expect(h.attrs['to']).toBe('C@call')
+
+		const { parseCall } = await import('./extras.js')
+		expect(
+			parseCall({
+				tag: 'call',
+				attrs: { from: 'p@lid' },
+				content: [{ tag: 'video', attrs: { 'call-id': 'C', state: '11' } }],
+			}),
+		).toMatchObject({ status: 'video', videoState: 11 })
+		expect(
+			parseCall({
+				tag: 'call',
+				attrs: { from: 'p@lid' },
+				content: [
+					{
+						tag: 'user_action',
+						attrs: { 'call-id': 'C', action: 'raise_hand' },
+						content: [{ tag: 'raise_hand', attrs: { 'raise-hand-state': '1' } }],
+					},
+				],
+			}),
+		).toMatchObject({ handRaised: true })
+	})
+})

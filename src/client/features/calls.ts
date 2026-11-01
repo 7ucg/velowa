@@ -136,6 +136,42 @@ export const buildTerminateTimed = (
 		},
 	})
 
+/** In-call video change (`<video state>`): 1 on, 4 accept, 5 reject, 6 stopped, 11 upgrade request. */
+export const VIDEO_STATE = { enabled: 1, accept: 4, reject: 5, stopped: 6, request: 11 } as const
+
+export const buildVideoState = (
+	callId: string,
+	to: string,
+	creator: string,
+	id: string,
+	state: number,
+	o: { dec?: string; orientation?: number } = {},
+): BinaryNode =>
+	wrap(to, id, {
+		tag: 'video',
+		attrs: {
+			'call-id': callId,
+			'call-creator': creator,
+			state: String(state),
+			...(o.dec && { dec: o.dec }),
+			...(state === VIDEO_STATE.request && { voip_settings: 'video' }),
+			...(o.orientation !== undefined && { device_orientation: String(o.orientation) }),
+		},
+	})
+
+/** Raise (or lower) the hand in a group call. */
+export const buildRaiseHand = (
+	callId: string,
+	creator: string,
+	raised: boolean,
+	id: string,
+): BinaryNode =>
+	wrap(`${callId}@call`, id, {
+		tag: 'user_action',
+		attrs: { 'call-id': callId, 'call-creator': creator, action: 'raise_hand' },
+		content: [{ tag: 'raise_hand', attrs: { 'raise-hand-state': raised ? '1' : '0' } }],
+	})
+
 /** Group calls, creator side (as WhatsApp Web sends them): keep-alive, mute state, transport hint, call length. */
 export const buildHeartbeat = (callId: string, creator: string, id: string): BinaryNode =>
 	wrap(`${callId}@call`, id, {
@@ -341,6 +377,10 @@ export interface CallState {
 	/** Group calls we answered: media options kept until the relay arrives, and a shared key that came before the engine. */
 	/** The newest relay block we reported latencies for. */
 	latencyTx?: string
+	/** The device of the other side that answered (1:1), where in-call video changes go. */
+	peerDevice?: string
+	/** The peer asked to turn video on and waits for our answer. */
+	videoRequest?: boolean
 	/** Joined through a call link: the relay comes with the first roster update, not with the join ack. */
 	awaitsRelay?: boolean
 	/** Joined through a call link and still in the waiting room. */
