@@ -56,6 +56,28 @@ describe('contacts', () => {
 		expect(await c.onWhatsApp(f.request, 's', ['1@lid'])).toEqual([])
 	})
 
+	it('finds a user by username, sending the name (and PIN) in the contact element', async () => {
+		const f = fake(
+			usyncReply([
+				{
+					tag: 'user',
+					attrs: { jid: '9@lid' },
+					content: [{ tag: 'contact', attrs: { type: 'in' } }],
+				},
+			]),
+		)
+		expect(await c.findUserByUsername(f.request, 's', '@9oged', '1234')).toEqual({
+			jid: '9@lid',
+			exists: true,
+		})
+		const user = kids(kids(kids(f.sent[0]!, 'usync')[0]!, 'list')[0]!, 'user')[0]!
+		expect(user.attrs).toEqual({})
+		expect(kids(user)[0]).toEqual({ tag: 'contact', attrs: { username: '9oged', pin: '1234' } })
+		expect(
+			await c.findUserByUsername(async () => ({ tag: 'iq', attrs: {} }), 's', 'nobody'),
+		).toBeNull()
+	})
+
 	it('reads status text and time', async () => {
 		const f = fake(
 			usyncReply([

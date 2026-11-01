@@ -19,6 +19,9 @@ export interface UsyncUser {
 	jid?: string
 	/** ... or by phone number (`+4915...`) for contact lookups. */
 	phone?: string
+	/** ... or by username (`9oged`, without the @), with the owner's PIN if they set one. */
+	username?: string
+	pin?: string
 }
 
 export interface UsyncProtocol {
@@ -31,7 +34,11 @@ export const contactProtocol: UsyncProtocol = {
 	name: 'contact',
 	query: { tag: 'contact', attrs: {} },
 	user: (u) =>
-		u.phone ? { tag: 'contact', attrs: {}, content: u.phone } : { tag: 'contact', attrs: {} },
+		u.phone
+			? { tag: 'contact', attrs: {}, content: u.phone }
+			: u.username
+				? { tag: 'contact', attrs: { username: u.username, ...(u.pin && { pin: u.pin }) } }
+				: { tag: 'contact', attrs: {} },
 }
 export const statusProtocol: UsyncProtocol = { name: 'status', query: { tag: 'status', attrs: {} } }
 export const lidProtocol: UsyncProtocol = { name: 'lid', query: { tag: 'lid', attrs: {} } }
@@ -290,4 +297,23 @@ export async function removeProfilePicture(request: RequestFn, jid?: string): Pr
 			...(jid && { target: jid }),
 		},
 	})
+}
+
+/** Find the account behind a username (`@name` or `name`). Returns null when nobody has it. */
+export async function findUserByUsername(
+	request: RequestFn,
+	sid: string,
+	username: string,
+	pin?: string,
+): Promise<{ jid: string; exists: boolean } | null> {
+	const entries = await usync(
+		request,
+		sid,
+		'interactive',
+		[contactProtocol],
+		[{ username: username.replace(/^@/, ''), ...(pin && { pin }) }],
+	)
+	const e = entries[0]
+	if (!e || !e.id) return null
+	return { jid: e.id, exists: e.nodes['contact']?.attrs['type'] === 'in' }
 }

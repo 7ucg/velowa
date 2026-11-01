@@ -353,6 +353,10 @@ export class Client {
 	async onWhatsApp(...numbers: string[]) {
 		return contacts.onWhatsApp(this.#q, await this.#sid(), numbers)
 	}
+	/** Look up an account by username (`@name`). */
+	async findUserByUsername(username: string, pin?: string) {
+		return contacts.findUserByUsername(this.#q, await this.#sid(), username, pin)
+	}
 	/** Profile "About" text of users. */
 	async fetchStatus(...jids: string[]) {
 		return contacts.fetchStatus(this.#q, await this.#sid(), jids)
