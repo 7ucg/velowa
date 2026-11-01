@@ -1,5 +1,5 @@
 import type { BinaryNode } from '../../codec/index.js'
-import type { RequestFn } from './groups.js'
+import type { RequestFn } from './group/groups.js'
 
 export class MexError extends Error {
 	constructor(

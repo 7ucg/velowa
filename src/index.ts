@@ -47,38 +47,42 @@ export {
 	callButton,
 	copyButton,
 	singleSelect,
-} from './client/features/interactive.js'
+} from './client/features/message/interactive.js'
 export type {
 	NativeButton,
 	InteractiveOptions,
 	ListSection,
-} from './client/features/interactive.js'
-export { pollOptionHash, vcardFor } from './client/features/extras.js'
-export type { MessageKey, Quoted, TextOptions } from './client/features/messages.js'
+} from './client/features/message/interactive.js'
+export { pollOptionHash, vcardFor } from './client/features/message/extras.js'
+export type { MessageKey, Quoted, TextOptions } from './client/features/message/messages.js'
 export { AntiBan, AntiBanError, ANTIBAN_DEFAULTS } from './client/antiban.js'
 export type { AntiBanConfig } from './client/antiban.js'
-export { fetchLinkPreview, findUrl, linkPreviewMessage } from './client/features/link-preview.js'
-export type { LinkPreview, LinkPreviewOptions } from './client/features/link-preview.js'
+export {
+	fetchLinkPreview,
+	findUrl,
+	linkPreviewMessage,
+} from './client/features/message/link-preview.js'
+export type { LinkPreview, LinkPreviewOptions } from './client/features/message/link-preview.js'
 export { encodeWam, WAM_EVENTS, WAM_GLOBALS } from './wam/index.js'
 export type { WamEvent, WamValue } from './wam/index.js'
-export type { PaymentRequestInput } from './client/features/payments.js'
-export { parseButtonReply } from './client/features/buttons.js'
+export type { PaymentRequestInput } from './client/features/payment/payments.js'
+export { parseButtonReply } from './client/features/message/buttons.js'
 export type {
 	ButtonReply,
 	ButtonsOptions,
 	ListOptions,
 	TemplateOptions,
-} from './client/features/buttons.js'
-export { richResponse, tokenizeCode } from './client/features/rich-response.js'
-export type { RichResponseOptions } from './client/features/rich-response.js'
-export { buildReport, REPORT_FLOWS, ReportStore } from './client/features/report.js'
-export type { ReportOptions, ReportedMessage } from './client/features/report.js'
-export { splitAnnexB, writeWav } from './client/call-media.js'
-export { type LocalAudioOptions } from './client/local-audio.js'
+} from './client/features/message/buttons.js'
+export { richResponse, tokenizeCode } from './client/features/message/rich-response.js'
+export type { RichResponseOptions } from './client/features/message/rich-response.js'
+export { buildReport, REPORT_FLOWS, ReportStore } from './client/features/report/report.js'
+export type { ReportOptions, ReportedMessage } from './client/features/report/report.js'
+export { splitAnnexB, writeWav } from './client/features/call/call-media.js'
+export { type LocalAudioOptions } from './client/features/call/local-audio.js'
 export {
 	decodeAudioFile,
 	decodeVideoFile,
 	type CallFileOptions,
 	type MediaFileOptions,
 	type VideoFileOptions,
-} from './client/media-files.js'
+} from './client/features/call/media-files.js'

@@ -1,5 +1,5 @@
-import { resolveCallFiles, type CallFileOptions } from './media-files.js'
-import type { LocalAudioOptions } from './local-audio.js'
+import { resolveCallFiles, type CallFileOptions } from './features/call/media-files.js'
+import type { LocalAudioOptions } from './features/call/local-audio.js'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { initAuthCreds, loadAuthCreds, saveAuthCreds } from '../auth/creds.js'
@@ -24,37 +24,42 @@ import { AntiBan } from './antiban.js'
 import type { AntiBanConfig } from './antiban.js'
 import { Sender, generateMessageId } from './sender.js'
 import type { SendOptions } from './sender.js'
-import { AppStateSync, interpret } from './features/appstate-sync.js'
-import * as act from './features/chat-actions.js'
-import type { RangeMessage } from './features/chat-actions.js'
-import type { AppStateEvent, ChatUpdate, ContactUpdate } from './features/appstate-sync.js'
-import * as contacts from './features/contacts.js'
-import * as extras from './features/extras.js'
-import * as interactiveMsg from './features/interactive.js'
-import { parsePresence, parseReceipt } from './features/events.js'
-import type { PresenceEvent, ReceiptEvent } from './features/events.js'
-import * as business from './features/business.js'
-import { Communities } from './features/communities.js'
+import { AppStateSync, interpret } from './features/chat/appstate-sync.js'
+import * as act from './features/chat/chat-actions.js'
+import type { RangeMessage } from './features/chat/chat-actions.js'
+import type { AppStateEvent, ChatUpdate, ContactUpdate } from './features/chat/appstate-sync.js'
+import * as contacts from './features/contact/contacts.js'
+import * as callEvents from './features/call/call-events.js'
+import * as extras from './features/message/extras.js'
+import * as interactiveMsg from './features/message/interactive.js'
+import { parsePresence, parseReceipt } from './features/message/events.js'
+import type { PresenceEvent, ReceiptEvent } from './features/message/events.js'
+import * as business from './features/contact/business.js'
+import { Communities } from './features/community/communities.js'
 import { LidMap } from './lid-map.js'
-import { companionFinish, companionHello, generatePairingCode } from './features/pairing-code.js'
+import {
+	companionFinish,
+	companionHello,
+	generatePairingCode,
+} from './features/account/pairing-code.js'
 import {
 	Groups,
 	memberLabelMessage,
 	parseGroupNotification,
 	setGroupProperty,
-} from './features/groups.js'
-import { loadHistory } from './features/history.js'
-import type { HistoryChunk } from './features/history.js'
+} from './features/group/groups.js'
+import { loadHistory } from './features/chat/history.js'
+import type { HistoryChunk } from './features/chat/history.js'
 import { mexFor } from './features/mex.js'
-import { fetchLinkPreview, linkPreviewMessage } from './features/link-preview.js'
-import { Newsletters, parseChannelStatus } from './features/newsletters.js'
-import type { ChannelStatusEvent } from './features/newsletters.js'
-import { Usernames } from './features/username.js'
-import type { GroupNotification } from './features/groups.js'
-import * as media from './features/media.js'
-import type { MediaOptions, MediaType } from './features/media.js'
-import * as msg from './features/messages.js'
-import { MediaSession } from './call-media.js'
+import { fetchLinkPreview, linkPreviewMessage } from './features/message/link-preview.js'
+import { Newsletters, parseChannelStatus } from './features/channel/newsletters.js'
+import type { ChannelStatusEvent } from './features/channel/newsletters.js'
+import { Usernames } from './features/contact/username.js'
+import type { GroupNotification } from './features/group/groups.js'
+import * as media from './features/message/media.js'
+import type { MediaOptions, MediaType } from './features/message/media.js'
+import * as msg from './features/message/messages.js'
+import { MediaSession } from './features/call/call-media.js'
 import {
 	GroupSession,
 	buildGroupEncRekey,
@@ -63,16 +68,21 @@ import {
 	parseGroupEncRekey,
 } from '../voip-wasm.js'
 import { encodeNode } from '../codec/index.js'
-import * as callSig from './features/calls.js'
-import * as buttons from './features/buttons.js'
-import { richResponse } from './features/rich-response.js'
-import type { RichResponseOptions } from './features/rich-response.js'
-import * as report from './features/report.js'
-import * as payments from './features/payments.js'
+import * as callSig from './features/call/calls.js'
+import * as buttons from './features/message/buttons.js'
+import { richResponse } from './features/message/rich-response.js'
+import type { RichResponseOptions } from './features/message/rich-response.js'
+import * as report from './features/report/report.js'
+import * as payments from './features/payment/payments.js'
 import { encodeWam } from '../wam/index.js'
 import type { WamEvent } from '../wam/index.js'
 import { protoType } from './proto.js'
-import type { ChatState, MessageKey, ReceiptType, TextOptions } from './features/messages.js'
+import type {
+	ChatState,
+	MessageKey,
+	ReceiptType,
+	TextOptions,
+} from './features/message/messages.js'
 
 /** The text a message carries (or its type), used to spot identical messages. */
 function signatureOf(m: Record<string, unknown>): string {
@@ -127,7 +137,7 @@ export type ClientEvents = {
 	/** Online/offline and typing indicators (after `subscribePresence`, or in open chats). */
 	presence: PresenceEvent
 	/** An incoming (or ended) call. Decline with `rejectCall`. */
-	call: extras.CallEvent
+	call: callEvents.CallEvent
 	/** A channel status (or a reaction / edit / revoke of one) pushed by the server. */
 	'channel.status': ChannelStatusEvent
 	/** A chunk of chat history announced by the phone after linking (chats, messages, push names). */
@@ -754,7 +764,7 @@ export class Client {
 	}
 
 	/** The roster and key traffic of a group call (`group_update`, `enc_rekey`) from the call's creator. */
-	#groupCallTraffic(c: extras.CallEvent, node: BinaryNode): void {
+	#groupCallTraffic(c: callEvents.CallEvent, node: BinaryNode): void {
 		const st = this.#calls.get(c.callId)
 		const action = Array.isArray(node.content) ? node.content[0] : undefined
 		if (!st?.groupSession || !action) return
@@ -815,7 +825,7 @@ export class Client {
 		st.epochTx = r.transaction_id
 	}
 
-	#trackCall(c: extras.CallEvent, node?: BinaryNode): void {
+	#trackCall(c: callEvents.CallEvent, node?: BinaryNode): void {
 		const userOf = (jid: string): string => jid.split('@')[0]!.replace(/[:.]\d+$/, '')
 		const st = this.#calls.get(c.callId)
 		if (st) {
@@ -1263,7 +1273,7 @@ export class Client {
 	}
 
 	/** The other side changed its video: answer a request later with `acceptVideoUpgrade`, follow an accept. */
-	#onVideoState(st: callSig.CallState, c: extras.CallEvent): void {
+	#onVideoState(st: callSig.CallState, c: callEvents.CallEvent): void {
 		const state = c.videoState
 		if (state === callSig.VIDEO_STATE.request || state === 3) {
 			st.videoRequest = true
@@ -1775,7 +1785,7 @@ export class Client {
 	/** Decline an incoming call (`call.callId`, `call.creator ?? call.from`). */
 	async rejectCall(callId: string, callCreator: string): Promise<void> {
 		const { receiver } = await this.#live()
-		receiver.sendNode(extras.rejectCall(callId, callCreator, receiver.nextId()))
+		receiver.sendNode(callEvents.rejectCall(callId, callCreator, receiver.nextId()))
 	}
 	/** Set our own profile picture (square JPEG), or a group's when `jid` is given. */
 	updateProfilePicture = (jpeg: Uint8Array, jid?: string) =>
@@ -2071,7 +2081,7 @@ export class Client {
 				if (e) this.#events.emit('channel.status', e)
 			},
 			onCall: (node) => {
-				const c = extras.parseCall(node)
+				const c = callEvents.parseCall(node)
 				if (c) this.#trackCall(c, node)
 				if (c) this.#events.emit('call', c)
 			},
