@@ -86,12 +86,14 @@ export function guardedFetch(timeoutMs: number): typeof fetch {
 					timeout: timeoutMs,
 					lookup: (host, options, cb) =>
 						lookup(host, { ...options, all: true }, (err, addrs) => {
-							if (err) return cb(err, '', 4)
-							const list = addrs as { address: string; family: number }[]
+							const done = cb as unknown as (...a: unknown[]) => void
+							if (err) return done(err)
+							const list = addrs as unknown as { address: string; family: number }[]
 							if (!list.length || list.some((a) => isPrivateAddress(a.address)))
-								return cb(new Error('refusing private address'), '', 4)
-							const a = list[0]!
-							cb(null, a.address, a.family)
+								return done(new Error('refusing private address'))
+							// Node asks for every address (`all`) when it tries several families.
+							if (options.all) return done(null, list)
+							done(null, list[0]!.address, list[0]!.family)
 						}),
 				},
 				(res) => {
