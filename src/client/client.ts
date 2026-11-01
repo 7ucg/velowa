@@ -253,6 +253,19 @@ export class Client {
 			const key = Object.keys(built.message)[0]!
 			built.message[key] = { ...(built.message[key] as object), ...opts.fields }
 		}
+		// Videos get no server-made preview: the phone uploads its own thumbnail and points the message at it.
+		if (channel && type === 'video' && !uploaded.thumbnail && opts.jpegThumbnail) {
+			const raw = media.rawMedia(opts.jpegThumbnail)
+			const t = await media.uploadMedia(
+				await this.#getMediaConn(),
+				'image',
+				raw,
+				fetch,
+				true,
+				media.NEWSLETTER_THUMBNAIL_PATH,
+			)
+			uploaded.thumbnail = { directPath: t.directPath, sha256: raw.fileSha256 }
+		}
 		if (uploaded.thumbnail && (type === 'image' || type === 'video')) {
 			const body = built.message[Object.keys(built.message)[0]!] as Record<string, unknown>
 			body['thumbnailDirectPath'] = uploaded.thumbnail.directPath

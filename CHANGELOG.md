@@ -22,3 +22,4 @@
 - Group status (captured from the phone): `sendGroupStatusText`, and `groupStatus: true` on `sendImage` / `sendVideo` / `sendAudio` / `sendMusic` (groupStatusMessageV2 + `<meta is_group_status>`, text-typed stanza, no enc mediatype).
 - Group status voice notes need real Opus audio (OGG) with `ptt: true`; verified on the phone.
 - Channel status could not be reproduced: posts with a NEWSLETTER_STATUS attribution show up as normal posts; the real wire format needs a capture from an account that can post one.
+- Channel videos (music posts) upload their own thumbnail to `/newsletter/newsletter-thumbnail-image` and reference it with `thumbnailDirectPath` / `thumbnailSha256`.

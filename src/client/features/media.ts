@@ -38,6 +38,8 @@ const NEWSLETTER_PATH: Record<MediaType, string> = {
 	document: '/newsletter/newsletter-document',
 	sticker: '/newsletter/newsletter-image',
 }
+/** Where a channel post's preview picture goes (the server answers with its own path for it). */
+export const NEWSLETTER_THUMBNAIL_PATH = '/newsletter/newsletter-thumbnail-image'
 export const MEDIA_HOST = 'mmg.whatsapp.net'
 const ORIGIN = 'https://web.whatsapp.com'
 const MAC_LENGTH = 10
@@ -196,11 +198,12 @@ export async function uploadMedia(
 	media: EncryptedMedia,
 	fetchImpl: Fetch = fetch,
 	channel = false,
+	pathOverride?: string,
 ): Promise<UploadResult> {
 	const token = uploadToken(media.fileEncSha256)
 	let lastError: unknown
 	for (const host of conn.hosts) {
-		const url = `https://${host}${channel ? NEWSLETTER_PATH[type] : UPLOAD_PATH[type]}/${token}?auth=${encodeURIComponent(conn.auth)}&token=${token}`
+		const url = `https://${host}${pathOverride ?? (channel ? NEWSLETTER_PATH[type] : UPLOAD_PATH[type])}/${token}?auth=${encodeURIComponent(conn.auth)}&token=${token}`
 		try {
 			const res = await fetchImpl(url, {
 				method: 'POST',
