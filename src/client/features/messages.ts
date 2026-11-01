@@ -23,6 +23,11 @@ export interface TextOptions {
 	mentions?: string[]
 	/** Disappearing-message timer in seconds for this message (use the chat's current setting). */
 	expiration?: number
+	/**
+	 * Text only: attach a link preview. `true` fetches one for the first link in the text; or pass your own
+	 * (`fetchLinkPreview`).
+	 */
+	linkPreview?: boolean | import('./link-preview.js').LinkPreview
 	/** Mark the message as a question (channels show it with an answer box). */
 	isQuestion?: boolean
 }

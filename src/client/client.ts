@@ -17,6 +17,8 @@ import {
 import type { ClientConfig } from './pairing.js'
 import { Receiver } from './receiver.js'
 import type { DecodedMessage } from './receiver.js'
+import { AntiBan } from './antiban.js'
+import type { AntiBanConfig } from './antiban.js'
 import { Sender, generateMessageId } from './sender.js'
 import type { SendOptions } from './sender.js'
 import { AppStateSync, interpret } from './features/appstate-sync.js'
@@ -41,6 +43,7 @@ import {
 import { loadHistory } from './features/history.js'
 import type { HistoryChunk } from './features/history.js'
 import { mexFor } from './features/mex.js'
+import { fetchLinkPreview, linkPreviewMessage } from './features/link-preview.js'
 import { Newsletters, parseChannelStatus } from './features/newsletters.js'
 import type { ChannelStatusEvent } from './features/newsletters.js'
 import { Usernames } from './features/username.js'
@@ -48,8 +51,21 @@ import type { GroupNotification } from './features/groups.js'
 import * as media from './features/media.js'
 import type { MediaOptions, MediaType } from './features/media.js'
 import * as msg from './features/messages.js'
+import * as payments from './features/payments.js'
+import { encodeWam } from '../wam/index.js'
+import type { WamEvent } from '../wam/index.js'
 import { protoType } from './proto.js'
 import type { ChatState, MessageKey, ReceiptType, TextOptions } from './features/messages.js'
+
+/** The text a message carries (or its type), used to spot identical messages. */
+function signatureOf(m: Record<string, unknown>): string {
+	const field = Object.keys(m).find((k) => k !== 'messageContextInfo') ?? ''
+	const body = m[field]
+	if (typeof body === 'string') return `${field}:${body}`
+	const b = (body ?? {}) as Record<string, unknown>
+	const text = b['text'] ?? b['caption'] ?? b['name']
+	return `${field}:${typeof text === 'string' ? text : ''}`
+}
 
 export interface ClientOptions {
 	/** Directory for credentials and Signal state. Default `./auth`. */
@@ -62,6 +78,11 @@ export interface ClientOptions {
 	pairWithPhoneNumber?: string
 	/** Reconnect automatically after a drop (default true). */
 	autoReconnect?: boolean
+	/**
+	 * Throttle outgoing messages like a person would (rate caps, random gaps, a pause before new chats, a limit on
+	 * identical texts). `true` for the defaults, or your own limits. Off by default.
+	 */
+	antiban?: boolean | Partial<AntiBanConfig>
 }
 
 /** Everything a consumer can listen for. Payloads are plain data. */
@@ -140,7 +161,11 @@ export class Client {
 		this.#creds = loadAuthCreds(this.#credsPath) ?? initAuthCreds()
 		saveAuthCreds(this.#credsPath, this.#creds)
 		this.#config = { ...DEFAULT_CONFIG, ...options.config }
+		if (options.antiban) this.antiban = new AntiBan(options.antiban === true ? {} : options.antiban)
 	}
+
+	/** The outgoing-message limiter, when the `antiban` option is on. */
+	readonly antiban?: AntiBan
 
 	on = <K extends keyof ClientEvents>(event: K, listener: (p: ClientEvents[K]) => void) =>
 		this.#events.on(event, listener)
@@ -176,7 +201,20 @@ export class Client {
 	/** Send text, optionally as a reply (`quoted`) and/or with @mentions. Returns the message id. */
 	async sendText(to: string, text: string, opts: TextOptions = {}): Promise<string> {
 		const { sender, meId } = await this.#live()
-		return sender.sendMessage(to, msg.withContext(msg.textMessage(text), to, opts, meId))
+		if (this.antiban?.config.typing && !to.endsWith('@newsletter')) {
+			await this.sendChatState(to, 'composing').catch(() => undefined)
+			await new Promise((r) => setTimeout(r, this.antiban!.typingMs(text)))
+			await this.sendChatState(to, 'paused').catch(() => undefined)
+		}
+		let body = msg.textMessage(text)
+		if (opts.linkPreview) {
+			const p =
+				opts.linkPreview === true
+					? await fetchLinkPreview(text).catch(() => undefined)
+					: opts.linkPreview
+			if (p) body = linkPreviewMessage(text, p)
+		}
+		return sender.sendMessage(to, msg.withContext(body, to, opts, meId))
 	}
 
 	/** Forward a received message (its WAProto content) to another chat. */
@@ -568,6 +606,36 @@ export class Client {
 			},
 		})
 		return sender.sendMessage(group, gs.message, gs.opts)
+	}
+	/** Ask a contact to pay (`amount1000` is thousandths of the currency unit). */
+	requestPayment = (to: string, p: payments.PaymentRequestInput) =>
+		this.sendMessage(to, payments.requestPayment(to, p))
+	/** Answer a payment request with a payment note. */
+	sendPaymentNote = (
+		to: string,
+		request: MessageKey,
+		o?: { note?: string; transactionData?: string },
+	) => this.sendMessage(to, payments.sendPayment(request, o))
+	declinePaymentRequest = (to: string, request: MessageKey) =>
+		this.sendMessage(to, payments.declinePaymentRequest(request))
+	cancelPaymentRequest = (to: string, request: MessageKey) =>
+		this.sendMessage(to, payments.cancelPaymentRequest(request))
+	/** Payments account settings (passkey, recovery check, UPI onboarding). */
+	readonly payments: payments.Payments = new payments.Payments((q, v, p) => this.mex(q, v, p))
+
+	#wamSeq = 0
+	/** Report usage-statistics events (WAM) the way WhatsApp Web does. `name`s are in `WAM_EVENTS`. */
+	async sendWam(events: WamEvent[]): Promise<void> {
+		const { receiver } = await this.#live()
+		const buffer = encodeWam(events, this.#wamSeq)
+		this.#wamSeq = (this.#wamSeq + 1) & 0xffff
+		await receiver.request({
+			tag: 'iq',
+			attrs: { to: 's.whatsapp.net', type: 'set', xmlns: 'w:stats' },
+			content: [
+				{ tag: 'add', attrs: { t: String(Math.round(Date.now() / 1000)) }, content: buffer },
+			],
+		})
 	}
 	/** Send a quiz: a single-choice poll with a right answer (`correctAnswer` must be one of `values`). */
 	async sendQuiz(
@@ -1001,6 +1069,9 @@ export class Client {
 			logger: this.logger,
 			senderKeyMemoryPath: join(this.#signalDir, 'sender-key-memory.json'),
 			onSent: (id, to, m) => receiver.rememberOwn(id, to, m),
+			...(this.antiban && {
+				gate: (to, m) => this.antiban!.gate(to, AntiBan.signature(signatureOf(m))),
+			}),
 		})
 		try {
 			await receiver.request({

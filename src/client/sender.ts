@@ -77,6 +77,8 @@ export interface SenderDeps {
 	lids: LidMap
 	/** Called with every message we send (to remember secrets / poll options). */
 	onSent?(id: string, to: string, message: Record<string, unknown>): void
+	/** Called before every message the application sends (rate limiting); may wait or throw. */
+	gate?(to: string, message: Record<string, unknown>): Promise<void>
 }
 
 /**
@@ -123,6 +125,7 @@ export class Sender {
 	): Promise<string> {
 		const { creds } = this.d
 		if (!creds.me) throw new Error('not paired')
+		await this.d.gate?.(to, message)
 		const id = opts.messageId ?? generateMessageId(creds.me.id)
 		// WhatsApp Web gives every message (except reactions etc.) a random secret; reply keys and the reporting token derive from it.
 		const withSecret = withMessageSecret(message)
