@@ -392,6 +392,8 @@ export class Sender {
 				const device = Number(dev.attrs['id'])
 				// Non-zero devices must carry a key-index, otherwise the server rejects the fan-out.
 				if (device !== 0 && !dev.attrs['key-index']) continue
+				// Cloud-API "hosted" devices (id 99) have no Signal keys to fan out to.
+				if (device === 99) continue
 				const isThisDevice = (u === me.user || u === meLidUser) && device === me.device
 				if (isThisDevice) continue
 				out.push({
