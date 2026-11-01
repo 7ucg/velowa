@@ -589,7 +589,7 @@ describe('Receiver: poll data cannot be poisoned by peers', () => {
 			pad(
 				text('', {
 					pollUpdateMessage: {
-						pollCreationMessageKey: { id: pollId, fromMe: false, remoteJid: 'attacker@lid' },
+						pollCreationMessageKey: { id: pollId, fromMe: true, remoteJid: voter },
 						vote: { encPayload, encIv: iv },
 					},
 				}),
@@ -602,5 +602,78 @@ describe('Receiver: poll data cannot be poisoned by peers', () => {
 		})
 		await receiver.idle()
 		expect(messages[1]!.message['pollVote']).toMatchObject({ pollId, options: ['Ja'] })
+	})
+})
+
+describe('Receiver: two peers using the same poll id', () => {
+	it("keeps each peer's poll separate and does not let the second overwrite the first", async () => {
+		const { receiver, messages, alice } = await setup()
+		const id = 'SAMEID'
+		const send = async (from: string, name: string, secret: number, options: string[]) => {
+			const enc = await alice.encrypt(
+				'bob',
+				1,
+				pad(
+					text('', {
+						messageContextInfo: { messageSecret: Buffer.alloc(32, secret) },
+						pollCreationMessageV3: { name, options: options.map((optionName) => ({ optionName })) },
+					}),
+				),
+			)
+			receiver.handle({
+				tag: 'message',
+				attrs: { from, id, type: 'poll' },
+				content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
+			})
+		}
+		await send('alice:2@s.whatsapp.net', 'A', 1, ['a1', 'a2'])
+		await send('alice:2@s.whatsapp.net', 'M', 2, ['m1', 'm2']) // same sender, same id, different content: the first one stays
+		await receiver.idle()
+		expect(messages).toHaveLength(2)
+		// the secret of the first message with that id stays; the second does not replace it
+		const secret = Buffer.alloc(32, 1)
+		const voter = 'alice:2@s.whatsapp.net' // the only sender with a session in this fixture
+		const sign = Buffer.concat([
+			Buffer.from(id),
+			Buffer.from('alice:2@s.whatsapp.net'),
+			Buffer.from(voter),
+			Buffer.from('Poll Vote'),
+			Buffer.from([1]),
+		])
+		const key = createHmac('sha256', createHmac('sha256', Buffer.alloc(32)).update(secret).digest())
+			.update(sign)
+			.digest()
+		const iv = Buffer.alloc(12, 2)
+		const c = createCipheriv('aes-256-gcm', key, iv)
+		c.setAAD(Buffer.from(`${id}\0${voter}`))
+		const h = createHash('sha256').update('a2').digest()
+		const encPayload = Buffer.concat([
+			c.update(Buffer.concat([Buffer.from([0x0a, h.length]), h])),
+			c.final(),
+			c.getAuthTag(),
+		])
+		const enc = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					pollUpdateMessage: {
+						pollCreationMessageKey: {
+							id,
+							participant: 'alice:2@s.whatsapp.net',
+							remoteJid: 'g@g.us',
+						},
+						vote: { encPayload, encIv: iv },
+					},
+				}),
+			),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: voter, id: 'VV', type: 'poll' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
+		})
+		await receiver.idle()
+		expect(messages[2]!.message['pollVote']).toMatchObject({ pollId: id, options: ['a2'] })
 	})
 })

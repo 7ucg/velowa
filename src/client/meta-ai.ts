@@ -11,6 +11,11 @@ export class MessageSecrets {
 	readonly #byId = new Map<string, Buffer>()
 	readonly #byChat = new Map<string, { id: string; secret: Buffer }[]>()
 
+	/** Is a secret already stored for this id? (First write wins: a later message with the same id cannot replace it.) */
+	has(id: string): boolean {
+		return this.#byId.has(id)
+	}
+
 	set(id: string, secret: Uint8Array, chat?: string): void {
 		const buf = Buffer.from(secret)
 		this.#byId.set(id, buf)

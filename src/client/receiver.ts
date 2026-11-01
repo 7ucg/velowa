@@ -158,14 +158,25 @@ export class Receiver {
 		this.#notePoll(id, message, this.d.creds.me?.id ?? '', true)
 	}
 
+	/** Polls are identified by who created them *and* the id: two different peers may use the same id. */
+	#pollKey(creator: string, id: string): string {
+		try {
+			return `${jidDecode(creator).user}|${id}`
+		} catch {
+			return `${creator}|${id}`
+		}
+	}
+
 	#notePoll(id: string, message: Loose, creator: string, own = false): void {
 		if (!own && this.#ownIds.has(id)) return // a peer reusing the id of one of our messages must not rewrite it
+		const pollKey = this.#pollKey(creator, id)
+		if (this.#polls.has(pollKey)) return // first write wins
 		const poll =
 			message['pollCreationMessage'] ??
 			message['pollCreationMessageV2'] ??
 			message['pollCreationMessageV3']
 		if (poll?.options) {
-			this.#polls.set(id, {
+			this.#polls.set(pollKey, {
 				options: poll.options.map((o: { optionName: string }) => o.optionName),
 				creator,
 			})
@@ -380,13 +391,14 @@ export class Receiver {
 		const key = upd?.pollCreationMessageKey
 		const vote = upd?.vote
 		if (!key?.id || !vote?.encPayload || !vote?.encIv) return undefined
-		const poll = this.#polls.get(key.id)
+		const claimedCreator = key.fromMe
+			? (this.d.creds.me?.id ?? '')
+			: (key.participant ?? key.remoteJid ?? chat)
+		const poll = this.#polls.get(this.#pollKey(claimedCreator, key.id))
 		const secrets = this.#secrets.candidates([key.id], chat)
 		if (!secrets.length) return { pollId: key.id, error: 'poll secret unknown' }
 		// The creator comes from what we remembered about the poll, not from fields of the incoming vote.
-		const creator =
-			poll?.creator ??
-			(key.fromMe ? (this.d.creds.me?.id ?? '') : (key.participant ?? key.remoteJid ?? chat))
+		const creator = poll?.creator ?? claimedCreator
 		let lastError = 'poll vote did not decrypt'
 		for (const secret of secrets) {
 			try {
@@ -510,7 +522,8 @@ export class Receiver {
 			}
 		}
 		const secret = raw.messageContextInfo?.messageSecret
-		if (secret && !this.#ownIds.has(id)) this.#secrets.set(id, secret, chat)
+		if (secret && !this.#ownIds.has(id) && !this.#secrets.has(id))
+			this.#secrets.set(id, secret, chat)
 		const shared = raw.protocolMessage?.appStateSyncKeyShare?.keys
 		if (shared?.length && this.d.onAppStateKeys && !this.#isOwnPeer(node, author)) {
 			// Whoever holds these keys can forge our chat/contact state, so only our own account may hand them out.
