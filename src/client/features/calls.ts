@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { BinaryNode } from '../../codec/index.js'
 import type { MediaSession } from '../call-media.js'
+import type { LocalAudioOptions } from '../local-audio.js'
 import type { GroupSession } from '../../voip-wasm.js'
 import type { CallEngine } from '../../voip-wasm.js'
 
@@ -293,6 +294,8 @@ export interface GroupMediaOptions {
 	/** H.264 access units (Annex-B, with AUD NALs) to send, looped. */
 	videoFrames?: Uint8Array[]
 	recordVideoTo?: string
+	/** Use this machine's microphone and speaker. */
+	localAudio?: LocalAudioOptions
 }
 
 /** Only the options that are set, in the shape stored on a call. */
@@ -301,6 +304,7 @@ export const pickMediaOptions = (o: GroupMediaOptions): GroupMediaOptions => ({
 	...(o.recordTo && { recordTo: o.recordTo }),
 	...(o.videoFrames && { videoFrames: o.videoFrames }),
 	...(o.recordVideoTo && { recordVideoTo: o.recordVideoTo }),
+	...(o.localAudio && { localAudio: o.localAudio }),
 })
 
 export interface CallState {

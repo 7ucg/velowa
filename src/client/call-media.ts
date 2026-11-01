@@ -1,3 +1,4 @@
+import { startLocalAudio, type LocalAudioHandle, type LocalAudioOptions } from './local-audio.js'
 import { createSocket, type Socket } from 'node:dgram'
 import { createRequire } from 'node:module'
 import { writeFileSync } from 'node:fs'
@@ -98,6 +99,8 @@ export interface MediaSessionOptions {
 	recordVideoTo?: string
 	/** Build the video plane: the call is a video call. */
 	enableVideo?: boolean
+	/** Use this machine's microphone and speaker for the call (PulseAudio / PipeWire). */
+	localAudio?: LocalAudioOptions
 }
 
 type MediaEvents = {
@@ -133,6 +136,8 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 	#sent = 0
 	#received = 0
 	#audioIn: Int16Array | undefined
+	#localAudioOptions: LocalAudioOptions | undefined
+	#local: LocalAudioHandle | undefined
 	#audioPos = 0
 
 	constructor(o: MediaSessionOptions) {
@@ -176,6 +181,7 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 				}),
 			)
 		this.#audioIn = o.audioIn
+		this.#localAudioOptions = o.localAudio
 		if (o.codec !== 'mlow') this.#opus = newOpus()
 		this.#recordTo = o.recordTo
 		this.#videoOut = o.video?.frames
@@ -373,11 +379,18 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 
 	#heard(pcm: Int16Array): void {
 		if (this.#recordTo) this.#recorded.push(pcm)
+		this.#local?.play(pcm)
 		this.emit('audio', pcm)
 	}
 
 	#startMic(): void {
 		if (this.#mic) return
+		if (this.#localAudioOptions && !this.#local)
+			this.#local = startLocalAudio(
+				this.#localAudioOptions,
+				(pcm) => this.feedMic(pcm),
+				(what, e) => this.emit('event', { name: `LocalAudioFailed:${what}:${e.message}` }),
+			)
 		// A call needs a steady stream: the peer shows "reconnecting" a few seconds after the last packet. So the
 		// microphone ticks for the whole call and sends silence whenever nothing is queued to say.
 		this.#mic = setInterval(() => {
@@ -410,6 +423,22 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		)
 	}
 
+	/**
+	 * Live microphone samples (16 kHz mono PCM): sent with the next ticks. At most about half a second is kept, so a
+	 * capture that runs ahead of the call clock drops its oldest audio instead of falling behind.
+	 */
+	feedMic(pcm: Int16Array): void {
+		const cap = FRAME_SAMPLES * 8
+		const rest = this.#audioIn ? this.#audioIn.subarray(this.#audioPos) : new Int16Array(0)
+		const next = new Int16Array(Math.min(cap, rest.length + pcm.length))
+		const all = new Int16Array(rest.length + pcm.length)
+		all.set(rest)
+		all.set(pcm, rest.length)
+		next.set(all.subarray(all.length - next.length))
+		this.#audioIn = next
+		this.#audioPos = 0
+	}
+
 	/** Say something (16 kHz mono PCM); queued after whatever is still playing. */
 	speak(pcm: Int16Array): void {
 		const rest = this.#audioIn ? this.#audioIn.subarray(this.#audioPos) : new Int16Array(0)
@@ -438,6 +467,7 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		for (const d of this.#decoders.values()) d.delete()
 		this.#opus?.delete()
 		if (this.#timer) clearTimeout(this.#timer)
+		this.#local?.stop()
 		if (this.#mic) clearInterval(this.#mic)
 		try {
 			this.#channel.close(this.#now())

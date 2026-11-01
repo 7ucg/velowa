@@ -1,3 +1,4 @@
+import type { LocalAudioOptions } from './local-audio.js'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { initAuthCreds, loadAuthCreds, saveAuthCreds } from '../auth/creds.js'
@@ -669,6 +670,8 @@ export class Client {
 			/** Video calls: H.264 access units to send, looped (see `splitAnnexB`). */
 			videoFrames?: Uint8Array[]
 			recordVideoTo?: string
+			/** Use this machine's microphone and speaker. */
+			localAudio?: LocalAudioOptions
 		} = {},
 	): Promise<callSig.CallState> {
 		const { sender, receiver } = await this.#live()
@@ -732,6 +735,7 @@ export class Client {
 					...(o.recordTo && { recordTo: o.recordTo }),
 					...(o.videoFrames && { video: { frames: o.videoFrames } }),
 					...(o.recordVideoTo && { recordVideoTo: o.recordVideoTo }),
+					...(o.localAudio && { localAudio: o.localAudio }),
 				})
 				state.media = media
 				media.on('closed', () => void 0)
@@ -901,6 +905,8 @@ export class Client {
 			recordTo?: string
 			videoFrames?: Uint8Array[]
 			recordVideoTo?: string
+			/** Use this machine's microphone and speaker. */
+			localAudio?: LocalAudioOptions
 		} = {},
 	): Promise<callSig.CallState> {
 		const c = this.#calls.get(callId)
@@ -946,6 +952,7 @@ export class Client {
 			...(o.recordTo && { recordTo: o.recordTo }),
 			...(o.videoFrames && { video: { frames: o.videoFrames } }),
 			...(o.recordVideoTo && { recordVideoTo: o.recordVideoTo }),
+			...(o.localAudio && { localAudio: o.localAudio }),
 		})
 		c.media = media
 		media.start()
@@ -1098,6 +1105,7 @@ export class Client {
 				...(o.recordTo && { recordTo: o.recordTo }),
 				...(o.videoFrames && { video: { frames: o.videoFrames } }),
 				...(o.recordVideoTo && { recordVideoTo: o.recordVideoTo }),
+				...(o.localAudio && { localAudio: o.localAudio }),
 			})
 			state.media = media
 			media.on('connected', () => {
