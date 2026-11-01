@@ -115,6 +115,20 @@ describe('contacts', () => {
 		expect(kids(kids(kids(f.sent[0]!, 'usync')[0]!, 'list')[0]!, 'user')).toHaveLength(1)
 	})
 
+	it('reports a missing or hidden profile picture as undefined, not as an error', async () => {
+		for (const code of ['404', '401', '403']) {
+			const r = async () => {
+				throw new Error(`iq error: [{"tag":"error","attrs":{"code":"${code}"}}]`)
+			}
+			expect(await c.profilePictureUrl(r, 'a@s.whatsapp.net')).toBeUndefined()
+		}
+		await expect(
+			c.profilePictureUrl(async () => {
+				throw new Error('iq error: [{"tag":"error","attrs":{"code":"500"}}]')
+			}, 'a@s.whatsapp.net'),
+		).rejects.toThrow(/500/)
+	})
+
 	it('profile picture, about, block list and privacy requests', async () => {
 		const pic = fake({
 			tag: 'iq',

@@ -180,17 +180,23 @@ export async function profilePictureUrl(
 	jid: string,
 	type: 'preview' | 'image' = 'preview',
 ): Promise<string | undefined> {
-	const res = await request({
-		tag: 'iq',
-		attrs: {
-			target: jid.replace(/:\d+@/, '@'),
-			to: 's.whatsapp.net',
-			type: 'get',
-			xmlns: 'w:profile:picture',
-		},
-		content: [{ tag: 'picture', attrs: { type, query: 'url' } }],
-	})
-	return kids(res, 'picture')[0]?.attrs['url']
+	try {
+		const res = await request({
+			tag: 'iq',
+			attrs: {
+				target: jid.replace(/:\d+@/, '@'),
+				to: 's.whatsapp.net',
+				type: 'get',
+				xmlns: 'w:profile:picture',
+			},
+			content: [{ tag: 'picture', attrs: { type, query: 'url' } }],
+		})
+		return kids(res, 'picture')[0]?.attrs['url']
+	} catch (e) {
+		// 404 item-not-found (no picture) and 401/403 (hidden by the contact's privacy) are normal answers.
+		if (/"code":"(404|401|403)"/.test(String((e as Error).message))) return undefined
+		throw e
+	}
 }
 
 /** Set our "About" text. */

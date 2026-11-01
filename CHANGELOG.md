@@ -10,3 +10,4 @@
 - Phase 6: media, replies/mentions/reactions/edit/delete, polls, groups, communities, newsletters, contacts/privacy, app-state sync and chat actions, history sync, calls (events + reject).
 - Pairing-code linking, status posting, interactive messages, business profile/catalog, usernames, forwarding, retry resends, poll votes, `client.mex()`.
 - LID addressing for Signal sessions (fixes the phone not decrypting our own-device copies), serialized cipher calls, app-state key request to the phone, `examples/example.js` live check (31/31).
+- Username lookup; `examples/example-others.js` live check against a second account, a group and a channel.
