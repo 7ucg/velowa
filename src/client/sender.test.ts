@@ -125,6 +125,32 @@ describe('Sender: groups', () => {
 	})
 })
 
+describe('Sender: channel polls and rich posts', () => {
+	it('keeps extended text with a link preview/context as is, and marks polls with the creation meta', async () => {
+		const { sender, stanzas } = await world()
+		await sender.sendMessage('1203630000@newsletter', {
+			extendedTextMessage: { text: 'link', matchedText: 'https://x' },
+		})
+		expect(
+			decodeMsg(
+				Uint8Array.from([...(kids(stanzas[0]!, 'plaintext')[0]!.content as Uint8Array), 1]),
+			)['extendedTextMessage'].matchedText,
+		).toBe('https://x')
+		await sender.sendMessage('1203630000@newsletter', {
+			pollCreationMessageV3: {
+				name: 'q',
+				options: [{ optionName: 'a' }, { optionName: 'b' }],
+				selectableOptionsCount: 1,
+			},
+		})
+		expect(stanzas[1]!.attrs['type']).toBe('poll')
+		expect(kids(stanzas[1]!, 'meta')[0]!.attrs).toEqual({
+			polltype: 'creation',
+			contenttype: 'text',
+		})
+	})
+})
+
 describe('Sender: retry receipts', () => {
 	it('re-encrypts a sent message for exactly the device that asked, using its fresh key bundle', async () => {
 		const { sender, stanzas, bob1 } = await world()
@@ -384,9 +410,10 @@ describe('Sender: channels', () => {
 		expect(st.attrs['to']).toBe('1203630000@newsletter')
 		expect(st.attrs['type']).toBe('text')
 		const body = kids(st, 'plaintext')[0]!.content as Uint8Array
-		expect(decodeMsg(Uint8Array.from([...body, 1]))['extendedTextMessage'].text).toBe(
-			'hello channel',
-		)
+		const post = decodeMsg(Uint8Array.from([...body, 1]))
+		expect(post['conversation']).toBe('hello channel') // not extendedTextMessage: the phone would call it unsupported
+		expect(post['extendedTextMessage']).toBeUndefined()
+		expect(post['messageContextInfo']).toBeUndefined()
 		expect(kids(st, 'participants')).toHaveLength(0)
 	})
 })

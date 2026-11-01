@@ -152,3 +152,26 @@ export function toOutgoing(p: PlannedMutation): OutgoingMutation {
 		value: encodeProto('SyncActionValue', { timestamp: Date.now(), ...p.mutation.valueObject }),
 	}
 }
+
+export type StatusAudience = 'contacts' | 'except' | 'only'
+
+/**
+ * Who sees our statuses: `contacts` = all, `except` = all contacts except `jids`, `only` = just `jids`
+ * ("My contacts" / "My contacts except..." / "Only share with..." in the app).
+ */
+export const statusPrivacy = (
+	audience: StatusAudience,
+	jids: string[] = [],
+	allowSharing?: boolean,
+) => {
+	const mode =
+		audience === 'contacts' ? 'CONTACTS' : audience === 'except' ? 'DENY_LIST' : 'ALLOW_LIST'
+	return plan('regular_high', ['status_privacy'], 7, {
+		statusPrivacy: {
+			mode,
+			modes: [mode],
+			...(audience !== 'contacts' && { userJid: jids }),
+			...(allowSharing !== undefined && { shareToFb: false, shareToIg: false }),
+		},
+	})
+}

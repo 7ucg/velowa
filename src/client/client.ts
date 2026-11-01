@@ -31,7 +31,12 @@ import * as business from './features/business.js'
 import { Communities } from './features/communities.js'
 import { LidMap } from './lid-map.js'
 import { companionFinish, companionHello, generatePairingCode } from './features/pairing-code.js'
-import { Groups, parseGroupNotification } from './features/groups.js'
+import {
+	Groups,
+	memberLabelMessage,
+	parseGroupNotification,
+	setGroupProperty,
+} from './features/groups.js'
 import { loadHistory } from './features/history.js'
 import type { HistoryChunk } from './features/history.js'
 import { mexFor } from './features/mex.js'
@@ -409,6 +414,24 @@ export class Client {
 		const { sender } = await this.#live()
 		const m = interactiveMsg.interactive(o)
 		return sender.sendMessage(to, m.message, m.opts)
+	}
+
+	/** Who may see our statuses (the "Status privacy" screen). */
+	setStatusPrivacy = (audience: act.StatusAudience, jids: string[] = []) =>
+		this.#push(act.statusPrivacy(audience, jids))
+
+	/** Group permission "Add other members": everyone or only admins. */
+	setGroupMemberAddMode = (jid: string, mode: 'admin_add' | 'all_member_add') =>
+		this.groups.setMemberAddMode(jid, mode)
+	/** Group permission "Send message history" (members may send past messages to new members). */
+	setGroupShareHistory = (jid: string, mode: 'all_member_share' | 'admin_share') =>
+		setGroupProperty(this.mex, jid, 'member_share_group_history_mode', mode)
+	/** Our "member tag" in a group (shown next to the name; empty string removes it). */
+	async setMemberLabel(groupJid: string, label: string): Promise<string> {
+		const { sender } = await this.#live()
+		return sender.sendMessage(groupJid, memberLabelMessage(label), {
+			extraNodes: [{ tag: 'meta', attrs: { tag_reason: 'user_update', appdata: 'member_tag' } }],
+		})
 	}
 
 	/** Send a poll (2-12 options). Votes arrive encrypted as `pollUpdateMessage`. */

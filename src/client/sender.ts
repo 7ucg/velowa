@@ -124,11 +124,22 @@ export class Sender {
 		const withSecret = withMessageSecret(message)
 		if (to.endsWith('@newsletter')) {
 			// Channels are not end-to-end encrypted: the message goes out as plain protobuf.
+			// Channels render a plain `conversation`; an extendedTextMessage (and the secret we add to other chats)
+			// shows up as "your version of WhatsApp doesn't support it" on the phone.
+			const post = channelPost(message)
+			const isPoll = Boolean(
+				post['pollCreationMessage'] ??
+				post['pollCreationMessageV2'] ??
+				post['pollCreationMessageV3'],
+			)
 			const stanza: BinaryNode = {
 				tag: 'message',
-				attrs: { id, to, type: messageType(message), ...opts.stanzaAttrs },
+				attrs: { id, to, type: messageType(post), ...opts.stanzaAttrs },
 				content: [
-					{ tag: 'plaintext', attrs: {}, content: encodeProto('Message', message) },
+					{ tag: 'plaintext', attrs: {}, content: encodeProto('Message', post) },
+					...(isPoll
+						? [{ tag: 'meta', attrs: { polltype: 'creation', contenttype: 'text' } }]
+						: []),
 					...(opts.extraNodes ?? []),
 				],
 			}
@@ -622,6 +633,17 @@ export class Sender {
 		writeFileSync(`${path}.tmp`, JSON.stringify(this.#memory), { mode: 0o600 })
 		renameSync(`${path}.tmp`, path)
 	}
+}
+
+/** A text-only extendedTextMessage becomes a plain conversation; everything else is sent as given. */
+export function channelPost(message: Record<string, unknown>): Record<string, unknown> {
+	const ext = message['extendedTextMessage'] as Record<string, unknown> | undefined
+	if (ext && typeof ext['text'] === 'string' && Object.keys(ext).every((k) => k === 'text')) {
+		const { extendedTextMessage: _drop, ...rest } = message
+		void _drop
+		return { ...rest, conversation: ext['text'] }
+	}
+	return message
 }
 
 function withMessageSecret(message: Record<string, unknown>): Record<string, unknown> {

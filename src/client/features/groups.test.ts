@@ -189,3 +189,27 @@ describe('parseGroupNotification', () => {
 		expect(events[1]!.subject).toBe('Neuer Name')
 	})
 })
+
+describe('group permissions and member tag', () => {
+	it('builds the member-label message (30 chars max) and the history-share property call', async () => {
+		const { memberLabelMessage, setGroupProperty, GROUP_SET_PROPERTY_QUERY } =
+			await import('./groups.js')
+		const m = memberLabelMessage('x'.repeat(40), 1700000000) as {
+			protocolMessage: { type: string; memberLabel: { label: string; labelTimestamp: number } }
+		}
+		expect(m.protocolMessage.type).toBe('GROUP_MEMBER_LABEL_CHANGE')
+		expect(m.protocolMessage.memberLabel.label).toHaveLength(30)
+		const calls: unknown[][] = []
+		await setGroupProperty(
+			(async (...a: unknown[]) => (calls.push(a), {})) as never,
+			'g@g.us',
+			'member_share_group_history_mode',
+			'all_member_share',
+		)
+		expect(calls[0]).toEqual([
+			GROUP_SET_PROPERTY_QUERY,
+			{ group_id: 'g@g.us', member_share_group_history_mode: 'all_member_share' },
+			'xwa2_group_update_property',
+		])
+	})
+})

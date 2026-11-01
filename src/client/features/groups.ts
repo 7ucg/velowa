@@ -311,3 +311,29 @@ export function parseGroupNotification(node: BinaryNode): GroupNotification[] {
 	}
 	return out
 }
+
+// ---- group permissions that are not plain w:g2 settings ---------------------------------------
+
+export const GROUP_SET_PROPERTY_QUERY = '9418211574894172'
+
+/** "Send message history" permission and similar properties, via `w:mex` (`member_share_group_history_mode`, ...). */
+export const setGroupProperty = (
+	mex: <T>(queryId: string, variables: unknown, path?: string) => Promise<T>,
+	jid: string,
+	property: string,
+	value: unknown,
+) =>
+	mex(GROUP_SET_PROPERTY_QUERY, { group_id: jid, [property]: value }, 'xwa2_group_update_property')
+
+/** Message that sets our own "member tag" (label) in a group (max 30 characters). */
+export function memberLabelMessage(
+	label: string,
+	nowSeconds = Math.floor(Date.now() / 1000),
+): Record<string, unknown> {
+	return {
+		protocolMessage: {
+			type: 'GROUP_MEMBER_LABEL_CHANGE',
+			memberLabel: { label: label.slice(0, 30), labelTimestamp: nowSeconds },
+		},
+	}
+}

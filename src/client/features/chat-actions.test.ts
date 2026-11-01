@@ -177,6 +177,23 @@ describe('chat actions as outgoing patches', () => {
 	})
 })
 
+describe('status privacy', () => {
+	it('maps the three app choices onto the distribution modes', () => {
+		expect(act.statusPrivacy('contacts').mutation.valueObject).toEqual({
+			statusPrivacy: { mode: 'CONTACTS', modes: ['CONTACTS'] },
+		})
+		expect(act.statusPrivacy('except', ['a@lid']).mutation.valueObject).toEqual({
+			statusPrivacy: { mode: 'DENY_LIST', modes: ['DENY_LIST'], userJid: ['a@lid'] },
+		})
+		expect(act.statusPrivacy('only', ['b@lid']).mutation.valueObject).toMatchObject({
+			statusPrivacy: { mode: 'ALLOW_LIST', userJid: ['b@lid'] },
+		})
+		const p = act.statusPrivacy('contacts')
+		expect(p.collection).toBe('regular_high')
+		expect(p.mutation.index).toBe(JSON.stringify(['status_privacy']))
+	})
+})
+
 describe('action builders', () => {
 	it('use the same indices and collections as WhatsApp Web', () => {
 		expect(act.mute(CHAT, 1800000000000)).toMatchObject({
