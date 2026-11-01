@@ -17,3 +17,4 @@
 - Music posts: the song has to be mixed into the video's audio track; `sendMusic` only adds the music card. Verified on the phone.
 - Channel post labels: `client.newsletters.labelAiContent(jid, serverId)` and `labelPaidPartnership(jid, serverId)` (mex mutations on existing posts, seen in the phone's notifications; accepted live).
 - `client.postToChannel(channel, message, {aiContent, paidPartnership})` posts and labels in one call, returns `{id, serverId}`.
+- AI-content label is only shown by the app on image/video channel posts (confirmed on the phone); paid partnership shows on all.

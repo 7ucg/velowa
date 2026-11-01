@@ -72,7 +72,10 @@ export class Newsletters {
 		private readonly nextId: () => string,
 	) {}
 
-	/** Mark one of our posts as AI-generated content (`serverId` is the number from the send ack). */
+	/**
+	 * Mark one of our posts as AI-generated content (`serverId` is the number from the send ack). The app only shows
+	 * this label on image and video posts, not on text posts.
+	 */
 	labelAiContent = (jid: string, serverId: string | number, messageType = 'MESSAGE') =>
 		this.mex(
 			NEWSLETTER_QUERY.LABEL_AI_CONTENT,
