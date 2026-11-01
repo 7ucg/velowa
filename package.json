@@ -33,10 +33,11 @@
 		"pair": "npm run build:js && node dist/cli/pair.js",
 		"example": "npm run build:js && node examples/tour.js",
 		"build:wasm-voip": "wasm-pack build rust/wasm-voip --target web --out-dir ../../src/wasm-voip",
-		"check:package": "publint && attw --pack . --profile node16",
+		"check:package": "publint && attw --pack . --profile node16 && vitest run tests/package",
 		"build:js": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsup && node scripts/copy-assets.mjs",
 		"logs": "tsup && node scripts/copy-assets.mjs && node dist/cli/logs.js",
-		"check:docs": "vitest run tests/docs"
+		"check:docs": "vitest run tests/docs",
+		"prepublishOnly": "npm run lint && npm test && npm run build && npm run check:package"
 	},
 	"devDependencies": {
 		"@arethetypeswrong/cli": "^0.18.5",
@@ -55,7 +56,6 @@
 	"dependencies": {
 		"opusscript": "^0.1.1",
 		"protobufjs": "^7.6.1",
-		"qrcode-terminal": "^0.12.0",
 		"ws": "^8.22.1"
 	},
 	"files": [
@@ -75,5 +75,20 @@
 		"url": "git+https://github.com/7ucg/velowa.git"
 	},
 	"sideEffects": false,
-	"module": "./dist/index.js"
+	"module": "./dist/index.js",
+	"optionalDependencies": {
+		"qrcode-terminal": "^0.12.0"
+	},
+	"bin": {
+		"velowa-pair": "./dist/cli/pair.js",
+		"velowa-logs": "./dist/cli/logs.js"
+	},
+	"bugs": {
+		"url": "https://github.com/7ucg/velowa/issues"
+	},
+	"homepage": "https://github.com/7ucg/velowa#readme",
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
 }

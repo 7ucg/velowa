@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Look after the protocol logs.
 //   node dist/cli/logs.js list     [--dir=logs] [--label=call]     runs, newest last, with sizes
 //   node dist/cli/logs.js migrate  [--dir=logs]                    sort old flat run folders into day folders

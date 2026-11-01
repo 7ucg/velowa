@@ -42,18 +42,12 @@ else is TypeScript. The package ships **ESM and CommonJS** builds with type defi
 
 ## Install and set up
 
-Requirements: **Node.js 18 or newer.** Credentials are stored in a folder on disk (`auth/` by default); keep it
-private and out of git, it is the logged-in account.
+Requirements: **Node.js 18 or newer.** That is all: `npm install velowa` installs a finished build (the WebAssembly is
+inside), runs no install script, and needs no Rust or compiler.
 
 ```bash
-# from a checkout (needs Rust 1.94 and wasm-pack once, for the WebAssembly parts)
-git clone https://github.com/7ucg/velowa && cd velowa
-npm install
-npm run build        # wasm-pack + tsup -> dist/ (ESM + CJS)
-npm test
+npm install velowa
 ```
-
-Use it from your project (`npm install ../velowa`, `npm link`, or the registry once it is published):
 
 ```ts
 import { Client } from 'velowa' // ESM
@@ -62,6 +56,22 @@ import { Client } from 'velowa' // ESM
 ```js
 const { Client } = require('velowa') // CommonJS
 ```
+
+Credentials are stored in a folder on disk (`auth/` by default); keep it private and out of git, it is the logged-in
+account. Two small command line tools come with the package: `npx velowa-pair` (link an account and try things in a dev
+console) and `npx velowa-logs` (look after the protocol logs).
+
+**Building from a checkout** (to change velowa itself; needs Rust 1.94 and `wasm-pack` once):
+
+```bash
+git clone https://github.com/7ucg/velowa && cd velowa
+npm install
+npm run build        # wasm-pack + tsup -> dist/ (ESM + CJS)
+npm test
+```
+
+Installing straight from git (`npm install github:7ucg/velowa`) does not work, because `dist/` is build output that git does not
+hold; use the registry or a checkout. The rules for the package and for git are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 For a bot, turn the protocol log off (it records every frame and stanza under `logs/`, which you want only while
 debugging):
@@ -576,7 +586,7 @@ npm run build         # wasm-pack (bridge + voip) and tsup -> dist/index.js, dis
 npm run build:js      # only the TypeScript part (when the WebAssembly did not change)
 npm test              # vitest
 npm run lint          # tsc --noEmit + eslint (src and tests)
-npm run check:package # publint + are-the-types-wrong: ESM and CJS consumers both resolve cleanly
+npm run check:package # publint + are-the-types-wrong + the package rules (tests/package)
 npm run check:docs    # type-checks the code in this README and in examples/ against the built package
 npm run pair          # a dev console that exercises everything and logs every frame
 npm run example       # a tour of the features against your own account (examples/tour.js)
@@ -622,5 +632,6 @@ Known limits:
 - [`docs/architecture.md`](docs/architecture.md): toolchain, layout, the event model.
 - [`docs/design-decisions.md`](docs/design-decisions.md): where velowa departs from Baileys and why.
 - [`docs/feature-checklist.md`](docs/feature-checklist.md): what exists, per area.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): rules for git, for what `npm install` puts on a machine, and for releases.
 - [`CHANGELOG.md`](CHANGELOG.md): what changed, newest first.
 - [`prompt.md`](prompt.md) and [`TODO.md`](TODO.md): the original brief and task breakdown.

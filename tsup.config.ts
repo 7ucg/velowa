@@ -7,6 +7,8 @@ const common = {
 	target: 'node18',
 	platform: 'node',
 	sourcemap: false,
+	// optional dependencies are not bundled either (tsup only skips `dependencies` by itself)
+	external: ['qrcode-terminal'],
 } as const
 
 export default defineConfig([

@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Package rules: `npm install velowa` installs only `dist/` (14 files, 1.5 MB), runs no install script and needs no Rust; the pairing helper's `qrcode-terminal` is optional; `velowa-pair` and `velowa-logs` command line tools; npm metadata and provenance; a `prepublishOnly` gate; `tests/package` enforces all of it; `.gitattributes`, `CONTRIBUTING.md` (git and npm rules, release steps), a CI `package` job and a release workflow.
 - Examples for the public: `echo-bot`, `cases-bot`, `plugin-bot/`, `notifier`, `channel-post`, `group-admin`, `calls` and `tour`, configured by environment variables (no ids or numbers in the code), with an index in `examples/README.md`; the old internal live-test scripts and the placeholder `basic-bot` are gone. `npm run check:docs` type-checks the README and the examples against the built package.
 - Security: media `{ url }` in `client.send` is http(s) only and can no longer read a local file; local files need the explicit `{ path }`.
 - Bots: `client.send(jid, content)` (one call for text, media, polls, buttons, lists, location, contacts, reactions, edits, forwards), a `connection` event (state, QR, pairing code, close reason), `serialize()` for a received message, `GroupCache`/`isGroupAdmin`, JID and content helpers, runnable bot examples (cases and plugins) in `examples/`. README rewritten with an index, a feature guide and checked examples (`npm run check:docs`).

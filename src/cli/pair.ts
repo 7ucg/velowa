@@ -1,10 +1,10 @@
+#!/usr/bin/env node
 // Dev tool: link velowa by QR code (if needed), then stay connected, log everything and take commands.
 //   node dist/cli/pair.js [--log=false] [--log-dir=logs] [--auth=auth] [--phone=4915...  (pairing code instead of QR)]
 // Commands on stdin: type `help` (send, react, edit, delete, image, poll, groups, archive, privacy, ...)
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { createInterface } from 'node:readline'
-import qrcode from 'qrcode-terminal'
 import { Client } from '../client/client.js'
 import { ProtocolLogger } from '../logging/protocol-logger.js'
 
@@ -34,7 +34,11 @@ client.on('pairing-code', ({ code }) =>
 )
 client.on('qr', ({ qr }) => {
 	console.log('\nScan with WhatsApp > Linked devices > Link a device:\n')
-	qrcode.generate(qr, { small: true })
+	// qrcode-terminal is an optional dependency: without it the raw code is printed (paste it into any QR generator)
+	import('qrcode-terminal').then(
+		(m) => (m.default ?? m).generate(qr, { small: true }),
+		() => console.log(qr),
+	)
 })
 client.on('paired', ({ id }) => console.log(`Paired as ${id}`))
 client.on('open', ({ id }) =>
