@@ -62,3 +62,14 @@ export type { LinkPreview, LinkPreviewOptions } from './client/features/link-pre
 export { encodeWam, WAM_EVENTS, WAM_GLOBALS } from './wam/index.js'
 export type { WamEvent, WamValue } from './wam/index.js'
 export type { PaymentRequestInput } from './client/features/payments.js'
+export { parseButtonReply } from './client/features/buttons.js'
+export type {
+	ButtonReply,
+	ButtonsOptions,
+	ListOptions,
+	TemplateOptions,
+} from './client/features/buttons.js'
+export { richResponse, tokenizeCode } from './client/features/rich-response.js'
+export type { RichResponseOptions } from './client/features/rich-response.js'
+export { buildReport, REPORT_FLOWS, ReportStore } from './client/features/report.js'
+export type { ReportOptions, ReportedMessage } from './client/features/report.js'

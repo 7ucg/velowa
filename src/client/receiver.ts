@@ -59,6 +59,8 @@ export interface DecodedMessage {
 	participant?: string
 	timestamp?: number
 	pushName?: string
+	/** The server's `reporting_tag` and the sender's token (for reports); present on end-to-end encrypted messages. */
+	reporting?: { tag?: Uint8Array; token?: Uint8Array; version?: number }
 	message: Record<string, unknown>
 }
 
@@ -366,6 +368,16 @@ export class Receiver {
 				const ts = Number(node.attrs['t'])
 				if (ts) decoded.timestamp = ts
 				if (node.attrs['notify']) decoded.pushName = node.attrs['notify']
+				const rep = children(node, 'reporting')[0]
+				if (rep) {
+					const tag = children(rep, 'reporting_tag')[0]?.content
+					const tok = children(rep, 'reporting_token')[0]
+					decoded.reporting = {
+						...(tag instanceof Uint8Array && { tag }),
+						...(tok?.content instanceof Uint8Array && { token: tok.content }),
+						...(tok?.attrs['v'] && { version: Number(tok.attrs['v']) }),
+					}
+				}
 				this.d.onMessage?.(decoded)
 			} catch (error) {
 				failures.push(`${type}: ${(error as Error).message}`)

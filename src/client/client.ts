@@ -51,6 +51,10 @@ import type { GroupNotification } from './features/groups.js'
 import * as media from './features/media.js'
 import type { MediaOptions, MediaType } from './features/media.js'
 import * as msg from './features/messages.js'
+import * as buttons from './features/buttons.js'
+import { richResponse } from './features/rich-response.js'
+import type { RichResponseOptions } from './features/rich-response.js'
+import * as report from './features/report.js'
 import * as payments from './features/payments.js'
 import { encodeWam } from '../wam/index.js'
 import type { WamEvent } from '../wam/index.js'
@@ -497,8 +501,19 @@ export class Client {
 	/** Set our own "About" text. */
 	updateProfileStatus = (text: string) => contacts.updateStatus(this.#q, text)
 	fetchBlocklist = () => contacts.fetchBlocklist(this.#q)
-	blockUser = (jid: string) => contacts.updateBlockStatus(this.#q, jid, 'block')
-	unblockUser = (jid: string) => contacts.updateBlockStatus(this.#q, jid, 'unblock')
+	/** Block a contact; `entryPoint` / `reason` are what the app reports with it (see `contacts.BlockOptions`). */
+	async blockUser(jid: string, o: contacts.BlockOptions = {}): Promise<void> {
+		return contacts.updateBlockStatus(this.#q, jid, 'block', await this.#withLid(jid, o))
+	}
+	async unblockUser(jid: string): Promise<void> {
+		return contacts.updateBlockStatus(this.#q, jid, 'unblock', await this.#withLid(jid, {}))
+	}
+	async #withLid(jid: string, o: contacts.BlockOptions): Promise<contacts.BlockOptions> {
+		if (o.lid || jid.endsWith('@lid')) return o
+		const found = await this.lidsFor(jid).catch(() => [])
+		const lid = found.find((x) => x.pn === jid)?.lid
+		return lid ? { ...o, lid } : o
+	}
 	fetchPrivacySettings = () => contacts.fetchPrivacySettings(this.#q)
 	updatePrivacy = (name: contacts.PrivacyCategory, value: contacts.PrivacyValue) =>
 		contacts.updatePrivacy(this.#q, name, value)
@@ -607,6 +622,113 @@ export class Client {
 		})
 		return sender.sendMessage(group, gs.message, gs.opts)
 	}
+	// ---- buttons, lists, templates, rich answers ----------------------------------------------
+
+	/** Up to three reply buttons under a text (`buttonsMessage`). The tap arrives as a `message` event; see `parseButtonReply`. */
+	async sendButtons(to: string, o: buttons.ButtonsOptions): Promise<string> {
+		const { sender } = await this.#live()
+		const m = buttons.buttonsMessage(o)
+		return sender.sendMessage(to, m.message, m.opts)
+	}
+	/** A "choose from a list" message (`listMessage`). */
+	async sendList(to: string, o: buttons.ListOptions): Promise<string> {
+		const { sender } = await this.#live()
+		const m = buttons.listMessage(o)
+		return sender.sendMessage(to, m.message, m.opts)
+	}
+	/** Template buttons: quick replies, a link and a phone number (`templateMessage`). */
+	async sendTemplate(to: string, o: buttons.TemplateOptions): Promise<string> {
+		const { sender } = await this.#live()
+		const m = buttons.templateMessage(o)
+		return sender.sendMessage(to, m.message, m.opts)
+	}
+	/** Answer a buttons message; the tapped button's id and text come from the received message. */
+	replyToButtons = (to: string, id: string, displayText: string) =>
+		this.sendMessage(to, buttons.buttonsResponse(id, displayText))
+	replyToList = (to: string, rowId: string, title: string, description?: string) =>
+		this.sendMessage(to, buttons.listResponse(rowId, title, description))
+	replyToTemplate = (to: string, id: string, displayText: string, index = 0) =>
+		this.sendMessage(to, buttons.templateButtonReply(id, displayText, index))
+	replyToNativeFlow = (to: string, name: string, params: Record<string, unknown>, bodyText = '') =>
+		this.sendMessage(to, buttons.interactiveResponse(name, params, bodyText))
+	/** A Meta AI style answer with text, code, table, LaTeX, map and images. */
+	async sendRichResponse(to: string, o: RichResponseOptions): Promise<string> {
+		const { sender } = await this.#live()
+		const m = richResponse(o)
+		return sender.sendMessage(to, m.message, m.opts)
+	}
+
+	// ---- reports ----------------------------------------------------------------------------
+
+	readonly #reports = new report.ReportStore()
+
+	async #sendReport(
+		kind: report.ReportKind,
+		jid: string,
+		o: report.ReportOptions,
+	): Promise<{ reportId?: string }> {
+		const { receiver } = await this.#live()
+		const res = await receiver.request(report.buildReport(kind, jid, receiver.nextId(), o))
+		const id = report.reportId(res)
+		return id ? { reportId: id } : {}
+	}
+
+	/**
+	 * Report a user to WhatsApp, as "Report" in the contact menu does. The latest 5 messages of the chat go along as
+	 * evidence unless you pass `messages` or `withMessages: false`. `block: true` blocks the contact afterwards
+	 * ("Block contact and delete chat" additionally with `deleteChat: true`).
+	 */
+	async reportUser(
+		jid: string,
+		o: report.ReportOptions & {
+			block?: boolean
+			deleteChat?: boolean
+			withMessages?: boolean
+		} = {},
+	): Promise<{ reportId?: string; blocked: boolean }> {
+		const messages = o.messages ?? (o.withMessages === false ? [] : this.#reports.recent(jid, 5))
+		const sent = await this.#sendReport('user', jid, { ...o, messages })
+		if (o.block) await this.blockUser(jid, { entryPoint: o.flow ?? 'overflow_menu_block' })
+		if (o.block && o.deleteChat) await this.deleteChat(jid)
+		return { ...sent, blocked: !!o.block }
+	}
+	/**
+	 * Report a group. `leave: true` leaves it afterwards ("Exit group and report"). The group name is looked up when
+	 * you do not give `subject`.
+	 */
+	async reportGroup(
+		group: string,
+		o: report.ReportOptions & { leave?: boolean; withMessages?: boolean } = {},
+	): Promise<{ reportId?: string; left: boolean }> {
+		const subject = o.subject ?? (await this.groups.metadata(group)).subject
+		const messages = o.messages ?? (o.withMessages === false ? [] : this.#reports.recent(group, 5))
+		const sent = await this.#sendReport('group', group, { ...o, subject, messages })
+		if (o.leave) await this.groups.leave(group)
+		return { ...sent, left: !!o.leave }
+	}
+	/** Report a channel (`unfollow: true` leaves it afterwards). */
+	async reportChannel(
+		channel: string,
+		o: report.ReportOptions & { unfollow?: boolean; withMessages?: boolean } = {},
+	): Promise<{ reportId?: string }> {
+		const subject = o.subject ?? (await this.newsletters.metadata('jid', channel)).name ?? ''
+		const messages =
+			o.messages ?? (o.withMessages === false ? [] : this.#reports.recent(channel, 5))
+		const sent = await this.#sendReport('newsletter', channel, { ...o, subject, messages })
+		if (o.unfollow) await this.newsletters.unfollow(channel)
+		return sent
+	}
+	/** Tell a group's admins about a message (it shows in their "reported messages"). */
+	async reportToAdmins(group: string, messageId: string): Promise<void> {
+		const { receiver } = await this.#live()
+		await receiver.request(report.reportToAdmins(group, receiver.nextId(), messageId))
+	}
+	/** Group setting: may members report messages to the admins? */
+	async setMemberReportsAllowed(group: string, allow: boolean): Promise<void> {
+		const { receiver } = await this.#live()
+		await receiver.request(report.setMemberReports(group, receiver.nextId(), allow))
+	}
+
 	/** Ask a contact to pay (`amount1000` is thousandths of the currency unit). */
 	requestPayment = (to: string, p: payments.PaymentRequestInput) =>
 		this.sendMessage(to, payments.requestPayment(to, p))
@@ -991,7 +1113,27 @@ export class Client {
 			cipher,
 			logger: this.logger,
 			send: (n) => conn.send(n),
-			onMessage: (m) => this.#events.emit('message', m),
+			onMessage: (m) => {
+				this.#reports.add({
+					id: m.id,
+					t: m.timestamp ?? Math.floor(Date.now() / 1000),
+					fromMe: false,
+					chat: m.from,
+					...(m.participant && { participant: m.participant }),
+					message: m.message,
+					...(m.reporting && { reporting: m.reporting }),
+					// The key is derived with our JID in the same addressing as the sender's.
+					...(this.#creds.me && {
+						meId: (m.from.endsWith('@g.us')
+							? m.from
+							: (m.participant ?? m.from).endsWith('@lid') && this.#creds.me.lid
+								? this.#creds.me.lid
+								: this.#creds.me.id
+						).replace(/:\d+@/, '@'),
+					}),
+				})
+				this.#events.emit('message', m)
+			},
 			onHistory: (n) => {
 				void loadHistory(n)
 					.then((chunk) => {
@@ -1068,7 +1210,16 @@ export class Client {
 			receiver,
 			logger: this.logger,
 			senderKeyMemoryPath: join(this.#signalDir, 'sender-key-memory.json'),
-			onSent: (id, to, m) => receiver.rememberOwn(id, to, m),
+			onSent: (id, to, m) => {
+				receiver.rememberOwn(id, to, m)
+				this.#reports.add({
+					id,
+					t: Math.floor(Date.now() / 1000),
+					fromMe: true,
+					chat: to,
+					message: m,
+				})
+			},
 			...(this.antiban && {
 				gate: (to, m) => this.antiban!.gate(to, AntiBan.signature(signatureOf(m))),
 			}),

@@ -218,15 +218,53 @@ export async function fetchBlocklist(request: RequestFn): Promise<string[]> {
 		.filter(Boolean)
 }
 
+export interface BlockOptions {
+	/** The contact's LID; the server wants blocks addressed by LID once one exists. */
+	lid?: string
+	/** Where the block comes from (`entry_point`); the app sends its screen name. */
+	entryPoint?: string
+	/** Why (business chats): `spam`, `scam_or_fraud`, `no_longer_needed`, `no_sign_up`, `offensive_messages`, `other`. */
+	reason?: string
+	reasonDescription?: string
+}
+
 export async function updateBlockStatus(
 	request: RequestFn,
 	jid: string,
 	action: 'block' | 'unblock',
+	o: BlockOptions = {},
 ): Promise<void> {
+	const addr = o.lid ?? jid
 	await request({
 		tag: 'iq',
 		attrs: { xmlns: 'blocklist', to: 's.whatsapp.net', type: 'set' },
-		content: [{ tag: 'item', attrs: { action, jid } }],
+		content: [
+			{
+				tag: 'item',
+				// The server only wants the PN next to the LID on a block; an unblock with it never gets an answer.
+				attrs: {
+					action,
+					jid: addr,
+					...(action === 'block' && o.lid && !jid.endsWith('@lid') && { pn_jid: jid }),
+				},
+				content:
+					action === 'block' && (o.reason || o.reasonDescription)
+						? [
+								{
+									tag: 'biz_opt_out',
+									attrs: {
+										...(o.reason && { reason: o.reason }),
+										...(o.reasonDescription && { reason_description: o.reasonDescription }),
+										...(o.entryPoint && { entry_point: o.entryPoint }),
+									},
+								},
+							]
+						: undefined,
+			},
+			...(action === 'block' && o.entryPoint
+				? [{ tag: 'entry_point', attrs: { source: o.entryPoint } }]
+				: []),
+		],
 	})
 }
 

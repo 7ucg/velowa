@@ -154,6 +154,12 @@ function extract(data: Uint8Array, cfg: Map<number, Cfg>): Buffer | undefined {
 	return Buffer.concat(out.map((f) => f.bytes))
 }
 
+/** The message fields the reporting token covers (what `reportingNode` hashes), or undefined if none. */
+export function reportableContent(encodedMessage: Uint8Array): Buffer | undefined {
+	const c = extract(encodedMessage, COMPILED)
+	return c && c.length > 0 ? c : undefined
+}
+
 /**
  * The `<reporting>` node WhatsApp Web attaches to messages that carry a `messageContextInfo.messageSecret`:
  * `reporting_token = HMAC-SHA256(key, whitelisted message fields)[0..16]` with

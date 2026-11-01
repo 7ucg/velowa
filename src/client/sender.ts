@@ -495,7 +495,12 @@ export class Sender {
 		const content: BinaryNode[] = [{ tag: 'participants', attrs: {}, content: participants }]
 		if (needsIdentity && creds.account)
 			content.push({ tag: 'device-identity', attrs: {}, content: creds.account })
-		const reporting = this.#reporting(id, to, message)
+		const reporting = this.#reporting(
+			id,
+			to.endsWith('@lid') && this.d.creds.me?.lid ? this.d.creds.me.lid : this.d.creds.me!.id,
+			to,
+			message,
+		)
 		if (reporting) content.push(reporting)
 		// WA Web marks 1:1 sends to phone-number JIDs with <bot biz_bot="1"/>.
 		if (to.endsWith('@s.whatsapp.net')) content.push({ tag: 'bot', attrs: { biz_bot: '1' } })
@@ -600,7 +605,7 @@ export class Sender {
 			content.push({ tag: 'device-identity', attrs: {}, content: creds.account })
 		if (/^\d{1,15}-\d+@g\.us$/.test(group) && !message['reactionMessage'])
 			content.push({ tag: 'multicast', attrs: {} })
-		const reporting = this.#reporting(id, group, message)
+		const reporting = this.#reporting(id, senderId, group, message)
 		if (reporting) content.push(reporting)
 		if (isStatus && !opts.stanzaAttrs?.['edit'])
 			content.push({
@@ -621,10 +626,15 @@ export class Sender {
 		}
 	}
 
-	/** Reporting token over the unpadded message, keyed like Baileys does (destination as both ends). */
+	/**
+	 * Reporting token over the unpadded message. The key is bound to the sender and the receiver (the other user in a
+	 * chat, the group in a group), both as plain user JIDs without a device: that is what a recipient derives when it
+	 * reports the message, and what the server compares against.
+	 */
 	#reporting(
 		id: string,
-		destination: string,
+		from: string,
+		to: string,
 		message: Record<string, unknown>,
 	): BinaryNode | undefined {
 		const secret = (message['messageContextInfo'] as { messageSecret?: Uint8Array } | undefined)
@@ -632,8 +642,8 @@ export class Sender {
 		if (!secret || message['reactionMessage']) return undefined
 		return reportingNode(encodeProto('Message', message), secret, {
 			id,
-			from: destination,
-			to: destination,
+			from: from.replace(/:\d+@/, '@'),
+			to: to.replace(/:\d+@/, '@'),
 		})
 	}
 
