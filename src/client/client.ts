@@ -260,8 +260,24 @@ export class Client {
 		}
 		let message = msg.withContext(built.message, to, opts, meId)
 		const field = Object.keys(message).find((k) => k !== 'messageContextInfo')!
+		const authorLid = (this.#creds.me?.lid ?? '').replace(/[:.]\d+@/, '@')
+		const gsSource =
+			type === 'audio'
+				? 'AUDIO'
+				: opts.contextInfo?.['statusSourceType'] === 'MUSIC_STANDALONE'
+					? 'MUSIC_STANDALONE'
+					: type === 'video'
+						? 'VIDEO'
+						: 'IMAGE'
 		const extraContext = {
 			...opts.contextInfo,
+			...(opts.groupStatus && {
+				...extras.groupStatusContext(
+					authorLid,
+					gsSource,
+					(opts.contextInfo?.['statusAttributions'] as unknown[] | undefined) ?? [],
+				),
+			}),
 			...(channel && { mediaDomainInfo: { mediaKeyDomain: 'MEDIA_KEY_DOMAIN_NON_E2EE' } }),
 		}
 		if (Object.keys(extraContext).length) {
@@ -272,12 +288,18 @@ export class Client {
 			}
 		}
 		const wire = opts.viewOnce ? extras.viewOnce(message) : message
+		const gs = opts.groupStatus ? extras.groupStatus(wire) : undefined
 		const q = opts.isQuestion ? extras.question(wire) : undefined
 		// Channel media carries its kind on the plaintext node, not on the stanza.
 		let serverId: string | undefined
-		const id = await sender.sendMessage(to, q ? q.message : wire, {
-			encAttrs: { mediatype: built.mediaType },
-			extraNodes: [...(q?.opts.extraNodes ?? []), ...(opts.extraNodes ?? [])],
+		const id = await sender.sendMessage(to, gs ? gs.message : q ? q.message : wire, {
+			// Group statuses go out like text: no mediatype on the enc node.
+			...(!gs && { encAttrs: { mediatype: built.mediaType } }),
+			extraNodes: [
+				...(gs?.opts.extraNodes ?? []),
+				...(q?.opts.extraNodes ?? []),
+				...(opts.extraNodes ?? []),
+			],
 			onAck: (ack) => (serverId = ack.attrs['server_id']),
 		})
 		if (channel && serverId && opts.labels?.aiContent)
@@ -511,6 +533,29 @@ export class Client {
 			await this.newsletters.labelPaidPartnership(channel, serverId)
 		return { id, ...(serverId && { serverId }) }
 	}
+	/**
+	 * Post a text status to a group. Pictures, videos and voice notes: `sendImage(group, data, { groupStatus: true })`,
+	 * `sendVideo`, `sendAudio(..., { ptt: true, groupStatus: true })`.
+	 */
+	async sendGroupStatusText(
+		group: string,
+		text: string,
+		o: { backgroundArgb?: number; textArgb?: number; font?: string } = {},
+	): Promise<string> {
+		const { sender } = await this.#live()
+		const lid = (this.#creds.me?.lid ?? '').replace(/[:.]\d+@/, '@')
+		const gs = extras.groupStatus({
+			extendedTextMessage: {
+				text,
+				textArgb: o.textArgb ?? 0xffffffff,
+				backgroundArgb: o.backgroundArgb ?? 0xff1e88e5,
+				font: o.font ?? 'SYSTEM',
+				previewType: 'NONE',
+				contextInfo: extras.groupStatusContext(lid, 'TEXT'),
+			},
+		})
+		return sender.sendMessage(group, gs.message, gs.opts)
+	}
 	/** Send a quiz: a single-choice poll with a right answer (`correctAnswer` must be one of `values`). */
 	async sendQuiz(
 		to: string,
@@ -592,7 +637,10 @@ export class Client {
 			...opts,
 			contextInfo: { ...opts.contextInfo, ...parts.contextInfo },
 			fields: { ...opts.fields, ...parts.fields },
-			extraNodes: [{ tag: 'meta', attrs: { contenttype: 'song' } }],
+			// Only channels carry the song marker; in a group it is rejected.
+			...(to.endsWith('@newsletter') && {
+				extraNodes: [{ tag: 'meta', attrs: { contenttype: 'song' } }],
+			}),
 		})
 	}
 	async sendLocation(

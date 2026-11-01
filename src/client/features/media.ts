@@ -334,6 +334,8 @@ export async function downloadMedia(
 // ---- message building -------------------------------------------------------------------------
 
 export interface MediaOptions {
+	/** Post as a group status (to a group JID) instead of a normal message. */
+	groupStatus?: boolean
 	/** Channels only: label the post after sending (needs the post's server number from the ack). */
 	labels?: { aiContent?: boolean; paidPartnership?: boolean }
 	/** Extra fields of the media message itself (e.g. `annotations`). */

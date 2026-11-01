@@ -145,6 +145,40 @@ export function musicParts(m: MusicInfo): {
 	}
 }
 
+/** `contextInfo` every group status carries (who posted it, that it is a group status, a random poster id). */
+export function groupStatusContext(
+	authorLid: string,
+	sourceType: string,
+	attributions: unknown[] = [],
+): Record<string, unknown> {
+	return {
+		forwardingScore: 0,
+		featureEligibilities: {
+			cannotBeRanked: false,
+			canBeReshared: false,
+			canReceiveMultiReact: true,
+		},
+		statusSourceType: sourceType,
+		statusAttributions: [
+			{ type: 'GROUP_STATUS', groupStatus: { authorJid: authorLid } },
+			...attributions,
+		],
+		isGroupStatus: true,
+		posterStatusId: randomBytes(32).toString('base64'),
+	}
+}
+
+/** A group status: the inner message wrapped, plus the `is_group_status` stanza marker. */
+export function groupStatus(inner: Record<string, unknown>): {
+	message: Record<string, unknown>
+	opts: SendOptions
+} {
+	return {
+		message: { groupStatusMessageV2: { message: inner } },
+		opts: { extraNodes: [{ tag: 'meta', attrs: { is_group_status: 'true' } }] },
+	}
+}
+
 /** Wrap a message so it can be opened once (`v2` is what current clients send). */
 export const viewOnce = (message: Record<string, unknown>): Record<string, unknown> => ({
 	viewOnceMessageV2: { message },
