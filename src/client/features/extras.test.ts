@@ -5,6 +5,7 @@ import {
 	location,
 	parseCall,
 	poll,
+	musicMessage,
 	rejectCall,
 	vcardFor,
 	viewOnce,
@@ -21,8 +22,29 @@ describe('extras', () => {
 		expect(
 			(single.message['messageContextInfo'] as { messageSecret: Buffer }).messageSecret,
 		).toHaveLength(32)
-		expect(single.opts.extraNodes).toEqual([{ tag: 'meta', attrs: { polltype: 'creation' } }])
+		expect(single.opts.extraNodes).toEqual([
+			{ tag: 'meta', attrs: { polltype: 'creation', contenttype: 'text' } },
+		])
 		expect(poll('Was?', ['a', 'b', 'c'], 2).message['pollCreationMessage']).toBeDefined()
+	})
+
+	it('builds quizzes with the right answer and rejects bad ones', () => {
+		const q = poll('2+2?', ['3', '4'], 1, { correctAnswer: '4' })
+		expect(q.message['pollCreationMessageV3']).toMatchObject({
+			pollType: 'QUIZ',
+			correctAnswer: { optionName: '4' },
+		})
+		expect(() => poll('x', ['a', 'b'], 1, { correctAnswer: 'c' })).toThrow()
+		expect(() => poll('x', ['a', 'b'], 2, { correctAnswer: 'a' })).toThrow()
+	})
+
+	it('builds a music post', () => {
+		expect(musicMessage('hi', { title: 'T', author: 'A' })).toEqual({
+			extendedTextMessage: {
+				text: 'hi',
+				musicMetadata: { title: 'T', author: 'A', isExplicit: false, musicSongStartTimeInMs: 0 },
+			},
+		})
 	})
 
 	it('rejects invalid polls', () => {

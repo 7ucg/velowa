@@ -23,6 +23,8 @@ export interface TextOptions {
 	mentions?: string[]
 	/** Disappearing-message timer in seconds for this message (use the chat's current setting). */
 	expiration?: number
+	/** Mark the message as a question (channels show it with an answer box). */
+	isQuestion?: boolean
 }
 
 const normalizedUser = (jid: string): string => {
@@ -51,7 +53,7 @@ export function withContext(
 	opts: TextOptions,
 	meId: string,
 ): Record<string, unknown> {
-	if (!opts.quoted && !opts.mentions?.length && !opts.expiration) return message
+	if (!opts.quoted && !opts.mentions?.length && !opts.expiration && !opts.isQuestion) return message
 	const field = Object.keys(message).find((k) => k !== 'messageContextInfo')
 	if (!field) return message
 	const body = { ...(message[field] as Record<string, unknown>) }
@@ -67,6 +69,7 @@ export function withContext(
 	}
 	if (opts.mentions?.length) ctx['mentionedJid'] = opts.mentions
 	if (opts.expiration) ctx['expiration'] = opts.expiration
+	if (opts.isQuestion) ctx['isQuestion'] = true
 	body['contextInfo'] = ctx
 	return { ...message, [field]: body }
 }

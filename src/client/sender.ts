@@ -132,7 +132,11 @@ export class Sender {
 				tag: 'message',
 				attrs: { id, to, type: messageType(post), ...opts.stanzaAttrs },
 				content: [
-					{ tag: 'plaintext', attrs: {}, content: encodeProto('Message', post) },
+					{
+						tag: 'plaintext',
+						attrs: { ...opts.encAttrs },
+						content: encodeProto('Message', post),
+					},
 					...(opts.extraNodes ?? []),
 				],
 			}

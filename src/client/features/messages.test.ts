@@ -153,6 +153,13 @@ describe('forward and expiration', () => {
 		expect(() => forward({})).toThrow()
 	})
 
+	it('marks a message as a question', () => {
+		const m = withContext(textMessage('why?'), BOB, { isQuestion: true }, ME)
+		expect(
+			(m['extendedTextMessage'] as { contextInfo: { isQuestion: boolean } }).contextInfo.isQuestion,
+		).toBe(true)
+	})
+
 	it('adds the disappearing-message timer', () => {
 		const m = withContext(textMessage('x'), BOB, { expiration: 604800 }, ME)
 		expect(

@@ -239,12 +239,18 @@ export class Client {
 		opts: MediaOptions & TextOptions = {},
 	): Promise<string> {
 		const { sender, meId } = await this.#live()
-		const enc = media.encryptMedia(data, type)
-		const uploaded = await media.uploadMedia(await this.#getMediaConn(), type, enc)
+		// Channels are not end-to-end encrypted: the file goes up as is and the message has no media key.
+		const channel = to.endsWith('@newsletter')
+		const enc = channel ? media.rawMedia(data) : media.encryptMedia(data, type)
+		const uploaded = await media.uploadMedia(await this.#getMediaConn(), type, enc, fetch, channel)
 		const built = media.mediaMessage(type, enc, uploaded, opts)
+		if (channel) media.stripMediaKeys(built.message)
 		const message = msg.withContext(built.message, to, opts, meId)
 		const wire = opts.viewOnce ? extras.viewOnce(message) : message
-		return sender.sendMessage(to, wire, { encAttrs: { mediatype: built.mediaType } })
+		return sender.sendMessage(to, wire, {
+			encAttrs: { mediatype: built.mediaType },
+			...(channel && { stanzaAttrs: { mediatype: built.mediaType } }),
+		})
 	}
 
 	sendImage = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
@@ -449,6 +455,25 @@ export class Client {
 		const p = extras.poll(name, values, selectableCount)
 		return sender.sendMessage(to, p.message, p.opts)
 	}
+	/** Send a quiz: a single-choice poll with a right answer (`correctAnswer` must be one of `values`). */
+	async sendQuiz(
+		to: string,
+		name: string,
+		values: string[],
+		correctAnswer: string,
+	): Promise<string> {
+		const { sender } = await this.#live()
+		const p = extras.poll(name, values, 1, { correctAnswer })
+		return sender.sendMessage(to, p.message, p.opts)
+	}
+	/** Send a question (text, or an image with the question as caption via `sendQuestionImage`). */
+	sendQuestion = (to: string, text: string) =>
+		this.sendMessage(to, msg.withContext(msg.textMessage(text), to, { isQuestion: true }, ''))
+	sendQuestionImage = (to: string, data: Uint8Array, question: string, opts: MediaOptions = {}) =>
+		this.sendMedia(to, 'image', data, { ...opts, caption: question, isQuestion: true })
+	/** Send a text post with a song attached. */
+	sendMusic = (to: string, text: string, music: extras.MusicInfo) =>
+		this.sendMessage(to, extras.musicMessage(text, music))
 	async sendLocation(
 		to: string,
 		latitude: number,

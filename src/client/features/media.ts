@@ -30,6 +30,14 @@ const UPLOAD_PATH: Record<MediaType, string> = {
 	document: '/mms/document',
 	sticker: '/mms/image',
 }
+/** Channel media has its own upload paths. */
+const NEWSLETTER_PATH: Record<MediaType, string> = {
+	image: '/newsletter/newsletter-image',
+	video: '/newsletter/newsletter-video',
+	audio: '/newsletter/newsletter-audio',
+	document: '/newsletter/newsletter-document',
+	sticker: '/newsletter/newsletter-image',
+}
 export const MEDIA_HOST = 'mmg.whatsapp.net'
 const ORIGIN = 'https://web.whatsapp.com'
 const MAC_LENGTH = 10
@@ -67,6 +75,30 @@ export function encryptMedia(
 		fileSha256: createHash('sha256').update(plain).digest(),
 		fileEncSha256: createHash('sha256').update(encrypted).digest(),
 		fileLength: plain.length,
+	}
+}
+
+/** Channel media is uploaded unencrypted; the upload token is the hash of the file itself. */
+export function rawMedia(plain: Uint8Array): EncryptedMedia {
+	const sha = createHash('sha256').update(plain).digest()
+	return {
+		mediaKey: Buffer.alloc(0),
+		encrypted: Buffer.from(plain),
+		fileSha256: sha,
+		fileEncSha256: sha,
+		fileLength: plain.length,
+	}
+}
+
+/** Remove the fields that only make sense for encrypted media from a channel message. */
+export function stripMediaKeys(message: Record<string, unknown>): void {
+	for (const body of Object.values(message)) {
+		if (body && typeof body === 'object') {
+			const b = body as Record<string, unknown>
+			delete b['mediaKey']
+			delete b['fileEncSha256']
+			delete b['mediaKeyTimestamp']
+		}
 	}
 }
 
@@ -151,11 +183,12 @@ export async function uploadMedia(
 	type: MediaType,
 	media: EncryptedMedia,
 	fetchImpl: Fetch = fetch,
+	channel = false,
 ): Promise<UploadResult> {
 	const token = uploadToken(media.fileEncSha256)
 	let lastError: unknown
 	for (const host of conn.hosts) {
-		const url = `https://${host}${UPLOAD_PATH[type]}/${token}?auth=${encodeURIComponent(conn.auth)}&token=${token}`
+		const url = `https://${host}${channel ? NEWSLETTER_PATH[type] : UPLOAD_PATH[type]}/${token}?auth=${encodeURIComponent(conn.auth)}&token=${token}`
 		try {
 			const res = await fetchImpl(url, {
 				method: 'POST',

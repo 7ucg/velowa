@@ -12,3 +12,4 @@
 - LID addressing for Signal sessions (fixes the phone not decrypting our own-device copies), serialized cipher calls, app-state key request to the phone, `examples/example.js` live check (31/31).
 - Username lookup; `examples/example-others.js` live check against a second account, a group and a channel.
 - `examples/example-manage.js`: group management and status posting verified live (16/16).
+- Channel quiz (`sendQuiz`), question (`sendQuestion`, `sendQuestionImage`), music posts (`sendMusic`) accepted live; channel image upload uses the newsletter path but the server still answers 479 (open).

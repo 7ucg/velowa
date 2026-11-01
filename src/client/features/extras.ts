@@ -8,6 +8,7 @@ export function poll(
 	name: string,
 	values: string[],
 	selectableCount = 1,
+	o: PollOptions = {},
 ): { message: Record<string, unknown>; opts: SendOptions } {
 	if (!name.trim()) throw new Error('poll needs a question')
 	if (values.length < 2 || values.length > 12) throw new Error('a poll needs 2 to 12 options')
@@ -15,11 +16,16 @@ export function poll(
 	if (selectableCount < 0 || selectableCount > values.length) {
 		throw new Error(`selectableCount must be between 0 and ${values.length}`)
 	}
+	const quiz = o.correctAnswer !== undefined
+	if (quiz && !values.includes(o.correctAnswer!))
+		throw new Error('correctAnswer must be one of the options')
+	if (quiz && selectableCount !== 1) throw new Error('a quiz has exactly one selectable answer')
 	const creation = {
 		name,
 		selectableOptionsCount: selectableCount,
 		options: values.map((optionName) => ({ optionName })),
-		pollType: 'POLL',
+		pollType: quiz ? 'QUIZ' : 'POLL',
+		...(quiz && { correctAnswer: { optionName: o.correctAnswer } }),
 	}
 	return {
 		// Single-choice polls use the V3 field, multiple choice the original one (as WhatsApp Web does).
@@ -29,9 +35,42 @@ export function poll(
 				? { pollCreationMessageV3: creation }
 				: { pollCreationMessage: creation }),
 		},
-		opts: { extraNodes: [{ tag: 'meta', attrs: { polltype: 'creation' } }] },
+		// `contenttype` is only read for channel posts; chats ignore it.
+		opts: {
+			extraNodes: [{ tag: 'meta', attrs: { polltype: 'creation', contenttype: 'text' } }],
+		},
 	}
 }
+
+export interface PollOptions {
+	/** Turns the poll into a quiz: this option is the right answer. */
+	correctAnswer?: string
+}
+
+export interface MusicInfo {
+	title: string
+	author: string
+	songId?: string
+	artistAttribution?: string
+	isExplicit?: boolean
+	/** Where the shared snippet starts, in milliseconds. */
+	startTimeMs?: number
+}
+
+/** A text post that carries a song (shown with the music card). */
+export const musicMessage = (text: string, m: MusicInfo): Record<string, unknown> => ({
+	extendedTextMessage: {
+		text,
+		musicMetadata: {
+			title: m.title,
+			author: m.author,
+			...(m.songId && { songId: m.songId }),
+			...(m.artistAttribution && { artistAttribution: m.artistAttribution }),
+			isExplicit: m.isExplicit ?? false,
+			musicSongStartTimeInMs: m.startTimeMs ?? 0,
+		},
+	},
+})
 
 /** Wrap a message so it can be opened once (`v2` is what current clients send). */
 export const viewOnce = (message: Record<string, unknown>): Record<string, unknown> => ({
