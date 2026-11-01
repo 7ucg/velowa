@@ -147,6 +147,30 @@ describe('AppStateSync', () => {
 	})
 })
 
+describe('AppStateSync hardening', () => {
+	it('ignores collection names the server invents (they end up in file names)', async () => {
+		const { patch } = buildGenesisPatch(master, keyId, 'regular', ['star', 'c'], 1)
+		const { sync, events, dir } = harness(() => collectionAnswer('../../evil', [patch]))
+		sync.addKeys([{ keyId, keyData: master }])
+		await sync.sync(['regular'])
+		expect(events).toHaveLength(0)
+		const { existsSync } = await import('node:fs')
+		expect(existsSync(join(dir, '../../evil.state'))).toBe(false)
+		await sync.sync(['../../x', 'regular_low']) // notification-driven names are filtered too
+	})
+
+	it('stops when the server keeps announcing more patches without progress', async () => {
+		let calls = 0
+		const { sync } = harness(() => {
+			calls++
+			return collectionAnswer('regular', [], { has_more_patches: 'true' })
+		})
+		sync.addKeys([{ keyId, keyData: master }])
+		await sync.sync(['regular'])
+		expect(calls).toBe(1)
+	})
+})
+
 describe('interpret', () => {
 	const ev = (
 		action: string,

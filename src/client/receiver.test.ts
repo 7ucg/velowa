@@ -360,3 +360,43 @@ describe('helpers', () => {
 		})
 	})
 })
+
+describe('Receiver: app-state key shares', () => {
+	async function shareFrom(authorJid: string) {
+		const keys: { keyId: Uint8Array; keyData: Uint8Array }[][] = []
+		const w = await setup()
+		const share = text('', {
+			protocolMessage: {
+				type: 'APP_STATE_SYNC_KEY_SHARE',
+				appStateSyncKeyShare: {
+					keys: [{ keyId: { keyId: Buffer.from([1]) }, keyData: { keyData: Buffer.alloc(32, 5) } }],
+				},
+			},
+		})
+		const enc = await w.alice.encrypt('bob', 1, pad(share))
+		const withHook = new Receiver({
+			creds: w.creds,
+			saveCreds() {},
+			storage: w.storage,
+			cipher: createSignalCipher(w.storage),
+			logger: new ProtocolLogger({ enabled: false }),
+			send: () => {},
+			onAppStateKeys: (k) => keys.push(k),
+		})
+		withHook.handle({
+			tag: 'message',
+			attrs: { from: authorJid, id: 'K1', type: 'text', category: 'peer' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
+		})
+		await withHook.idle()
+		return keys
+	}
+
+	it('accepts keys from our own account (phone, by LID or number)', async () => {
+		expect(await shareFrom('48615137533978@lid')).toHaveLength(1)
+	})
+
+	it('drops keys shared by anyone else', async () => {
+		expect(await shareFrom('4915699999999@s.whatsapp.net')).toHaveLength(0)
+	})
+})

@@ -2,7 +2,7 @@ import type { AuthCreds } from '../auth/creds.js'
 import type { BinaryNode } from '../codec/index.js'
 import { newPreKeys } from '../crypto/signal.js'
 import type { SignalCipher, SignalStorage } from '../crypto/signal.js'
-import { signalAddress, signalAddressString } from '../jid.js'
+import { jidDecode, signalAddress, signalAddressString } from '../jid.js'
 import type { ProtocolLogger } from '../logging/protocol-logger.js'
 import { MessageSecrets, decryptMsmsg, extractMetaAiText } from './meta-ai.js'
 import { protoType } from './proto.js'
@@ -309,6 +309,20 @@ export class Receiver {
 		return unpadRandomMax16(res.plaintext)
 	}
 
+	/** Is this JID (any device) one of our own account's, by phone number or LID? */
+	#isOwnAccount(jid: string): boolean {
+		const me = this.d.creds.me
+		if (!me) return false
+		try {
+			const user = jidDecode(jid).user
+			return (
+				user === jidDecode(me.id).user || (me.lid !== undefined && user === jidDecode(me.lid).user)
+			)
+		} catch {
+			return false
+		}
+	}
+
 	/** Meta AI reply: decrypt with the secret of the message it answers (see meta-ai.ts). */
 	#decryptMsmsg(node: BinaryNode, author: string, data: Uint8Array): Uint8Array {
 		const { creds } = this.d
@@ -391,7 +405,10 @@ export class Receiver {
 		const secret = raw.messageContextInfo?.messageSecret
 		if (secret) this.#secrets.set(id, secret, chat)
 		const shared = raw.protocolMessage?.appStateSyncKeyShare?.keys
-		if (shared?.length && this.d.onAppStateKeys) {
+		if (shared?.length && this.d.onAppStateKeys && !this.#isOwnAccount(author)) {
+			// Whoever holds these keys can forge our chat/contact state, so only our own account may hand them out.
+			this.d.logger.event('appstate.key-share-rejected', { author, count: shared.length })
+		} else if (shared?.length && this.d.onAppStateKeys) {
 			const keys = shared.flatMap((k) =>
 				k.keyId?.keyId && k.keyData?.keyData
 					? [{ keyId: new Uint8Array(k.keyId.keyId), keyData: new Uint8Array(k.keyData.keyData) }]

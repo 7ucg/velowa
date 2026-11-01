@@ -29,6 +29,14 @@ export const APP_STATE_COLLECTIONS = [
 export type CollectionName = (typeof APP_STATE_COLLECTIONS)[number]
 
 const MAX_ATTEMPTS = 3
+/** Upper bound on request rounds per `sync()` call: a server that keeps saying "more patches" cannot hold us forever. */
+const MAX_ROUNDS = 200
+
+const KNOWN: ReadonlySet<string> = new Set(APP_STATE_COLLECTIONS)
+/** Collection names come from the network and end up in file names: only the five real ones are allowed. */
+function assertKnown(name: string): void {
+	if (!KNOWN.has(name)) throw new Error(`unknown app-state collection "${name}"`)
+}
 
 /** One decoded app-state change (a chat was muted, a contact renamed, ...). */
 export interface AppStateEvent {
@@ -173,6 +181,7 @@ export class AppStateSync {
 	}
 
 	#collection(name: string): AppStateCollection {
+		assertKnown(name)
 		let c = this.#collections.get(name)
 		if (!c) {
 			const p = join(this.d.dir, `${name}.state`)
@@ -185,6 +194,7 @@ export class AppStateSync {
 	}
 
 	#macsOf(name: string): Map<string, string> {
+		assertKnown(name)
 		let m = this.#macs.get(name)
 		if (!m) {
 			const p = join(this.d.dir, `${name}.macs.json`)
@@ -199,6 +209,7 @@ export class AppStateSync {
 	}
 
 	#persist(name: string): void {
+		assertKnown(name)
 		this.#write(join(this.d.dir, `${name}.state`), this.#collection(name).serializeState())
 		this.#write(
 			join(this.d.dir, `${name}.macs.json`),
@@ -217,7 +228,15 @@ export class AppStateSync {
 		const todo = new Set(names)
 		const attempts = new Map<string, number>()
 		const forceSnapshot = new Set<string>()
+		let rounds = 0
 		while (todo.size) {
+			if (++rounds > MAX_ROUNDS) {
+				this.d.logger.event('appstate.sync-aborted', {
+					reason: 'too many rounds',
+					pending: [...todo],
+				})
+				return
+			}
 			const nodes: BinaryNode[] = []
 			for (const name of todo) {
 				const version = this.#collection(name).version
@@ -247,10 +266,18 @@ export class AppStateSync {
 			for (const node of Array.isArray(syncNode?.content) ? syncNode.content : []) {
 				if (node.tag !== 'collection') continue
 				const name = node.attrs['name'] ?? ''
+				// Only collections we asked for: the name is later used in file names.
+				if (!todo.has(name)) {
+					this.d.logger.event('appstate.unrequested-collection', { name: name.slice(0, 64) })
+					continue
+				}
 				answered.add(name)
 				try {
+					const before = this.#collection(name).version
 					const more = await this.#applyCollection(name, node)
-					if (!more) todo.delete(name)
+					// "More patches" without any progress would loop forever.
+					const progressed = this.#collection(name).version > before
+					if (!more || !progressed) todo.delete(name)
 				} catch (error) {
 					const n = (attempts.get(name) ?? 0) + 1
 					attempts.set(name, n)
