@@ -129,6 +129,15 @@ function isMe(client, jid) {
   return !!jid && !!me && (areJidsSameUser(jid, me.id) || !!me.lid && areJidsSameUser(jid, me.lid));
 }
 function serialize(client, raw) {
+  const sent = asObject(raw.message["deviceSentMessage"]);
+  const wrapped = asObject(sent?.["message"]);
+  if (sent && wrapped && typeof sent["destinationJid"] === "string") {
+    const own = serialize(client, { ...raw, from: sent["destinationJid"], message: wrapped });
+    own.fromMe = true;
+    own.key.fromMe = true;
+    own.sender = jidNormalizedUser(raw.participant ?? raw.from);
+    return own;
+  }
   const chat = raw.from;
   const isGroup = isJidGroup(chat);
   const sender = jidNormalizedUser(raw.participant ?? chat);

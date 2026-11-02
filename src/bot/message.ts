@@ -89,6 +89,17 @@ export function isMe(client: Pick<Client, 'me'>, jid: string | undefined): boole
 
 /** Turn a received message into a `Message`. */
 export function serialize(client: Client, raw: DecodedMessage): Message {
+	// A message we typed on the phone to someone else arrives wrapped in `deviceSentMessage`: the event's `from` is our
+	// own account and the real chat is `destinationJid`. Unwrap it so `chat`, `text` and `reply()` work as expected.
+	const sent = asObject(raw.message['deviceSentMessage'])
+	const wrapped = asObject(sent?.['message'])
+	if (sent && wrapped && typeof sent['destinationJid'] === 'string') {
+		const own = serialize(client, { ...raw, from: sent['destinationJid'], message: wrapped })
+		own.fromMe = true
+		own.key.fromMe = true // the same object `react()`, `delete()` and `markRead()` use
+		own.sender = jidNormalizedUser(raw.participant ?? raw.from)
+		return own
+	}
 	const chat = raw.from
 	const isGroup = isJidGroup(chat)
 	const sender = jidNormalizedUser(raw.participant ?? chat)

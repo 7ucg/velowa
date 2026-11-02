@@ -27,6 +27,23 @@ function fakeClient() {
 }
 
 describe('serialize', () => {
+	it('unwraps a message typed on the phone to someone else (deviceSentMessage)', async () => {
+		const { client, calls } = fakeClient()
+		const m = serialize(client, {
+			id: 'M1',
+			from: '1111@lid', // our own account
+			message: { deviceSentMessage: { destinationJid: BOB, message: { conversation: '.ping' } } },
+		})
+		expect(m.text).toBe('.ping')
+		expect(m.chat).toBe(BOB)
+		expect(m.fromMe).toBe(true)
+		expect(m.key.fromMe).toBe(true)
+		expect(m.isGroup).toBe(false)
+		await m.reply('pong')
+		expect(calls[0]?.method).toBe('send')
+		expect(calls[0]?.args.slice(0, 2)).toEqual([BOB, { text: 'pong' }])
+	})
+
 	it('reads a private text message', () => {
 		const { client } = fakeClient()
 		const m = serialize(client, {

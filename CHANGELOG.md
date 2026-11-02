@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Fixed: `serialize()` did not understand a message typed on the phone to someone else (`deviceSentMessage`): `text` was empty, `chat` was our own account and `fromMe` false. It now unwraps it: `chat` is the recipient, `text` the typed text, `fromMe` true, and `reply()` answers in the right chat.
 
 ## 1.1.0 - 2026-11-02
 - Install straight from git, without Rust: `dist/` (the build) is committed, so `npm install github:7ucg/velowa#v1.1.0` is enough.
