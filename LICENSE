@@ -1,0 +1,46 @@
+velowa License - MIT with mandatory credit
+
+Copyright (c) 2026 Baron
+
+Scope. This license covers the code written for velowa: the source files that carry the velowa header, the tests, the
+examples, the documentation and the build files of this repository. It does not cover the parts that come from other
+projects. Those keep their own licences and credits, listed in THIRD_PARTY_NOTICES.md.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+persons to whom the Software is furnished to do so, subject to the following conditions:
+
+1. Notice. The above copyright notice and this license shall be included in all copies or substantial portions of the
+   Software.
+
+2. Credit for every part that is copied. Whenever any part of the Software is copied, reproduced, adapted, translated or
+   otherwise carried into another work, credit MUST be given to velowa and its author. This applies to every part, large
+   or small: a whole file, a function, a class, a type, a table, a test, an example, a text of the documentation, or a
+   few lines; and to a translation or rewrite of such a part into another language or style that follows the original.
+   Credit means:
+
+   a. next to the copied code, a comment (or the equivalent in that language) that names velowa, its author and the
+      project address, for example:
+
+          // Based on velowa (https://github.com/7ucg/velowa) by Baron - velowa License
+
+      and, where a whole file is copied, the velowa header of that file kept in place; and
+
+   b. in the documentation that comes with the work containing the code (a README, a credits or "about" page, or a
+      NOTICE / third-party-notices file), a line that names velowa, its author, the project address and this license.
+
+   The credit stays when the code is moved, edited, minified, bundled or compiled. Where the form of the work cannot
+   carry a comment (a bundle, a binary), the notice in its documentation or licence file under (b) is enough.
+
+3. Using velowa is not copying. Installing velowa and calling its public interface from your own program, or shipping your
+   program together with an unmodified velowa package (which carries this license), does not make your own code subject to
+   clause 2. Ideas, the behaviour of WhatsApp and the facts of its protocol are not part of the Software.
+
+4. No credit, no permission. A use that does not meet clause 1 or clause 2 is not covered by the permission above. The
+   permission applies again from the moment the missing credit has been given.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

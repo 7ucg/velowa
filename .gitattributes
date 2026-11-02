@@ -1,0 +1,18 @@
+# Line endings: text files are LF in the repository and in the working tree, on every system.
+* text=auto eol=lf
+
+# Binary build inputs and outputs: never diffed, never merged by line, never rewritten.
+*.wasm binary
+*.png binary
+*.jpg binary
+*.mp3 binary
+*.mp4 binary
+*.gz binary
+
+# The lock file is generated: show a change in a diff, but do not merge it by hand.
+package-lock.json -diff merge=binary linguist-generated
+Cargo.lock -diff linguist-generated
+
+# Not part of an archive of the repository (`git archive`, GitHub's source download): working notes.
+.remember export-ignore
+graphify-out export-ignore

@@ -1,0 +1,6 @@
+[toolchain]
+# Match wacore's MSRV (edition 2024). Verify this still satisfies wacore's
+# rust-version before relying on it — check the pinned rev's Cargo.toml.
+channel = "1.94"
+targets = ["wasm32-unknown-unknown"]
+components = ["rustfmt", "clippy"]
