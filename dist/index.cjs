@@ -20146,16 +20146,21 @@ function isMe(client, jid) {
   const me = client.me;
   return !!jid && !!me && (areJidsSameUser(jid, me.id) || !!me.lid && areJidsSameUser(jid, me.lid));
 }
+var CHAT_JID = /^[0-9A-Za-z._-]+(?::\d+)?@(?:s\.whatsapp\.net|lid|g\.us)$/;
 function serialize2(client, raw) {
   const sent = asObject(raw.message["deviceSentMessage"]);
   const wrapped = asObject(sent?.["message"]);
-  if (sent && wrapped && typeof sent["destinationJid"] === "string") {
-    const own = serialize2(client, { ...raw, from: sent["destinationJid"], message: wrapped });
+  const destination = sent?.["destinationJid"];
+  if (wrapped && typeof destination === "string" && CHAT_JID.test(destination) && isMe(client, raw.participant ?? raw.from)) {
+    const own = build(client, { ...raw, from: destination, message: wrapped });
     own.fromMe = true;
     own.key.fromMe = true;
     own.sender = jidNormalizedUser(raw.participant ?? raw.from);
     return own;
   }
+  return build(client, raw);
+}
+function build(client, raw) {
   const chat = raw.from;
   const isGroup = isJidGroup(chat);
   const sender = jidNormalizedUser(raw.participant ?? chat);

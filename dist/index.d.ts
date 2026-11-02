@@ -2910,7 +2910,14 @@ interface Message {
 }
 /** Is this JID one of ours (phone number or LID, any device)? */
 declare function isMe(client: Pick<Client, 'me'>, jid: string | undefined): boolean;
-/** Turn a received message into a `Message`. */
+/**
+ * Turn a received message into a `Message`.
+ *
+ * A message we typed on the phone to someone else arrives wrapped in `deviceSentMessage`: the stanza's `from` is our own
+ * account and the real chat is `destinationJid`. It is unwrapped (exactly once) so `chat`, `text` and `reply()` work as
+ * expected, but only when the stanza really comes from one of our own devices: `from` / `participant` are set by the
+ * server, while the wrapper is part of the payload and anyone can put it into a message they send us.
+ */
 declare function serialize(client: Client, raw: DecodedMessage): Message;
 
 /** A group, with the people who may do things in it. */

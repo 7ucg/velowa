@@ -87,19 +87,37 @@ export function isMe(client: Pick<Client, 'me'>, jid: string | undefined): boole
 	)
 }
 
-/** Turn a received message into a `Message`. */
+// A chat JID as WhatsApp writes it: user (or number) with an optional device, on one of the three servers we chat on.
+const CHAT_JID = /^[0-9A-Za-z._-]+(?::\d+)?@(?:s\.whatsapp\.net|lid|g\.us)$/
+
+/**
+ * Turn a received message into a `Message`.
+ *
+ * A message we typed on the phone to someone else arrives wrapped in `deviceSentMessage`: the stanza's `from` is our own
+ * account and the real chat is `destinationJid`. It is unwrapped (exactly once) so `chat`, `text` and `reply()` work as
+ * expected, but only when the stanza really comes from one of our own devices: `from` / `participant` are set by the
+ * server, while the wrapper is part of the payload and anyone can put it into a message they send us.
+ */
 export function serialize(client: Client, raw: DecodedMessage): Message {
-	// A message we typed on the phone to someone else arrives wrapped in `deviceSentMessage`: the event's `from` is our
-	// own account and the real chat is `destinationJid`. Unwrap it so `chat`, `text` and `reply()` work as expected.
 	const sent = asObject(raw.message['deviceSentMessage'])
 	const wrapped = asObject(sent?.['message'])
-	if (sent && wrapped && typeof sent['destinationJid'] === 'string') {
-		const own = serialize(client, { ...raw, from: sent['destinationJid'], message: wrapped })
+	const destination = sent?.['destinationJid']
+	if (
+		wrapped &&
+		typeof destination === 'string' &&
+		CHAT_JID.test(destination) &&
+		isMe(client, raw.participant ?? raw.from)
+	) {
+		const own = build(client, { ...raw, from: destination, message: wrapped })
 		own.fromMe = true
 		own.key.fromMe = true // the same object `react()`, `delete()` and `markRead()` use
 		own.sender = jidNormalizedUser(raw.participant ?? raw.from)
 		return own
 	}
+	return build(client, raw)
+}
+
+function build(client: Client, raw: DecodedMessage): Message {
 	const chat = raw.from
 	const isGroup = isJidGroup(chat)
 	const sender = jidNormalizedUser(raw.participant ?? chat)

@@ -27,6 +27,42 @@ function fakeClient() {
 }
 
 describe('serialize', () => {
+	it('does NOT unwrap a deviceSentMessage that someone else sent us', () => {
+		const { client } = fakeClient()
+		const m = serialize(client, {
+			id: 'M2',
+			from: BOB, // not one of our devices: the wrapper is only a claim inside the payload
+			message: { deviceSentMessage: { destinationJid: GROUP, message: { conversation: '.restart' } } },
+		})
+		expect(m.fromMe).toBe(false)
+		expect(m.chat).toBe(BOB)
+		expect(m.sender).toBe(BOB)
+		expect(m.text).toBe('')
+	})
+
+	it('ignores a malformed or nested deviceSentMessage from our own device', () => {
+		const { client } = fakeClient()
+		const bad = serialize(client, {
+			id: 'M3',
+			from: '1111@lid',
+			message: { deviceSentMessage: { destinationJid: 'not a jid', message: { conversation: 'x' } } },
+		})
+		expect(bad.chat).toBe('1111@lid')
+		expect(bad.text).toBe('')
+		const nested = serialize(client, {
+			id: 'M4',
+			from: '1111@lid',
+			message: {
+				deviceSentMessage: {
+					destinationJid: BOB,
+					message: { deviceSentMessage: { destinationJid: GROUP, message: { conversation: 'deep' } } },
+				},
+			},
+		})
+		expect(nested.chat).toBe(BOB) // unwrapped once, never twice
+		expect(nested.text).toBe('')
+	})
+
 	it('unwraps a message typed on the phone to someone else (deviceSentMessage)', async () => {
 		const { client, calls } = fakeClient()
 		const m = serialize(client, {
