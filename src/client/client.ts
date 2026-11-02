@@ -1508,7 +1508,7 @@ export class Client {
 		// The server refuses to let a silent call be answered (preaccept gets error 403 and the service ends it).
 		if (c.lightweight)
 			throw new Error(
-				`call ${callId} is a silent group call (a voice chat invitation): it rings nobody and cannot be answered`,
+				`call ${callId} is a silent group call (a voice chat invitation): it rings nobody, and a linked device cannot join it (the server answers 403 while the account's voice_chat_companion_experience_version is below 2)`,
 			)
 		if (c.group) return this.#acceptGroupCall(c, o)
 		const { receiver } = await this.#live()

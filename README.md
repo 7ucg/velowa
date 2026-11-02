@@ -614,8 +614,10 @@ Voice and video, one to one, in groups and through call links ("rooms"), in both
 files or from this machine's microphone and speaker.
 
 A **silent group call** (someone opens a voice chat in a group and waves at everyone) arrives as a `call` event with
-`lightweight: true` and `silence: 'vc_wave_all'`. It rings nobody, and WhatsApp refuses to let it be answered
-(`acceptCall` throws a clear error instead of sending a doomed answer); ignore it or react with a message.
+`lightweight: true` and `silence: 'vc_wave_all'`. It rings nobody, and a linked device cannot join it: the server answers `preaccept` and `accept`
+with 403 and ends the call. WhatsApp Web only offers voice chats when the account's experiment flag
+`voice_chat_companion_experience_version` (`client.server.abProps()`, key `17052`) is 2 or more; for the tested account it is 1.
+`acceptCall` throws a clear error instead of sending a doomed answer; ignore it or react with a message.
 
 ```ts
 // one to one
