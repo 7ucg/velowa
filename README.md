@@ -613,6 +613,10 @@ await client.reportToAdmins(groupJid, m.id) // tells the admins about that messa
 Voice and video, one to one, in groups and through call links ("rooms"), in both directions. Media can come from
 files or from this machine's microphone and speaker.
 
+A **silent group call** (someone opens a voice chat in a group and waves at everyone) arrives as a `call` event with
+`lightweight: true` and `silence: 'vc_wave_all'`. It rings nobody, and WhatsApp refuses to let it be answered
+(`acceptCall` throws a clear error instead of sending a doomed answer); ignore it or react with a message.
+
 ```ts
 // one to one
 const call = await client.startCall(jid, { audioFile: 'announcement.mp3' }) // voice, plays the file

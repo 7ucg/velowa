@@ -374,6 +374,8 @@ export interface CallState {
 	direction: 'outgoing' | 'incoming'
 	video: boolean
 	group?: string
+	/** A silent group call (voice chat invitation, `lightweight="1"`): a notification that cannot be answered. */
+	lightweight?: boolean
 	/** Devices the call rang on / came from; terminate goes to each. */
 	devices: string[]
 	status: 'calling' | 'ringing' | 'connected' | 'ended'

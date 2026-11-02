@@ -1458,6 +1458,7 @@ export class Client {
 			status: 'ringing',
 			startedAt: Date.now(),
 			...(c.isGroup && { group: c.group ?? c.from }),
+			...(c.lightweight && { lightweight: true }),
 			...(node && { offer: node, offerFrom: c.from }),
 		})
 		this.#pruneCalls()
@@ -1504,6 +1505,11 @@ export class Client {
 		o = await resolveCallFiles(o)
 		const c = this.#calls.get(callId)
 		if (!c || c.direction !== 'incoming' || !c.offer) throw new Error(`no incoming call ${callId}`)
+		// The server refuses to let a silent call be answered (preaccept gets error 403 and the service ends it).
+		if (c.lightweight)
+			throw new Error(
+				`call ${callId} is a silent group call (a voice chat invitation): it rings nobody and cannot be answered`,
+			)
 		if (c.group) return this.#acceptGroupCall(c, o)
 		const { receiver } = await this.#live()
 		const own = this.#creds.me
