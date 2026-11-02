@@ -17,6 +17,14 @@ export interface CallEvent {
 	handRaised?: boolean
 	/** `<screen_share>`: a participant started or stopped sharing their screen (the signal only, no picture). */
 	screenShare?: { state: 'started' | 'stopped'; version?: number; id?: number }
+	/**
+	 * A "silent" group call (a voice chat that someone opened in a group, `lightweight="1"`): it does not ring.
+	 * \`silence\` is the reason the app gives, for example \`vc_wave_all\` (the opener waves at everyone).
+	 */
+	lightweight?: boolean
+	silence?: string
+	/** The caller's phone number, when the stanza names it (silent calls do). */
+	callerPn?: string
 	/** The group a call was placed in (`group-jid`). */
 	group?: string
 	timestamp?: number
@@ -41,6 +49,18 @@ export function parseCall(node: BinaryNode): CallEvent | undefined {
 			isGroup: true,
 		}),
 		...(info.attrs['group-jid'] && { group: info.attrs['group-jid'] }),
+		...(info.attrs['lightweight'] === '1' && { lightweight: true }),
+		...(info.tag === 'offer' &&
+			(() => {
+				const reason = (Array.isArray(info.content) ? info.content : []).find(
+					(k) => k.tag === 'silence',
+				)?.attrs['reason']
+				return reason && /^[a-z0-9_]{1,64}$/.test(reason) ? { silence: reason } : {}
+			})()),
+		...(info.attrs['caller_pn'] &&
+			/^\d{5,20}@s\.whatsapp\.net$/.test(info.attrs['caller_pn']) && {
+				callerPn: info.attrs['caller_pn'],
+			}),
 		...(info.tag === 'video' &&
 			/^\d{1,2}$/.test(info.attrs['state'] ?? '') && { videoState: Number(info.attrs['state']) }),
 		...(info.tag === 'user_action' &&

@@ -59,4 +59,50 @@ describe('call events', () => {
 		node.content[0]!.attrs.screenshare_state = 'x'
 		expect(parseCall(node)?.screenShare).toBeUndefined()
 	})
+
+	it('marks a silent (lightweight) group call and says why', () => {
+		const node = {
+			tag: 'call',
+			attrs: { from: '21@lid', id: 'A', t: '1793647914' },
+			content: [
+				{
+					tag: 'offer',
+					attrs: {
+						'call-creator': '21@lid',
+						'call-id': 'C9',
+						'group-jid': '1203@g.us',
+						lightweight: '1',
+						caller_pn: '4949120340056@s.whatsapp.net',
+					},
+					content: [
+						{ tag: 'audio', attrs: { rate: '8000', enc: 'opus' } },
+						{ tag: 'silence', attrs: { reason: 'vc_wave_all' } },
+					],
+				},
+			],
+		}
+		expect(parseCall(node)).toMatchObject({
+			status: 'offer',
+			isGroup: true,
+			group: '1203@g.us',
+			lightweight: true,
+			silence: 'vc_wave_all',
+			callerPn: '4949120340056@s.whatsapp.net',
+		})
+		// an ordinary offer has none of it, and odd values are dropped
+		const plain = {
+			...node,
+			content: [
+				{
+					...node.content[0]!,
+					attrs: { 'call-creator': '21@lid', 'call-id': 'C9', caller_pn: 'x' },
+					content: [{ tag: 'silence', attrs: { reason: 'Bad Reason!' } }],
+				},
+			],
+		}
+		const r = parseCall(plain)!
+		expect(r.lightweight).toBeUndefined()
+		expect(r.silence).toBeUndefined()
+		expect(r.callerPn).toBeUndefined()
+	})
 })
