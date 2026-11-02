@@ -91,6 +91,7 @@ import {
 	SIGNED_PRE_KEY_RETENTION,
 } from './features/contact/prekey-rotation.js'
 import { ServerInfo } from './features/account/server.js'
+import { Room, type RoomOptions } from './features/call/room.js'
 import { Business } from './features/business/manage.js'
 import { Events, WwwClient } from './features/event/events.js'
 import { Privacy } from './features/contact/privacy.js'
@@ -1567,6 +1568,32 @@ export class Client {
 		const { receiver } = await this.#live()
 		const ack = await receiver.sendCallAndWait(callSig.buildLinkCreate(media, receiver.nextId()))
 		return callSig.parseLinkCreateAck(ack)
+	}
+
+	/**
+	 * Open a room: create a call link, join it as its owner and let people in by a rule (`admit`: everybody, only
+	 * guests without a WhatsApp account, nobody automatically, or your own function). People open the link in a browser.
+	 * The returned room tells you who asks, who is let in, who is inside and who leaves (see \`RoomEvents\`).
+	 */
+	async createRoom(
+		o: RoomOptions & callSig.GroupMediaOptions & CallFileOptions = {},
+	): Promise<Room> {
+		const media = o.media ?? 'video'
+		const { admit, maxGuests, media: _unused, ...mediaOptions } = o
+		void _unused
+		const link = await this.createCallLink(media)
+		const call = await this.joinCallLink(link.url, media, mediaOptions)
+		const me = this.#creds.me?.lid ?? this.#creds.me?.id ?? ''
+		const room = new Room(
+			this,
+			{ url: link.url, token: link.token, callId: call.callId, media, owner: me },
+			{ ...(admit !== undefined && { admit }), ...(maxGuests !== undefined && { maxGuests }) },
+		)
+		room.on('trace', (t) => this.logger.event(`room.${t.kind}`, t.data))
+		for (const k of ['request', 'admitted', 'denied', 'joined', 'left', 'closed'] as const)
+			room.on(k, (p) => this.logger.event(`room.${k}`, p))
+		await room.setApprovalRequired(true)
+		return room
 	}
 
 	/** Who made a call link and whether joiners have to be let in. `link` is the token or the whole URL. */

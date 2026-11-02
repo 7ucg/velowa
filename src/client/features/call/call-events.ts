@@ -30,6 +30,8 @@ export interface CallEvent {
 	timestamp?: number
 	/** `<waiting_room_update>` of a call link we run: who is waiting (or has just left the waiting room). */
 	waitingRoom?: { jid: string; name?: string; guest: boolean; state: string }[]
+	/** `<group_update>` of a call: everyone the roster names and whether they are `connected` or `terminated`. */
+	roster?: { jid: string; name?: string; guest: boolean; state: string }[]
 	/** The stanza as received, for everything the fields above do not cover (waiting room lists, rosters, ...). */
 	node?: BinaryNode
 }
@@ -40,6 +42,21 @@ function waitingUsers(info: BinaryNode): NonNullable<CallEvent['waitingRoom']> {
 		(k) => k.tag === 'waiting_room',
 	)
 	return (Array.isArray(room?.content) ? room.content : [])
+		.filter(
+			(u) => u.tag === 'user' && /^\d+(:\d+)?@(lid|s\.whatsapp\.net)$/.test(u.attrs['jid'] ?? ''),
+		)
+		.map((u) => ({
+			jid: u.attrs['jid']!,
+			...(u.attrs['push_name'] && { name: u.attrs['push_name'].slice(0, 128) }),
+			guest: u.attrs['account_kind'] === 'guest',
+			state: u.attrs['state'] ?? '',
+		}))
+}
+
+/** The people a `<group_update>` roster names (`<group_info><user .../>`). */
+function rosterUsers(info: BinaryNode): NonNullable<CallEvent['roster']> {
+	const gi = (Array.isArray(info.content) ? info.content : []).find((k) => k.tag === 'group_info')
+	return (Array.isArray(gi?.content) ? gi.content : [])
 		.filter(
 			(u) => u.tag === 'user' && /^\d+(:\d+)?@(lid|s\.whatsapp\.net)$/.test(u.attrs['jid'] ?? ''),
 		)
@@ -104,6 +121,7 @@ export function parseCall(node: BinaryNode): CallEvent | undefined {
 				},
 			}),
 		...(info.tag === 'waiting_room_update' && { waitingRoom: waitingUsers(info) }),
+		...(info.tag === 'group_update' && { roster: rosterUsers(info) }),
 		...(node.attrs['t'] &&
 			/^\d{1,12}$/.test(node.attrs['t']) && { timestamp: Number(node.attrs['t']) }),
 	}

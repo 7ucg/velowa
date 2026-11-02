@@ -139,4 +139,39 @@ describe('call events', () => {
 		])
 		expect(parseCall(update([]))!.waitingRoom).toEqual([])
 	})
+
+	it('reads the roster of a group update, with guests and who left', () => {
+		const r = parseCall({
+			tag: 'call',
+			attrs: { from: 'C1@call', id: '3' },
+			content: [
+				{
+					tag: 'group_update',
+					attrs: { 'call-id': 'C1', 'call-creator': '1@lid' },
+					content: [
+						{
+							tag: 'group_info',
+							attrs: {},
+							content: [
+								{ tag: 'user', attrs: { jid: '48@lid', state: 'connected', type: 'admin' } },
+								{
+									tag: 'user',
+									attrs: {
+										jid: '29@lid',
+										state: 'terminated',
+										account_kind: 'guest',
+										push_name: 'Gast',
+									},
+								},
+							],
+						},
+					],
+				},
+			],
+		})!
+		expect(r.roster).toEqual([
+			{ jid: '48@lid', guest: false, state: 'connected' },
+			{ jid: '29@lid', name: 'Gast', guest: true, state: 'terminated' },
+		])
+	})
 })

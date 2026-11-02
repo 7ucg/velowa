@@ -645,19 +645,22 @@ await client.raiseHand(gc.callId, true) // group calls
 await client.sendReaction(gc.callId, '👍') // group calls
 ```
 
-**A room that lets everyone in** (guests join from a browser without a WhatsApp account): create the link, join it yourself
-as its owner, require approval and admit each request as it arrives. The request comes as `waitingRoom` on the `call`
-event (`guest: true` for someone without an account, with the name they typed):
+**A room** is a call link you own and run: guests open it in a browser (no WhatsApp account needed), ask to join, and
+the room lets them in by a rule you choose. `createRoom` makes the link, joins it as its owner, requires approval and
+handles every request; everything it sees is also written to the protocol log (`room.*` events).
 
 ```ts
-const link = await client.createCallLink('video') // share link.url
-const room = await client.joinCallLink(link.url, 'video') // the owner joins its own link
-await client.setApprovalRequired(room.callId, true)
-client.on('call', async (c) => {
-  for (const w of c.waitingRoom ?? [])
-    if (w.state === 'waiting_room_joined') await client.answerWaitingRoom(room.callId, w.jid, true)
-})
+const room = await client.createRoom({ media: 'video', admit: 'all' }) // 'all' | 'guests' | 'none' | (person) => boolean
+console.log(room.url) // https://call.whatsapp.com/video/…
+room.on('request', (p) => console.log(p.guest ? 'guest' : 'member', p.name, 'wants in'))
+room.on('joined', (p) => console.log(p.name, 'is in'))
+room.on('left', (p) => console.log(p.name, 'left'))
+await room.admit(jid) // by hand, with admit: 'none'; also room.deny(jid)
+await room.close() // ends the call for everybody
 ```
+
+Underneath, the `call` event carries `waitingRoom` (who waits, `guest` for people without an account, the name they typed)
+and `roster` (who is connected or left), and `client.answerWaitingRoom(callId, jid, true)` lets one person in.
 
 Raw media is also possible: `audioIn` (16 kHz mono PCM), `videoFrames` (H.264 access units, see `splitAnnexB`),
 `recordTo` / `recordVideoTo` to save what comes in. File decoding needs `ffmpeg` on the machine; `localAudio` needs
