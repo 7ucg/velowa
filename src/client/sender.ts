@@ -521,9 +521,19 @@ export class Sender {
 				const a = this.addr(t.jid)
 				const enc = await this.d.cipher.encrypt(a.name, a.device, plain)
 				if (enc.type === 'pkmsg') needsIdentity = true
+				// In a conversation with an `@lid` user the server wants our own devices as LIDs too (Baileys:
+				// "Using LID identity for @lid conversation"); mixing both forms is answered with error 400.
+				// The session is the same either way, only the address in the stanza changes.
+				const ownLid = creds.me?.lid ? jidDecode(creds.me.lid).user : undefined
+				const jid =
+					to.endsWith('@lid') && ownLid && (t.user === meUser || t.user === ownLid)
+						? t.device === 0
+							? `${ownLid}@lid`
+							: `${ownLid}:${t.device}@lid`
+						: t.jid
 				participants.push({
 					tag: 'to',
-					attrs: { jid: t.jid },
+					attrs: { jid },
 					content: [
 						{
 							tag: 'enc',

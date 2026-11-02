@@ -6159,9 +6159,11 @@ var Sender = class {
         const a = this.addr(t.jid);
         const enc2 = await this.d.cipher.encrypt(a.name, a.device, plain);
         if (enc2.type === "pkmsg") needsIdentity = true;
+        const ownLid = creds.me?.lid ? jidDecode(creds.me.lid).user : void 0;
+        const jid = to.endsWith("@lid") && ownLid && (t.user === meUser || t.user === ownLid) ? t.device === 0 ? `${ownLid}@lid` : `${ownLid}:${t.device}@lid` : t.jid;
         participants.push({
           tag: "to",
-          attrs: { jid: t.jid },
+          attrs: { jid },
           content: [
             {
               tag: "enc",
@@ -10164,6 +10166,11 @@ function chatState(from, to, state) {
 }
 function presence(name, type) {
   return { tag: "presence", attrs: { name: name.replace(/@/g, ""), type } };
+}
+function unifiedSession(serverSeconds) {
+  const day = 24 * 60 * 60 * 1e3;
+  const id = String((serverSeconds * 1e3 + 3 * day) % (7 * day));
+  return { tag: "ib", attrs: {}, content: [{ tag: "unified_session", attrs: { id } }] };
 }
 function presenceSubscribe(jid, id) {
   return { tag: "presence", attrs: { to: jid, id, type: "subscribe" } };
@@ -18013,6 +18020,11 @@ var Client = class {
   send = (to, content, options) => sendContent(this, to, content, options);
   /** Send a raw stanza (an `iq`) and wait for its answer: the escape hatch for anything not wrapped yet. */
   request = async (node) => (await this.#live()).receiver.request(node);
+  /** Send a raw stanza as-is, with no `id` added and no answer awaited (for stanzas such as `chatstate` and `ib`). */
+  sendNode = async (node) => {
+    ;
+    (await this.#live()).receiver.sendNode(node);
+  };
   /** Run any WhatsApp Web GraphQL (`w:mex`) query by id, e.g. the ones listed in baron-baileys-v2. */
   mex = (queryId, variables, dataPath) => mexFor(
     async (n) => (await this.#live()).receiver.request(n),
@@ -18346,6 +18358,7 @@ var Client = class {
     const { receiver } = await this.#live();
     const name = this.#creds.me?.name;
     if (!name) throw new Error("set a display name first: client.setName(...)");
+    if (type === "available") receiver.sendNode(unifiedSession(this.serverTime()));
     receiver.sendNode(presence(name, type));
   }
   /** Resolve once the phone has shared the app-state keys (needed for chat actions); false on timeout. */

@@ -351,6 +351,11 @@ export class Client {
 	request = async (node: BinaryNode): Promise<BinaryNode> =>
 		(await this.#live()).receiver.request(node)
 
+	/** Send a raw stanza as-is, with no `id` added and no answer awaited (for stanzas such as `chatstate` and `ib`). */
+	sendNode = async (node: BinaryNode): Promise<void> => {
+		;(await this.#live()).receiver.sendNode(node)
+	}
+
 	/** Run any WhatsApp Web GraphQL (`w:mex`) query by id, e.g. the ones listed in baron-baileys-v2. */
 	mex = <T = unknown>(queryId: string, variables: unknown, dataPath?: string): Promise<T> =>
 		mexFor(
@@ -765,6 +770,9 @@ export class Client {
 		const { receiver } = await this.#live()
 		const name = this.#creds.me?.name
 		if (!name) throw new Error('set a display name first: client.setName(...)')
+		// WhatsApp Web, whatsapp-rust and Baileys announce the session before going online; without it the
+		// server seems not to treat the device as active (typing indicators do not reach the other side).
+		if (type === 'available') receiver.sendNode(msg.unifiedSession(this.serverTime()))
 		receiver.sendNode(msg.presence(name, type))
 	}
 

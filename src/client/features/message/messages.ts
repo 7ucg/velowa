@@ -189,6 +189,16 @@ export function presence(name: string, type: 'available' | 'unavailable'): Binar
 	return { tag: 'presence', attrs: { name: name.replace(/@/g, ''), type } }
 }
 
+/**
+ * `<ib><unified_session id/></ib>`, sent before going online (as WhatsApp Web, whatsapp-rust and Baileys do).
+ * The id is the server clock plus three days, modulo one week, in milliseconds.
+ */
+export function unifiedSession(serverSeconds: number): BinaryNode {
+	const day = 24 * 60 * 60 * 1000
+	const id = String((serverSeconds * 1000 + 3 * day) % (7 * day))
+	return { tag: 'ib', attrs: {}, content: [{ tag: 'unified_session', attrs: { id } }] }
+}
+
 /** Ask to be told when `jid` goes online/offline. */
 export function presenceSubscribe(jid: string, id: string): BinaryNode {
 	return { tag: 'presence', attrs: { to: jid, id, type: 'subscribe' } }

@@ -2398,6 +2398,8 @@ declare class Client {
     send: (to: string, content: MessageContent, options?: SendContentOptions) => Promise<string>;
     /** Send a raw stanza (an `iq`) and wait for its answer: the escape hatch for anything not wrapped yet. */
     request: (node: BinaryNode) => Promise<BinaryNode>;
+    /** Send a raw stanza as-is, with no `id` added and no answer awaited (for stanzas such as `chatstate` and `ib`). */
+    sendNode: (node: BinaryNode) => Promise<void>;
     /** Run any WhatsApp Web GraphQL (`w:mex`) query by id, e.g. the ones listed in baron-baileys-v2. */
     mex: <T = unknown>(queryId: string, variables: unknown, dataPath?: string) => Promise<T>;
     /** Send a raw WAProto `Message` object. */
