@@ -645,6 +645,20 @@ await client.raiseHand(gc.callId, true) // group calls
 await client.sendReaction(gc.callId, '👍') // group calls
 ```
 
+**A room that lets everyone in** (guests join from a browser without a WhatsApp account): create the link, join it yourself
+as its owner, require approval and admit each request as it arrives. The request comes as `waitingRoom` on the `call`
+event (`guest: true` for someone without an account, with the name they typed):
+
+```ts
+const link = await client.createCallLink('video') // share link.url
+const room = await client.joinCallLink(link.url, 'video') // the owner joins its own link
+await client.setApprovalRequired(room.callId, true)
+client.on('call', async (c) => {
+  for (const w of c.waitingRoom ?? [])
+    if (w.state === 'waiting_room_joined') await client.answerWaitingRoom(room.callId, w.jid, true)
+})
+```
+
 Raw media is also possible: `audioIn` (16 kHz mono PCM), `videoFrames` (H.264 access units, see `splitAnnexB`),
 `recordTo` / `recordVideoTo` to save what comes in. File decoding needs `ffmpeg` on the machine; `localAudio` needs
 PulseAudio or PipeWire (`parec`, `pacat`). Events of a call arrive as `call` events (`offer`, `accept`, `terminate`,

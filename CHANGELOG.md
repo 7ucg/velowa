@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Call links: the `call` event has `waitingRoom` (who waits, `guest` for people without a WhatsApp account, their typed name) and `node` (the raw stanza); README shows a room that admits everyone. Verified live with a browser guest: requested, admitted, joined, toggled camera and microphone, raised a hand and left.
 - Silent group calls (voice chat invitations): the `call` event carries `lightweight`, `silence` and `callerPn`; `acceptCall` refuses them with a clear error (the server answers an answer with 403 and ends the call). Checked live.
 - Fixed: `serialize()` did not understand a message typed on the phone to someone else (`deviceSentMessage`): `text` was empty, `chat` was our own account and `fromMe` false. It now unwraps it (once, and only when the stanza's `from` is one of our own devices and `destinationJid` is a well-formed chat JID): `chat` is the recipient, `text` the typed text, `fromMe` true, and `reply()` answers in the right chat. A `deviceSentMessage` inside a message from anyone else is a claim in the payload and is not trusted.
 

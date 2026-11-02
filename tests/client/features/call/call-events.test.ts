@@ -105,4 +105,38 @@ describe('call events', () => {
 		expect(r.silence).toBeUndefined()
 		expect(r.callerPn).toBeUndefined()
 	})
+
+	it('lists who is in the waiting room of a call link, guests included', () => {
+		const update = (users: object[]) => ({
+			tag: 'call',
+			attrs: { from: 'C1@call', id: '9', t: '1793648782' },
+			content: [
+				{
+					tag: 'waiting_room_update',
+					attrs: { 'call-id': 'C1', 'call-creator': '1@lid' },
+					content: [
+						{ tag: 'waiting_room', attrs: { enabled: '1', is_admin: '1' }, content: users },
+					],
+				},
+			],
+		})
+		const r = parseCall(
+			update([
+				{
+					tag: 'user',
+					attrs: {
+						account_kind: 'guest',
+						push_name: 'Gast',
+						jid: '29554559176938@lid',
+						state: 'waiting_room_joined',
+					},
+				},
+				{ tag: 'user', attrs: { jid: 'not a jid', state: 'x' } },
+			]),
+		)!
+		expect(r.waitingRoom).toEqual([
+			{ jid: '29554559176938@lid', name: 'Gast', guest: true, state: 'waiting_room_joined' },
+		])
+		expect(parseCall(update([]))!.waitingRoom).toEqual([])
+	})
 })

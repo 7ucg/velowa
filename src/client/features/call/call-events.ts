@@ -28,6 +28,27 @@ export interface CallEvent {
 	/** The group a call was placed in (`group-jid`). */
 	group?: string
 	timestamp?: number
+	/** `<waiting_room_update>` of a call link we run: who is waiting (or has just left the waiting room). */
+	waitingRoom?: { jid: string; name?: string; guest: boolean; state: string }[]
+	/** The stanza as received, for everything the fields above do not cover (waiting room lists, rosters, ...). */
+	node?: BinaryNode
+}
+
+/** The people a `<waiting_room_update>` names. Guests (no WhatsApp account) have `account_kind="guest"`. */
+function waitingUsers(info: BinaryNode): NonNullable<CallEvent['waitingRoom']> {
+	const room = (Array.isArray(info.content) ? info.content : []).find(
+		(k) => k.tag === 'waiting_room',
+	)
+	return (Array.isArray(room?.content) ? room.content : [])
+		.filter(
+			(u) => u.tag === 'user' && /^\d+(:\d+)?@(lid|s\.whatsapp\.net)$/.test(u.attrs['jid'] ?? ''),
+		)
+		.map((u) => ({
+			jid: u.attrs['jid']!,
+			...(u.attrs['push_name'] && { name: u.attrs['push_name'].slice(0, 128) }),
+			guest: u.attrs['account_kind'] === 'guest',
+			state: u.attrs['state'] ?? '',
+		}))
 }
 
 /** Parse an incoming `<call>` stanza. */
@@ -82,6 +103,7 @@ export function parseCall(node: BinaryNode): CallEvent | undefined {
 					}),
 				},
 			}),
+		...(info.tag === 'waiting_room_update' && { waitingRoom: waitingUsers(info) }),
 		...(node.attrs['t'] &&
 			/^\d{1,12}$/.test(node.attrs['t']) && { timestamp: Number(node.attrs['t']) }),
 	}

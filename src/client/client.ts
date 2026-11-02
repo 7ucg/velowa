@@ -2711,7 +2711,7 @@ export class Client {
 			onCall: (node) => {
 				const c = callEvents.parseCall(node)
 				if (c) this.#trackCall(c, node)
-				if (c) this.#events.emit('call', c)
+				if (c) this.#events.emit('call', { ...c, node })
 			},
 			onReceipt: (node) => {
 				// Receipts are keyed by (chat, id): a bare id is not unique across chats.
