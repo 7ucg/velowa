@@ -207,6 +207,7 @@ describe('call-link join', () => {
 		expect(link.tag).toBe('link_join')
 		expect(link.content.map((c) => c.tag)).toEqual(['audio', 'net', 'capability'])
 		expect(() => callSig.buildLinkJoin('../x', 'audio', 'i')).toThrow()
+		expect(link.attrs['push_name']).toBeUndefined()
 
 		const admitted = callSig.parseLinkJoinAck(
 			{
@@ -263,6 +264,12 @@ describe('call-link join', () => {
 		).toThrow()
 		expect(callSig.buildWaitingRoomHeartbeat('C', 'x@lid', 'h').attrs['to']).toBe('C@call')
 		expect(callSig.buildWaitingRoomAdmit('C', 'x@lid', 'u@lid', 'a', true).content).toBeDefined()
+	})
+
+	it('carries push_name for a guest join (confirmed on the wire; a paired device can omit it)', () => {
+		const withName = callSig.buildLinkJoin('abcDEF123_-xyz', 'video', 'i2', 'Baron Test')
+		const link = (withName.content as { attrs: Record<string, string> }[])[0]!
+		expect(link.attrs['push_name']).toBe('Baron Test')
 	})
 })
 

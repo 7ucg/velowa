@@ -50,6 +50,7 @@ __export(src_exports, {
   ProtocolLogger: () => ProtocolLogger,
   REPORT_FLOWS: () => REPORT_FLOWS,
   ReportStore: () => ReportStore,
+  Room: () => Room,
   SignalCipher: () => SignalCipher,
   TypedEmitter: () => TypedEmitter,
   WAM_EVENTS: () => WAM_EVENTS,
@@ -3434,7 +3435,7 @@ async function resolveCallFiles(o) {
 }
 
 // src/client/client.ts
-var import_node_crypto18 = require("crypto");
+var import_node_crypto20 = require("crypto");
 var import_node_path10 = require("path");
 
 // src/auth/creds.ts
@@ -4034,12 +4035,13 @@ async function loggedFetch(logger, url, headers = {}) {
   }
 }
 var Connection = class {
-  constructor(logger, creds, clientPayload, events, url = WA_WS_URL) {
+  constructor(logger, creds, clientPayload, events, url = WA_WS_URL, userAgent = USER_AGENT) {
     this.logger = logger;
     this.creds = creds;
     this.clientPayload = clientPayload;
     this.events = events;
     this.url = url;
+    this.userAgent = userAgent;
     ensureWasm();
     this.#decoder = new FrameDecoder();
   }
@@ -4048,6 +4050,7 @@ var Connection = class {
   clientPayload;
   events;
   url;
+  userAgent;
   #ws;
   #state = "idle";
   #hs;
@@ -4058,7 +4061,7 @@ var Connection = class {
     return this.#state;
   }
   connect() {
-    const headers = { Origin: WA_ORIGIN, "User-Agent": USER_AGENT };
+    const headers = { Origin: WA_ORIGIN, "User-Agent": this.userAgent };
     this.logger.event("ws.connect", { url: this.url, headers });
     const ws = new import_ws.default(this.url, { headers, handshakeTimeout: 2e4 });
     this.#ws = ws;
@@ -4164,8 +4167,201 @@ var Connection = class {
   }
 };
 
-// src/client/pairing.ts
+// src/client/guest.ts
+var import_node_child_process3 = require("child_process");
+var import_node_crypto3 = require("crypto");
+
+// src/client/fingerprint.ts
 var import_node_crypto2 = require("crypto");
+var OS_VARIANTS = [
+  { osName: "Linux", osVersion: "x86_64", uaPlatform: "X11; Linux x86_64" },
+  { osName: "Linux", osVersion: "i686", uaPlatform: "X11; Linux i686" },
+  { osName: "Windows", osVersion: "10.0", uaPlatform: "Windows NT 10.0; Win64; x64" },
+  { osName: "Windows", osVersion: "6.1", uaPlatform: "Windows NT 6.1; Win64; x64" },
+  { osName: "Mac OS X", osVersion: "10.15.7", uaPlatform: "Macintosh; Intel Mac OS X 10_15_7" },
+  { osName: "Mac OS X", osVersion: "11.6.0", uaPlatform: "Macintosh; Intel Mac OS X 11_6_0" },
+  { osName: "Mac OS X", osVersion: "12.6.0", uaPlatform: "Macintosh; Intel Mac OS X 12_6_0" },
+  { osName: "Mac OS X", osVersion: "13.4.0", uaPlatform: "Macintosh; Intel Mac OS X 13_4_0" }
+];
+var CHROME_MAJORS = Array.from({ length: 60 }, (_, i) => 100 + i);
+var POOL = OS_VARIANTS.flatMap(
+  (os) => CHROME_MAJORS.map((major) => {
+    const browserVersion = `${major}.0.0.0`;
+    return {
+      osName: os.osName,
+      osVersion: os.osVersion,
+      browser: "Chrome",
+      browserVersion,
+      userAgent: `Mozilla/5.0 (${os.uaPlatform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browserVersion} Safari/537.36`
+    };
+  })
+);
+if (POOL.length < 250) throw new Error(`fingerprint pool has only ${POOL.length} entries, need >= 250`);
+function randomFingerprint() {
+  return POOL[(0, import_node_crypto2.randomInt)(POOL.length)];
+}
+
+// src/client/guest.ts
+var GUEST_REG_URL = "https://v.whatsapp.net/v2/guest_reg";
+var be = (n, len) => {
+  const b = Buffer.alloc(len);
+  b.writeUIntBE(n, 0, len);
+  return b;
+};
+var b64url = (b) => Buffer.from(b).toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
+var percentEncodeBytes = (b) => {
+  let out = "";
+  for (const byte of b) {
+    const ch = String.fromCharCode(byte);
+    out += /[A-Za-z0-9\-_.~]/.test(ch) ? ch : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+  }
+  return out;
+};
+function newGuestSession() {
+  return {
+    accessSessionId: (0, import_node_crypto3.randomUUID)(),
+    expid: (0, import_node_crypto3.randomBytes)(16).toString("base64url"),
+    fingerprint: randomFingerprint()
+  };
+}
+async function guestReg(creds, config, o) {
+  const [lc, lg] = o.locale ?? ["DE", "DE"];
+  const fp = o.fingerprint ?? randomFingerprint();
+  const idBytes = (0, import_node_crypto3.randomBytes)(20);
+  const q = (k, v) => `${k}=${encodeURIComponent(v)}`;
+  const query = [
+    q("mcc", "310"),
+    q("mnc", "999"),
+    q("lc", lc),
+    q("lg", lg),
+    q("tos_version", "1"),
+    q("device_id", (0, import_node_crypto3.randomUUID)()),
+    q("access_session_id", o.accessSessionId ?? (0, import_node_crypto3.randomUUID)()),
+    q("authkey", b64url(creds.noiseKey.publicKey)),
+    q("e_regid", b64url(be(creds.registrationId, 4))),
+    q("e_keytype", b64url(Buffer.from([5]))),
+    q("e_ident", b64url(creds.signedIdentityKey.publicKey)),
+    q("e_skey_id", b64url(be(creds.signedPreKey.keyId, 3))),
+    q("e_skey_val", b64url(creds.signedPreKey.publicKey)),
+    q("e_skey_sig", b64url(creds.signedPreKey.signature)),
+    q("os_name", fp.osName),
+    q("os_version", fp.osVersion),
+    q("browser", fp.browser),
+    q("browser_version", fp.browserVersion),
+    q("web_build_version", `2.${config.version[1]}.${config.version[2]}`),
+    q("guest_type", "guest_calling"),
+    q("invite_code", o.inviteCode),
+    q("guest_name", o.guestName),
+    `id=${percentEncodeBytes(idBytes)}`,
+    `backup_token=${percentEncodeBytes(idBytes)}`
+  ].join("&");
+  const url = `${GUEST_REG_URL}?${query}`;
+  const headers = {
+    "user-agent": fp.userAgent,
+    accept: "*/*",
+    "accept-language": "en-US,en;q=0.9",
+    "accept-encoding": "gzip, deflate, br",
+    "sec-fetch-site": "same-site",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-dest": "empty",
+    origin: "https://web.whatsapp.com",
+    referer: "https://web.whatsapp.com/"
+  };
+  const { status, body } = await fetchWithCurlFallback(url, headers, o.fetch);
+  if (status !== 200) return { status, body };
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed.status === "ok") {
+      return {
+        status,
+        body,
+        ...parsed.lid && { lid: parsed.lid },
+        ...parsed.ent_access_token && { entAccessToken: parsed.ent_access_token },
+        ...parsed.ent_canonical_fbid && { entCanonicalFbid: parsed.ent_canonical_fbid }
+      };
+    }
+  } catch {
+  }
+  return { status, body };
+}
+async function guestPreFlightLog(event, session, config, fetchOverride) {
+  const action = {
+    guest_calling_join_clicked: "click",
+    guest_calling_join_success: "continue",
+    guest_calling_waiting_room_entered: "view"
+  }[event];
+  const clientMetrics = JSON.stringify({
+    inviteCode: null,
+    appVersion: `2.${config.version[1]}.${config.version[2]}`,
+    guestExperienceType: "guest_calling",
+    join_attempt: 1
+  });
+  const q = (k, v) => `${k}=${encodeURIComponent(v)}`;
+  const query = [
+    q("expid", session.expid),
+    q("access_session_id", session.accessSessionId),
+    q("current_screen", "guest_calling_landing"),
+    q("previous_screen", ""),
+    q("action_taken", action),
+    q("event_name", event),
+    q("access_funnel_type", "guest"),
+    q("os_name", session.fingerprint.osName),
+    q("os_version", session.fingerprint.osVersion),
+    q("browser", session.fingerprint.browser),
+    q("browser_version", session.fingerprint.browserVersion),
+    q("client_metrics", clientMetrics)
+  ].join("&");
+  try {
+    await (fetchOverride ?? fetch)(`https://v.whatsapp.net/v2/pre_pn_client_log?${query}`, {
+      headers: { "user-agent": session.fingerprint.userAgent }
+    });
+  } catch {
+  }
+}
+async function fetchWithCurlFallback(url, headers, overrideFetch) {
+  const viaFetch = async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8e3);
+    try {
+      const res = await (overrideFetch ?? fetch)(url, { headers, signal: controller.signal });
+      return { status: res.status, body: await res.text() };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  try {
+    return await viaFetch();
+  } catch (error) {
+    if (overrideFetch) throw error;
+    try {
+      return await curlGet(url, headers);
+    } catch {
+      throw error;
+    }
+  }
+}
+function curlGet(url, headers) {
+  return new Promise((resolve2, reject) => {
+    const headerArgs = Object.entries(headers).flatMap(([k, v]) => ["-H", `${k}: ${v}`]);
+    (0, import_node_child_process3.execFile)(
+      "curl",
+      ["-sS", "-o", "-", "-w", "\n__STATUS__%{http_code}", "--max-time", "20", ...headerArgs, url],
+      { maxBuffer: 10 * 1024 * 1024 },
+      (error, stdout) => {
+        if (error) return reject(error);
+        const marker = stdout.lastIndexOf("\n__STATUS__");
+        if (marker < 0) return reject(new Error("curl: no status marker in output"));
+        resolve2({
+          status: Number(stdout.slice(marker + "\n__STATUS__".length)),
+          body: stdout.slice(0, marker)
+        });
+      }
+    );
+  });
+}
+
+// src/client/pairing.ts
+var import_node_crypto4 = require("crypto");
 
 // src/client/proto.ts
 var import_node_fs9 = require("fs");
@@ -4200,7 +4396,7 @@ var DEFAULT_CONFIG = {
   browser: ["Windows", "Desktop"],
   countryCode: "US"
 };
-var be = (n, len) => {
+var be2 = (n, len) => {
   const b = Buffer.alloc(len);
   b.writeUIntBE(n, 0, len);
   return b;
@@ -4254,15 +4450,27 @@ function registrationPayload(creds, config) {
     passive: false,
     pull: false,
     devicePairingData: {
-      buildHash: (0, import_node_crypto2.createHash)("md5").update(config.version.join(".")).digest(),
+      buildHash: (0, import_node_crypto4.createHash)("md5").update(config.version.join(".")).digest(),
       deviceProps,
-      eRegid: be(creds.registrationId, 4),
+      eRegid: be2(creds.registrationId, 4),
       eKeytype: Buffer.from([5]),
       eIdent: creds.signedIdentityKey.publicKey,
-      eSkeyId: be(creds.signedPreKey.keyId, 3),
+      eSkeyId: be2(creds.signedPreKey.keyId, 3),
       eSkeyVal: creds.signedPreKey.publicKey,
       eSkeySig: creds.signedPreKey.signature
     }
+  });
+}
+function guestPayload(creds, config, lid) {
+  void creds;
+  const username = lid?.split("@")[0];
+  return encodeProto("ClientPayload", {
+    ...basePayload(config),
+    passive: false,
+    pull: false,
+    product: "WHATSAPP_LID",
+    accountType: "GUEST",
+    ...username && { username: Number(username) }
   });
 }
 function loginPayload(creds, config) {
@@ -4305,8 +4513,8 @@ function handlePairSuccess(stanza, creds) {
   });
   const hostedType = protoRoot().lookupEnum("proto.ADVEncryptionType").values["HOSTED"];
   const prefix = hm.accountType === hostedType ? HOSTED_ACCOUNT_SIG_PREFIX : Buffer.alloc(0);
-  const expected = (0, import_node_crypto2.createHmac)("sha256", Buffer.from(creds.advSecretKey, "base64")).update(Buffer.concat([prefix, hm.details])).digest();
-  if (expected.length !== hm.hmac.length || !(0, import_node_crypto2.timingSafeEqual)(expected, hm.hmac)) {
+  const expected = (0, import_node_crypto4.createHmac)("sha256", Buffer.from(creds.advSecretKey, "base64")).update(Buffer.concat([prefix, hm.details])).digest();
+  if (expected.length !== hm.hmac.length || !(0, import_node_crypto4.timingSafeEqual)(expected, hm.hmac)) {
     throw new Error("Invalid account signature (HMAC)");
   }
   const accType = protoType("ADVSignedDeviceIdentity");
@@ -4421,6 +4629,30 @@ function decodeLoose(jid) {
 }
 
 // src/client/features/call/call-events.ts
+function waitingUsers(info) {
+  const room = (Array.isArray(info.content) ? info.content : []).find(
+    (k) => k.tag === "waiting_room"
+  );
+  return (Array.isArray(room?.content) ? room.content : []).filter(
+    (u) => u.tag === "user" && /^\d+(:\d+)?@(lid|s\.whatsapp\.net)$/.test(u.attrs["jid"] ?? "")
+  ).map((u) => ({
+    jid: u.attrs["jid"],
+    ...u.attrs["push_name"] && { name: u.attrs["push_name"].slice(0, 128) },
+    guest: u.attrs["account_kind"] === "guest",
+    state: u.attrs["state"] ?? ""
+  }));
+}
+function rosterUsers(info) {
+  const gi = (Array.isArray(info.content) ? info.content : []).find((k) => k.tag === "group_info");
+  return (Array.isArray(gi?.content) ? gi.content : []).filter(
+    (u) => u.tag === "user" && /^\d+(:\d+)?@(lid|s\.whatsapp\.net)$/.test(u.attrs["jid"] ?? "")
+  ).map((u) => ({
+    jid: u.attrs["jid"],
+    ...u.attrs["push_name"] && { name: u.attrs["push_name"].slice(0, 128) },
+    guest: u.attrs["account_kind"] === "guest",
+    state: u.attrs["state"] ?? ""
+  }));
+}
 function parseCall(node) {
   const info = Array.isArray(node.content) ? node.content[0] : void 0;
   if (!info) return void 0;
@@ -4437,6 +4669,16 @@ function parseCall(node) {
       isGroup: true
     },
     ...info.attrs["group-jid"] && { group: info.attrs["group-jid"] },
+    ...info.attrs["lightweight"] === "1" && { lightweight: true },
+    ...info.tag === "offer" && (() => {
+      const reason = (Array.isArray(info.content) ? info.content : []).find(
+        (k) => k.tag === "silence"
+      )?.attrs["reason"];
+      return reason && /^[a-z0-9_]{1,64}$/.test(reason) ? { silence: reason } : {};
+    })(),
+    ...info.attrs["caller_pn"] && /^\d{5,20}@s\.whatsapp\.net$/.test(info.attrs["caller_pn"]) && {
+      callerPn: info.attrs["caller_pn"]
+    },
     ...info.tag === "video" && /^\d{1,2}$/.test(info.attrs["state"] ?? "") && { videoState: Number(info.attrs["state"]) },
     ...info.tag === "user_action" && info.attrs["action"] === "raise_hand" && {
       handRaised: (Array.isArray(info.content) ? info.content : []).find((k) => k.tag === "raise_hand")?.attrs["raise-hand-state"] === "1"
@@ -4452,6 +4694,8 @@ function parseCall(node) {
         }
       }
     },
+    ...info.tag === "waiting_room_update" && { waitingRoom: waitingUsers(info) },
+    ...info.tag === "group_update" && { roster: rosterUsers(info) },
     ...node.attrs["t"] && /^\d{1,12}$/.test(node.attrs["t"]) && { timestamp: Number(node.attrs["t"]) }
   };
 }
@@ -4478,9 +4722,9 @@ function callAck(node) {
 }
 
 // src/client/features/message/comment.ts
-var import_node_crypto3 = require("crypto");
+var import_node_crypto5 = require("crypto");
 var keyFor = (c) => Buffer.from(
-  (0, import_node_crypto3.hkdfSync)(
+  (0, import_node_crypto5.hkdfSync)(
     "sha256",
     c.secret,
     Buffer.alloc(32),
@@ -4494,8 +4738,8 @@ var keyFor = (c) => Buffer.from(
   )
 );
 function encryptAddon(body, c) {
-  const iv = (0, import_node_crypto3.randomBytes)(12);
-  const cipher = (0, import_node_crypto3.createCipheriv)("aes-256-gcm", keyFor(c), iv);
+  const iv = (0, import_node_crypto5.randomBytes)(12);
+  const cipher = (0, import_node_crypto5.createCipheriv)("aes-256-gcm", keyFor(c), iv);
   const plain = encodeProto("Message", body);
   const out = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
   return { encPayload: new Uint8Array(out), encIv: new Uint8Array(iv) };
@@ -4503,7 +4747,7 @@ function encryptAddon(body, c) {
 function decryptAddon(enc2, c) {
   if (enc2.encPayload.length < 17) throw new Error("add-on too short");
   const body = Buffer.from(enc2.encPayload);
-  const d = (0, import_node_crypto3.createDecipheriv)("aes-256-gcm", keyFor(c), enc2.encIv);
+  const d = (0, import_node_crypto5.createDecipheriv)("aes-256-gcm", keyFor(c), enc2.encIv);
   d.setAuthTag(body.subarray(body.length - 16));
   const plain = Buffer.concat([d.update(body.subarray(0, body.length - 16)), d.final()]);
   const T = protoType("Message");
@@ -4524,12 +4768,12 @@ function commentMessage(parent, text4, ctx) {
       },
       ...enc2
     },
-    messageContextInfo: { messageSecret: (0, import_node_crypto3.randomBytes)(32) }
+    messageContextInfo: { messageSecret: (0, import_node_crypto5.randomBytes)(32) }
   };
 }
 
 // src/client/features/message/event-message.ts
-var import_node_crypto4 = require("crypto");
+var import_node_crypto6 = require("crypto");
 var seconds = (t) => t === void 0 ? void 0 : Math.floor(t instanceof Date ? t.getTime() / 1e3 : t);
 function eventMessage(o) {
   if (!o.name.trim()) throw new Error("an event needs a name");
@@ -4545,11 +4789,11 @@ function eventMessage(o) {
       ...o.extraGuestsAllowed !== void 0 && { extraGuestsAllowed: o.extraGuestsAllowed },
       isScheduleCall: o.isScheduledCall ?? false
     },
-    messageContextInfo: { messageSecret: (0, import_node_crypto4.randomBytes)(32) }
+    messageContextInfo: { messageSecret: (0, import_node_crypto6.randomBytes)(32) }
   };
 }
 var keyFor2 = (c) => Buffer.from(
-  (0, import_node_crypto4.hkdfSync)(
+  (0, import_node_crypto6.hkdfSync)(
     "sha256",
     c.secret,
     Buffer.alloc(32),
@@ -4572,15 +4816,15 @@ function encryptEventResponse(response, c, now = Date.now()) {
       ...response.extraGuestCount !== void 0 && { extraGuestCount: response.extraGuestCount }
     })
   ).finish();
-  const iv = (0, import_node_crypto4.randomBytes)(12);
-  const cipher = (0, import_node_crypto4.createCipheriv)("aes-256-gcm", keyFor2(c), iv);
+  const iv = (0, import_node_crypto6.randomBytes)(12);
+  const cipher = (0, import_node_crypto6.createCipheriv)("aes-256-gcm", keyFor2(c), iv);
   cipher.setAAD(aadFor(c));
   const body = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
   return { encPayload: new Uint8Array(body), encIv: new Uint8Array(iv) };
 }
 function decryptEventResponse(enc2, c) {
   if (enc2.encPayload.length < 17) throw new Error("event response too short");
-  const d = (0, import_node_crypto4.createDecipheriv)("aes-256-gcm", keyFor2(c), enc2.encIv);
+  const d = (0, import_node_crypto6.createDecipheriv)("aes-256-gcm", keyFor2(c), enc2.encIv);
   d.setAAD(aadFor(c));
   const body = Buffer.from(enc2.encPayload);
   d.setAuthTag(body.subarray(body.length - 16));
@@ -4605,7 +4849,7 @@ function eventResponse(key, response, c) {
 }
 
 // src/client/features/message/extras.ts
-var import_node_crypto5 = require("crypto");
+var import_node_crypto7 = require("crypto");
 function poll(name, values, selectableCount = 1, o = {}) {
   if (!name.trim()) throw new Error("poll needs a question");
   if (values.length < 2 || values.length > 12) throw new Error("a poll needs 2 to 12 options");
@@ -4634,7 +4878,7 @@ function poll(name, values, selectableCount = 1, o = {}) {
   };
   const field = quiz || image ? "pollCreationMessageV5" : selectableCount === 1 ? "pollCreationMessageV3" : "pollCreationMessage";
   return {
-    message: { messageContextInfo: { messageSecret: (0, import_node_crypto5.randomBytes)(32) }, [field]: creation },
+    message: { messageContextInfo: { messageSecret: (0, import_node_crypto7.randomBytes)(32) }, [field]: creation },
     // `contenttype` is only read for channel posts; chats ignore it.
     opts: {
       extraNodes: [
@@ -4712,7 +4956,7 @@ function groupStatusContext(authorLid, sourceType, attributions = []) {
       ...attributions
     ],
     isGroupStatus: true,
-    posterStatusId: (0, import_node_crypto5.randomBytes)(32).toString("base64")
+    posterStatusId: (0, import_node_crypto7.randomBytes)(32).toString("base64")
   };
 }
 function groupStatus(inner) {
@@ -4738,7 +4982,7 @@ FN:${name}
 TEL;type=CELL;type=VOICE;waid=${digits2}:+${digits2}
 END:VCARD`;
 }
-var pollOptionHash = (name) => (0, import_node_crypto5.createHash)("sha256").update(name).digest("hex");
+var pollOptionHash = (name) => (0, import_node_crypto7.createHash)("sha256").update(name).digest("hex");
 function decryptPollVote(vote, ctx) {
   if (vote.encPayload.length < 17) throw new Error("poll vote too short");
   const info = Buffer.concat([
@@ -4747,8 +4991,8 @@ function decryptPollVote(vote, ctx) {
     Buffer.from(ctx.voterJid),
     Buffer.from("Poll Vote")
   ]);
-  const key = Buffer.from((0, import_node_crypto5.hkdfSync)("sha256", ctx.pollSecret, Buffer.alloc(32), info, 32));
-  const d = (0, import_node_crypto5.createDecipheriv)("aes-256-gcm", key, vote.encIv);
+  const key = Buffer.from((0, import_node_crypto7.hkdfSync)("sha256", ctx.pollSecret, Buffer.alloc(32), info, 32));
+  const d = (0, import_node_crypto7.createDecipheriv)("aes-256-gcm", key, vote.encIv);
   d.setAAD(Buffer.from(`${ctx.pollMsgId}\0${ctx.voterJid}`));
   d.setAuthTag(Buffer.from(vote.encPayload.subarray(vote.encPayload.length - 16)));
   const plain = Buffer.concat([
@@ -4761,7 +5005,7 @@ function decryptPollVote(vote, ctx) {
 }
 
 // src/client/meta-ai.ts
-var import_node_crypto6 = require("crypto");
+var import_node_crypto8 = require("crypto");
 var BOT_MESSAGE_INFO = "Bot Message";
 var MAX_SECRETS_PER_CHAT = 20;
 var MessageSecrets = class {
@@ -4797,7 +5041,7 @@ var MessageSecrets = class {
   }
 };
 var normalizeLid = (jid) => jid && jid.endsWith("@lid") && jid.includes(":") ? `${jid.split(":")[0]}@lid` : jid;
-var hkdf = (ikm, info) => Buffer.from((0, import_node_crypto6.hkdfSync)("sha256", ikm, Buffer.alloc(0), info, 32));
+var hkdf = (ikm, info) => Buffer.from((0, import_node_crypto8.hkdfSync)("sha256", ikm, Buffer.alloc(0), info, 32));
 function decryptMsmsg(messageSecret, ctx, encIv, encPayload) {
   const msgIds = [
     ...new Set(
@@ -4824,7 +5068,7 @@ function decryptMsmsg(messageSecret, ctx, encIv, encPayload) {
     for (const target of targets) {
       try {
         const key = hkdf(k1, Buffer.concat([idBuf, Buffer.from(target), bot]));
-        const d = (0, import_node_crypto6.createDecipheriv)("aes-256-gcm", key, encIv);
+        const d = (0, import_node_crypto8.createDecipheriv)("aes-256-gcm", key, encIv);
         d.setAAD(Buffer.concat([idBuf, Buffer.from([0]), bot]));
         d.setAuthTag(tag);
         return Buffer.concat([d.update(body), d.final()]);
@@ -4866,7 +5110,7 @@ var UPLOAD_PREKEY_COUNT = 30;
 var MAX_RETRIES = 5;
 var REQUEST_TIMEOUT_MS = 2e4;
 var children = (n, tag) => Array.isArray(n.content) ? n.content.filter((c) => tag === void 0 || c.tag === tag) : [];
-var be2 = (n, len) => {
+var be3 = (n, len) => {
   const b = Buffer.alloc(len);
   b.writeUIntBE(n, 0, len);
   return b;
@@ -5084,7 +5328,7 @@ var Receiver = class {
       tag: "iq",
       attrs: { xmlns: "encrypt", type: "set", to: S_WHATSAPP_NET },
       content: [
-        { tag: "registration", attrs: {}, content: be2(creds.registrationId, 4) },
+        { tag: "registration", attrs: {}, content: be3(creds.registrationId, 4) },
         { tag: "type", attrs: {}, content: Buffer.from([5]) },
         { tag: "identity", attrs: {}, content: creds.signedIdentityKey.publicKey },
         { tag: "list", attrs: {}, content: keys.map(xmppPreKey) },
@@ -5454,7 +5698,7 @@ var Receiver = class {
         tag: "retry",
         attrs: { count: String(count), id, t: node.attrs["t"] ?? "", v: "1", error: "1" }
       },
-      { tag: "registration", attrs: {}, content: be2(creds.registrationId, 4) }
+      { tag: "registration", attrs: {}, content: be3(creds.registrationId, 4) }
     ];
     if (count > 1 && creds.account) {
       const [pre] = await this.#generatePreKeys(1);
@@ -5485,7 +5729,7 @@ var xmppPreKey = (k) => ({
   tag: "key",
   attrs: {},
   content: [
-    { tag: "id", attrs: {}, content: be2(k.id, 3) },
+    { tag: "id", attrs: {}, content: be3(k.id, 3) },
     { tag: "value", attrs: {}, content: k.publicKey }
   ]
 });
@@ -5493,14 +5737,14 @@ var xmppSignedPreKey = (creds) => ({
   tag: "skey",
   attrs: {},
   content: [
-    { tag: "id", attrs: {}, content: be2(creds.signedPreKey.keyId, 3) },
+    { tag: "id", attrs: {}, content: be3(creds.signedPreKey.keyId, 3) },
     { tag: "value", attrs: {}, content: creds.signedPreKey.publicKey },
     { tag: "signature", attrs: {}, content: creds.signedPreKey.signature }
   ]
 });
 
 // src/client/antiban.ts
-var import_node_crypto7 = require("crypto");
+var import_node_crypto9 = require("crypto");
 var AntiBanError = class extends Error {
   constructor(message, reason) {
     super(message);
@@ -5554,7 +5798,7 @@ var AntiBan = class {
   }
   /** Stable key of a message's content for the identical-text check. */
   static signature(content) {
-    return (0, import_node_crypto7.createHash)("sha1").update(content).digest("hex");
+    return (0, import_node_crypto9.createHash)("sha1").update(content).digest("hex");
   }
   /**
    * Wait until sending `signature` to `chat` is fine, or throw `AntiBanError`. Calls are served in order, so a loop
@@ -5617,12 +5861,12 @@ var AntiBan = class {
 };
 
 // src/client/sender.ts
-var import_node_crypto9 = require("crypto");
+var import_node_crypto11 = require("crypto");
 var import_node_fs10 = require("fs");
 var import_node_path6 = require("path");
 
 // src/client/reporting.ts
-var import_node_crypto8 = require("crypto");
+var import_node_crypto10 = require("crypto");
 var IMG = { f: 17, s: [{ f: 21 }, { f: 22 }] };
 var FIELDS = [
   { f: 1 },
@@ -5770,10 +6014,10 @@ function reportingNode(encodedMessage, messageSecret, key) {
     Buffer.from(key.to),
     Buffer.from("Report Token")
   ]);
-  const secret = Buffer.from((0, import_node_crypto8.hkdfSync)("sha256", messageSecret, Buffer.alloc(0), info, 32));
+  const secret = Buffer.from((0, import_node_crypto10.hkdfSync)("sha256", messageSecret, Buffer.alloc(0), info, 32));
   const content = extract(encodedMessage, COMPILED);
   if (!content || content.length === 0) return void 0;
-  const token = (0, import_node_crypto8.createHmac)("sha256", secret).update(content).digest().subarray(0, 16);
+  const token = (0, import_node_crypto10.createHmac)("sha256", secret).update(content).digest().subarray(0, 16);
   return {
     tag: "reporting",
     attrs: {},
@@ -5787,7 +6031,7 @@ var SENT_CACHE_SIZE = 500;
 var MAX_RESEND_COUNT = 5;
 var children2 = (n, tag) => Array.isArray(n.content) ? n.content.filter((c) => tag === void 0 || c.tag === tag) : [];
 function padRandomMax16(data) {
-  const n = ((0, import_node_crypto9.randomBytes)(1)[0] & 15) + 1;
+  const n = ((0, import_node_crypto11.randomBytes)(1)[0] & 15) + 1;
   return Buffer.concat([data, Buffer.alloc(n, n)]);
 }
 function generateMessageId(meId) {
@@ -5796,8 +6040,8 @@ function generateMessageId(meId) {
   const user = jidDecode(meId).user;
   data.write(user, 8);
   data.write("@c.us", 8 + user.length);
-  (0, import_node_crypto9.randomBytes)(16).copy(data, 28);
-  return "3EB0" + (0, import_node_crypto9.createHash)("sha256").update(data).digest("hex").toUpperCase().slice(0, 18);
+  (0, import_node_crypto11.randomBytes)(16).copy(data, 28);
+  return "3EB0" + (0, import_node_crypto11.createHash)("sha256").update(data).digest("hex").toUpperCase().slice(0, 18);
 }
 var Sender = class {
   constructor(d) {
@@ -5824,10 +6068,10 @@ var Sender = class {
     const id = opts.messageId ?? generateMessageId(creds.me.id);
     const withSecret = withMessageSecret(message);
     if (to.endsWith("@newsletter")) {
-      const { messageContextInfo: info, ...bare2 } = message;
+      const { messageContextInfo: info, ...bare3 } = message;
       const association = info?.messageAssociation;
       const post = channelPost({
-        ...bare2,
+        ...bare3,
         ...association ? { messageContextInfo: { messageAssociation: association } } : {}
       });
       const stanza2 = {
@@ -6341,7 +6585,7 @@ function withMessageSecret(message) {
     return message;
   const info = message["messageContextInfo"] ?? {};
   if (info["messageSecret"]) return message;
-  return { ...message, messageContextInfo: { ...info, messageSecret: (0, import_node_crypto9.randomBytes)(32) } };
+  return { ...message, messageContextInfo: { ...info, messageSecret: (0, import_node_crypto11.randomBytes)(32) } };
 }
 function messageType(message) {
   const q = message["questionMessage"]?.message;
@@ -6386,7 +6630,7 @@ var import_node_fs11 = require("fs");
 var import_node_path7 = require("path");
 
 // src/client/features/message/media.ts
-var import_node_crypto10 = require("crypto");
+var import_node_crypto12 = require("crypto");
 var HKDF_LABEL = {
   "md-app-state": "App State",
   "md-msg-hist": "History",
@@ -6418,26 +6662,26 @@ var ORIGIN = "https://web.whatsapp.com";
 var MAC_LENGTH = 10;
 function mediaKeys(mediaKey, type) {
   const okm = Buffer.from(
-    (0, import_node_crypto10.hkdfSync)("sha256", mediaKey, Buffer.alloc(0), `WhatsApp ${HKDF_LABEL[type]} Keys`, 112)
+    (0, import_node_crypto12.hkdfSync)("sha256", mediaKey, Buffer.alloc(0), `WhatsApp ${HKDF_LABEL[type]} Keys`, 112)
   );
   return { iv: okm.subarray(0, 16), cipherKey: okm.subarray(16, 48), macKey: okm.subarray(48, 80) };
 }
-function encryptMedia(plain, type, mediaKey = (0, import_node_crypto10.randomBytes)(32)) {
+function encryptMedia(plain, type, mediaKey = (0, import_node_crypto12.randomBytes)(32)) {
   const { iv, cipherKey, macKey } = mediaKeys(mediaKey, type);
-  const cipher = (0, import_node_crypto10.createCipheriv)("aes-256-cbc", cipherKey, iv);
+  const cipher = (0, import_node_crypto12.createCipheriv)("aes-256-cbc", cipherKey, iv);
   const body = Buffer.concat([cipher.update(plain), cipher.final()]);
-  const mac = (0, import_node_crypto10.createHmac)("sha256", macKey).update(iv).update(body).digest().subarray(0, MAC_LENGTH);
+  const mac = (0, import_node_crypto12.createHmac)("sha256", macKey).update(iv).update(body).digest().subarray(0, MAC_LENGTH);
   const encrypted = Buffer.concat([body, mac]);
   return {
     mediaKey,
     encrypted,
-    fileSha256: (0, import_node_crypto10.createHash)("sha256").update(plain).digest(),
-    fileEncSha256: (0, import_node_crypto10.createHash)("sha256").update(encrypted).digest(),
+    fileSha256: (0, import_node_crypto12.createHash)("sha256").update(plain).digest(),
+    fileEncSha256: (0, import_node_crypto12.createHash)("sha256").update(encrypted).digest(),
     fileLength: plain.length
   };
 }
 function rawMedia(plain) {
-  const sha = (0, import_node_crypto10.createHash)("sha256").update(plain).digest();
+  const sha = (0, import_node_crypto12.createHash)("sha256").update(plain).digest();
   return {
     mediaKey: Buffer.alloc(0),
     encrypted: Buffer.from(plain),
@@ -6458,22 +6702,22 @@ function stripMediaKeys(message) {
 }
 function decryptMedia(encrypted, mediaKey, type, expect = {}) {
   if (encrypted.length <= MAC_LENGTH) throw new Error("media payload too short");
-  if (expect.fileEncSha256 && !timingSafeEqualSafe((0, import_node_crypto10.createHash)("sha256").update(encrypted).digest(), expect.fileEncSha256)) {
+  if (expect.fileEncSha256 && !timingSafeEqualSafe((0, import_node_crypto12.createHash)("sha256").update(encrypted).digest(), expect.fileEncSha256)) {
     throw new Error("encrypted media hash mismatch");
   }
   const { iv, cipherKey, macKey } = mediaKeys(mediaKey, type);
   const body = Buffer.from(encrypted.subarray(0, encrypted.length - MAC_LENGTH));
   const mac = Buffer.from(encrypted.subarray(encrypted.length - MAC_LENGTH));
-  const expectedMac = (0, import_node_crypto10.createHmac)("sha256", macKey).update(iv).update(body).digest().subarray(0, MAC_LENGTH);
+  const expectedMac = (0, import_node_crypto12.createHmac)("sha256", macKey).update(iv).update(body).digest().subarray(0, MAC_LENGTH);
   if (!timingSafeEqualSafe(expectedMac, mac)) throw new Error("media MAC mismatch");
-  const d = (0, import_node_crypto10.createDecipheriv)("aes-256-cbc", cipherKey, iv);
+  const d = (0, import_node_crypto12.createDecipheriv)("aes-256-cbc", cipherKey, iv);
   const plain = Buffer.concat([d.update(body), d.final()]);
-  if (expect.fileSha256 && !timingSafeEqualSafe((0, import_node_crypto10.createHash)("sha256").update(plain).digest(), expect.fileSha256)) {
+  if (expect.fileSha256 && !timingSafeEqualSafe((0, import_node_crypto12.createHash)("sha256").update(plain).digest(), expect.fileSha256)) {
     throw new Error("media hash mismatch");
   }
   return plain;
 }
-var timingSafeEqualSafe = (a, b) => a.length === b.length && (0, import_node_crypto10.timingSafeEqual)(a, b);
+var timingSafeEqualSafe = (a, b) => a.length === b.length && (0, import_node_crypto12.timingSafeEqual)(a, b);
 var mediaConnRequest = () => ({
   tag: "iq",
   attrs: { type: "set", xmlns: "w:m", to: "s.whatsapp.net" },
@@ -6486,8 +6730,8 @@ function parseMediaConn(res, now = Date.now()) {
   return { hosts, auth: mc.attrs["auth"] ?? "", ttl: Number(mc.attrs["ttl"] ?? 0), fetchedAt: now };
 }
 var uploadToken = (hash) => Buffer.from(hash).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-var pollOptionHash2 = (name, imageSha256) => (0, import_node_crypto10.createHash)("sha256").update(
-  (0, import_node_crypto10.createHash)("sha256").update(name, "utf8").digest("hex") + Buffer.from(imageSha256).toString("base64"),
+var pollOptionHash2 = (name, imageSha256) => (0, import_node_crypto12.createHash)("sha256").update(
+  (0, import_node_crypto12.createHash)("sha256").update(name, "utf8").digest("hex") + Buffer.from(imageSha256).toString("base64"),
   "utf8"
 ).digest("hex");
 async function uploadMedia(conn, type, media, fetchImpl = fetch, channel = false, pathOverride) {
@@ -8391,16 +8635,16 @@ var LidMap = class {
 };
 
 // src/client/features/account/pairing-code.ts
-var import_node_crypto11 = require("crypto");
+var import_node_crypto13 = require("crypto");
 var import_node_util = require("util");
-var pbkdf2Async = (0, import_node_util.promisify)(import_node_crypto11.pbkdf2);
+var pbkdf2Async = (0, import_node_util.promisify)(import_node_crypto13.pbkdf2);
 var CROCKFORD = "123456789ABCDEFGHJKLMNPQRSTVWXYZ";
 var PBKDF2_ITERATIONS = 2 << 16;
 function generatePairingCode() {
   let value = 0;
   let bits = 0;
   let out = "";
-  for (const byte of (0, import_node_crypto11.randomBytes)(5)) {
+  for (const byte of (0, import_node_crypto13.randomBytes)(5)) {
     value = value << 8 | byte;
     bits += 8;
     while (bits >= 5) {
@@ -8410,28 +8654,28 @@ function generatePairingCode() {
   }
   return out;
 }
-var x25519Private = (raw) => (0, import_node_crypto11.createPrivateKey)({
+var x25519Private = (raw) => (0, import_node_crypto13.createPrivateKey)({
   key: Buffer.concat([Buffer.from("302e020100300506032b656e04220420", "hex"), raw]),
   format: "der",
   type: "pkcs8"
 });
-var x25519Public = (raw) => (0, import_node_crypto11.createPublicKey)({
+var x25519Public = (raw) => (0, import_node_crypto13.createPublicKey)({
   key: Buffer.concat([Buffer.from("302a300506032b656e032100", "hex"), raw]),
   format: "der",
   type: "spki"
 });
-var sharedKey = (privateKey, publicKey) => (0, import_node_crypto11.diffieHellman)({
+var sharedKey = (privateKey, publicKey) => (0, import_node_crypto13.diffieHellman)({
   privateKey: x25519Private(privateKey),
   publicKey: x25519Public(publicKey.length === 33 ? publicKey.subarray(1) : publicKey)
 });
 var codeKey = (code, salt) => pbkdf2Async(Buffer.from(code), salt, PBKDF2_ITERATIONS, 32, "sha256");
 var ctr = (decrypt, data, key, iv) => {
-  const c = (decrypt ? import_node_crypto11.createDecipheriv : import_node_crypto11.createCipheriv)("aes-256-ctr", key, iv);
+  const c = (decrypt ? import_node_crypto13.createDecipheriv : import_node_crypto13.createCipheriv)("aes-256-ctr", key, iv);
   return Buffer.concat([c.update(data), c.final()]);
 };
 async function companionHello(creds, phoneNumber, code, browser = ["Windows", "Desktop"]) {
-  const salt = (0, import_node_crypto11.randomBytes)(32);
-  const iv = (0, import_node_crypto11.randomBytes)(16);
+  const salt = (0, import_node_crypto13.randomBytes)(32);
+  const iv = (0, import_node_crypto13.randomBytes)(16);
   const wrapped = Buffer.concat([
     salt,
     iv,
@@ -8482,13 +8726,13 @@ async function companionFinish(notification, creds, phoneNumber, code) {
     wrapped.subarray(32, 48)
   );
   const companionShared = sharedKey(creds.pairingEphemeralKey.privateKey, primaryEphemeral);
-  const random = (0, import_node_crypto11.randomBytes)(32);
-  const salt = (0, import_node_crypto11.randomBytes)(32);
+  const random = (0, import_node_crypto13.randomBytes)(32);
+  const salt = (0, import_node_crypto13.randomBytes)(32);
   const bundleKey = Buffer.from(
-    (0, import_node_crypto11.hkdfSync)("sha256", companionShared, salt, "link_code_pairing_key_bundle_encryption_key", 32)
+    (0, import_node_crypto13.hkdfSync)("sha256", companionShared, salt, "link_code_pairing_key_bundle_encryption_key", 32)
   );
-  const iv = (0, import_node_crypto11.randomBytes)(12);
-  const gcm = (0, import_node_crypto11.createCipheriv)("aes-256-gcm", bundleKey, iv);
+  const iv = (0, import_node_crypto13.randomBytes)(12);
+  const gcm = (0, import_node_crypto13.createCipheriv)("aes-256-gcm", bundleKey, iv);
   const body = Buffer.concat([
     gcm.update(Buffer.concat([creds.signedIdentityKey.publicKey, primaryIdentity, random])),
     gcm.final(),
@@ -8496,7 +8740,7 @@ async function companionFinish(notification, creds, phoneNumber, code) {
   ]);
   const identityShared = sharedKey(creds.signedIdentityKey.privateKey, primaryIdentity);
   const advSecret = Buffer.from(
-    (0, import_node_crypto11.hkdfSync)(
+    (0, import_node_crypto13.hkdfSync)(
       "sha256",
       Buffer.concat([companionShared, identityShared, random]),
       Buffer.alloc(0),
@@ -9135,7 +9379,7 @@ function parseChannelStatus(node, decode) {
 }
 
 // src/client/features/contact/username.ts
-var import_node_crypto12 = require("crypto");
+var import_node_crypto14 = require("crypto");
 var USERNAME_QUERY = {
   CHECK: "26122779627399568",
   CHECK_MULTI: "27134626522840286",
@@ -9149,7 +9393,7 @@ var Usernames = class {
     this.mex = mex;
   }
   mex;
-  async check(username, includeSuggestions = true, sessionId = (0, import_node_crypto12.randomUUID)()) {
+  async check(username, includeSuggestions = true, sessionId = (0, import_node_crypto14.randomUUID)()) {
     const data = await this.mex(
       USERNAME_QUERY.CHECK,
       {
@@ -9178,7 +9422,7 @@ var Usernames = class {
       username,
       reserved: true,
       source: o.source ?? "USER_INPUT",
-      session_id: o.sessionId ?? (0, import_node_crypto12.randomUUID)(),
+      session_id: o.sessionId ?? (0, import_node_crypto14.randomUUID)(),
       ...o.pin && { pin: o.pin }
     },
     "xwa2_username_set"
@@ -9256,23 +9500,23 @@ var Account = class {
 };
 
 // src/client/features/message/media-retry.ts
-var import_node_crypto13 = require("crypto");
+var import_node_crypto15 = require("crypto");
 var retryKey = (mediaKey) => Buffer.from(
-  (0, import_node_crypto13.hkdfSync)("sha256", mediaKey, Buffer.alloc(0), "WhatsApp Media Retry Notification", 32)
+  (0, import_node_crypto15.hkdfSync)("sha256", mediaKey, Buffer.alloc(0), "WhatsApp Media Retry Notification", 32)
 );
 function mediaRetryRequest(key, mediaKey, meId) {
-  const iv = (0, import_node_crypto13.randomBytes)(12);
-  const c = (0, import_node_crypto13.createCipheriv)("aes-256-gcm", retryKey(mediaKey), iv);
+  const iv = (0, import_node_crypto15.randomBytes)(12);
+  const c = (0, import_node_crypto15.createCipheriv)("aes-256-gcm", retryKey(mediaKey), iv);
   c.setAAD(Buffer.from(key.id));
   const body = Buffer.concat([
     c.update(encodeProto("ServerErrorReceipt", { stanzaId: key.id })),
     c.final(),
     c.getAuthTag()
   ]);
-  const bare2 = meId.replace(/:\d+@/, "@");
+  const bare3 = meId.replace(/:\d+@/, "@");
   return {
     tag: "receipt",
-    attrs: { id: key.id, to: bare2, type: "server-error" },
+    attrs: { id: key.id, to: bare3, type: "server-error" },
     content: [
       {
         tag: "encrypt",
@@ -9316,7 +9560,7 @@ function decodeMediaRetryNode(node) {
 }
 function decryptMediaRetry(media, mediaKey, msgId) {
   const buf = Buffer.from(media.ciphertext);
-  const d = (0, import_node_crypto13.createDecipheriv)("aes-256-gcm", retryKey(mediaKey), media.iv);
+  const d = (0, import_node_crypto15.createDecipheriv)("aes-256-gcm", retryKey(mediaKey), media.iv);
   d.setAAD(Buffer.from(msgId));
   d.setAuthTag(buf.subarray(buf.length - 16));
   const plain = Buffer.concat([d.update(buf.subarray(0, buf.length - 16)), d.final()]);
@@ -9427,7 +9671,7 @@ var TcTokens = class {
 };
 
 // src/client/features/message/sticker-pack.ts
-var import_node_crypto14 = require("crypto");
+var import_node_crypto16 = require("crypto");
 var MAX_STICKERS = 60;
 var CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -9498,7 +9742,7 @@ function createStickerPackZip(packId, stickers, cover) {
   const files = [{ name: trayIconFileName, data: cover }];
   const seen = /* @__PURE__ */ new Set();
   const list = stickers.map((s) => {
-    const name = `${(0, import_node_crypto14.createHash)("sha256").update(s.data).digest("base64url")}.webp`;
+    const name = `${(0, import_node_crypto16.createHash)("sha256").update(s.data).digest("base64url")}.webp`;
     if (!seen.has(name)) {
       seen.add(name);
       files.push({ name, data: s.data });
@@ -9514,7 +9758,7 @@ function createStickerPackZip(packId, stickers, cover) {
   });
   return { zip: zipStore(files), stickers: list, trayIconFileName };
 }
-var newPackId = () => (0, import_node_crypto14.randomUUID)().toUpperCase();
+var newPackId = () => (0, import_node_crypto16.randomUUID)().toUpperCase();
 
 // src/client/features/contact/bots.ts
 var kids6 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
@@ -9560,7 +9804,7 @@ var listBots = async (request) => parseBotList(await request(botListRequest()));
 // src/client/features/contact/prekey-rotation.ts
 var SIGNED_PRE_KEY_INTERVAL_MS = 27 * 24 * 60 * 60 * 1e3;
 var SIGNED_PRE_KEY_RETENTION = 3;
-var be3 = (n) => new Uint8Array([n >> 16 & 255, n >> 8 & 255, n & 255]);
+var be32 = (n) => new Uint8Array([n >> 16 & 255, n >> 8 & 255, n & 255]);
 var rotateSignedPreKeyNode = (id, publicKey, signature) => ({
   tag: "iq",
   attrs: { to: "s.whatsapp.net", type: "set", xmlns: "encrypt" },
@@ -9573,7 +9817,7 @@ var rotateSignedPreKeyNode = (id, publicKey, signature) => ({
           tag: "skey",
           attrs: {},
           content: [
-            { tag: "id", attrs: {}, content: be3(id) },
+            { tag: "id", attrs: {}, content: be32(id) },
             { tag: "value", attrs: {}, content: publicKey },
             { tag: "signature", attrs: {}, content: signature }
           ]
@@ -9644,6 +9888,121 @@ var ServerInfo = class {
   setPassive = async (passive) => {
     await this.request(passiveNode(!passive));
   };
+};
+
+// src/client/features/call/room.ts
+var bare2 = (jid) => jid.replace(/:\d+@/, "@");
+var Room = class extends TypedEmitter {
+  /** The link to hand out. */
+  url;
+  token;
+  callId;
+  media;
+  #host;
+  #rule;
+  #maxGuests;
+  #waiting = /* @__PURE__ */ new Map();
+  #inside = /* @__PURE__ */ new Map();
+  #handled = /* @__PURE__ */ new Set();
+  #owner;
+  #off;
+  #closed = false;
+  constructor(host, info, o = {}) {
+    super();
+    this.#host = host;
+    this.url = info.url;
+    this.token = info.token;
+    this.callId = info.callId;
+    this.media = info.media;
+    this.#owner = bare2(info.owner);
+    this.#rule = o.admit ?? "all";
+    this.#maxGuests = o.maxGuests ?? Number.POSITIVE_INFINITY;
+    this.#off = host.on("call", (e) => void this.#handle(e));
+  }
+  /** People waiting to be let in. */
+  get waiting() {
+    return [...this.#waiting.values()];
+  }
+  /** People in the call now (the owner not included). */
+  get inside() {
+    return [...this.#inside.values()];
+  }
+  get closed() {
+    return this.#closed;
+  }
+  /** Let a waiting person in. */
+  async admit(jid) {
+    const p = this.#waiting.get(bare2(jid)) ?? { jid, guest: false };
+    await this.#host.answerWaitingRoom(this.callId, jid, true);
+    this.#waiting.delete(bare2(jid));
+    this.emit("admitted", p);
+  }
+  /** Turn a waiting person away. */
+  async deny(jid) {
+    const p = this.#waiting.get(bare2(jid)) ?? { jid, guest: false };
+    await this.#host.answerWaitingRoom(this.callId, jid, false);
+    this.#waiting.delete(bare2(jid));
+    this.emit("denied", p);
+  }
+  /** Ask for approval (the default) or let everybody straight in. */
+  setApprovalRequired(on) {
+    return this.#host.setApprovalRequired(this.callId, on);
+  }
+  /** End the call for everybody and stop watching. */
+  async close(reason = "closed") {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#off?.();
+    this.#off = void 0;
+    await this.#host.endCall(this.callId).catch(() => void 0);
+    this.emit("closed", { reason });
+  }
+  async #decide(p) {
+    if (this.#inside.size >= this.#maxGuests) return false;
+    if (this.#rule === "all") return true;
+    if (this.#rule === "guests") return p.guest;
+    if (this.#rule === "none") return false;
+    return this.#rule(p);
+  }
+  async #handle(e) {
+    if (this.#closed || e.callId !== this.callId) return;
+    this.emit("trace", { kind: e.status, data: e.node ?? e });
+    if (e.status === "terminate" && (e.from === `${this.callId}@call` || bare2(e.from) === this.#owner)) {
+      this.#closed = true;
+      this.#off?.();
+      this.emit("closed", { reason: "terminated" });
+      return;
+    }
+    for (const w of e.waitingRoom ?? []) {
+      const key = bare2(w.jid);
+      if (key === this.#owner || w.state !== "waiting_room_joined" || this.#handled.has(key))
+        continue;
+      this.#handled.add(key);
+      const person = { jid: w.jid, guest: w.guest, ...w.name && { name: w.name } };
+      this.#waiting.set(key, person);
+      this.emit("request", person);
+      try {
+        if (await this.#decide(person)) await this.admit(w.jid);
+        else if (this.#rule !== "none") await this.deny(w.jid);
+      } catch (err) {
+        this.emit("trace", { kind: "decision-failed", data: String(err.message) });
+        this.#handled.delete(key);
+      }
+    }
+    for (const r of e.roster ?? []) {
+      const key = bare2(r.jid);
+      if (key === this.#owner) continue;
+      const person = { jid: r.jid, guest: r.guest, ...r.name && { name: r.name } };
+      if (r.state === "connected" && !this.#inside.has(key)) {
+        this.#inside.set(key, person);
+        this.emit("joined", person);
+      } else if (r.state === "terminated" && this.#inside.has(key)) {
+        this.#inside.delete(key);
+        this.#handled.delete(key);
+        this.emit("left", person);
+      }
+    }
+  }
 };
 
 // src/client/features/business/manage.ts
@@ -10190,7 +10549,7 @@ function forward(message, score = 1) {
 }
 
 // src/client/features/call/calls.ts
-var import_node_crypto15 = require("crypto");
+var import_node_crypto17 = require("crypto");
 var CAPABILITY_OFFER = Uint8Array.from([1, 5, 247, 9, 224, 187, 19]);
 var CAPABILITY_VIDEO_OFFER = Uint8Array.from([1, 5, 247, 9, 224, 187, 83]);
 var CAPABILITY_PREACCEPT = Uint8Array.from([1, 5, 247, 9, 224, 187, 7]);
@@ -10198,7 +10557,7 @@ var noMlow = (b) => Uint8Array.from(b, (v, i) => i === 5 ? v & 127 : v);
 var CAPABILITY_STANDARD_OPUS_OFFER = noMlow(CAPABILITY_OFFER);
 var CAPABILITY_STANDARD_OPUS_VIDEO_OFFER = noMlow(CAPABILITY_VIDEO_OFFER);
 var CAPABILITY_STANDARD_OPUS_PREACCEPT = noMlow(CAPABILITY_PREACCEPT);
-var newCallId = () => "00" + (0, import_node_crypto15.randomBytes)(15).toString("hex");
+var newCallId = () => "00" + (0, import_node_crypto17.randomBytes)(15).toString("hex");
 var wrap = (to, id, action) => ({
   tag: "call",
   attrs: { to, ...id && { id } },
@@ -10333,8 +10692,8 @@ var buildGroupDuration = (callId, creator, ms, id) => wrap("call", id, {
 var VOIP_SETTINGS_OPUS_16K = new TextEncoder().encode(
   '{"encode":{"use_mlow_codec_v1":"false"},"options":{"enable_48khz_rtp_clock":"false"}}'
 );
-function buildAccept(callId, to, creator, id, video = false, bare2 = false) {
-  if (bare2)
+function buildAccept(callId, to, creator, id, video = false, bare3 = false) {
+  if (bare3)
     return wrap(to, id, {
       tag: "accept",
       attrs: { "call-id": callId, "call-creator": creator },
@@ -10425,11 +10784,11 @@ var buildWaitingRoomHeartbeat = (callId, creator, id) => roomRequest(callId, cre
 var buildWaitingRoomAdmit = (callId, creator, user, id, deny = false) => roomRequest(callId, creator, id, deny ? "waiting_room_deny" : "waiting_room_admit", {}, [
   { tag: "user", attrs: { jid: user } }
 ]);
-var buildLinkJoin = (token, media, id) => {
+var buildLinkJoin = (token, media, id, pushName2) => {
   if (!TOKEN.test(token)) throw new Error("invalid call-link token");
   return service(id, {
     tag: "link_join",
-    attrs: { token, media },
+    attrs: { token, media, ...pushName2 && { push_name: pushName2 } },
     content: [
       audio("16000"),
       ...media === "video" ? [{ tag: "video", attrs: { dec: "H264", device_orientation: "0" } }] : [],
@@ -10668,7 +11027,7 @@ function parseButtonReply(message) {
 }
 
 // src/client/features/message/rich-response.ts
-var import_node_crypto16 = require("crypto");
+var import_node_crypto18 = require("crypto");
 var KEYWORDS = new Set(
   "break case catch continue debugger default delete do else finally for function if in instanceof new return switch this throw try typeof var void while with true false null undefined NaN Infinity class const let super extends export import yield static constructor of async await get set implements interface package private protected public enum throws transient".split(
     " "
@@ -10734,7 +11093,7 @@ var widget = (title, labels, toast) => ({
       label,
       state: "PENDING",
       kind: "OTHER",
-      tool_call_id: (0, import_node_crypto16.randomBytes)(8).toString("hex"),
+      tool_call_id: (0, import_node_crypto18.randomBytes)(8).toString("hex"),
       toast: { label: toast, __typename: "GenAI3PExtWidgetToast" },
       __typename: "GenAI3PExtWidgetCTA"
     })),
@@ -10833,7 +11192,7 @@ function richResponse(o) {
   if (!sections.length) sections.push(section({ text: "" }, "GenAIMarkdownTextUXPrimitive"));
   const data = {
     __typename: "GenAIUnifiedResponse",
-    response_id: o.responseId ?? (0, import_node_crypto16.randomUUID)(),
+    response_id: o.responseId ?? (0, import_node_crypto18.randomUUID)(),
     sections
   };
   return {
@@ -10841,7 +11200,7 @@ function richResponse(o) {
       messageContextInfo: {
         deviceListMetadata: {},
         deviceListMetadataVersion: 2,
-        messageSecret: (0, import_node_crypto16.randomBytes)(32)
+        messageSecret: (0, import_node_crypto18.randomBytes)(32)
       },
       botForwardedMessage: {
         message: {
@@ -10864,7 +11223,7 @@ function richResponse(o) {
 }
 
 // src/client/features/report/report.ts
-var import_node_crypto17 = require("crypto");
+var import_node_crypto19 = require("crypto");
 var REPORT_FLOWS = {
   /** Report from the open chat. */
   chat: "chat",
@@ -10938,7 +11297,7 @@ function reportedMessageNode(m, kind) {
   const evidence = [];
   if (!m.fromMe && m.reporting?.tag && m.reporting.token && secret && content) {
     const key = Buffer.from(
-      (0, import_node_crypto17.hkdfSync)(
+      (0, import_node_crypto19.hkdfSync)(
         "sha256",
         secret,
         Buffer.alloc(0),
@@ -17953,15 +18312,20 @@ var Client = class {
   #appState;
   #pairing;
   #ready = Promise.resolve();
+  #isGuest;
+  #guestRegistered = false;
+  #guestLid;
+  #guestSession;
   constructor(options = {}) {
     this.#options = options;
+    this.#isGuest = Boolean(options.guest);
     const dir = options.authDir ?? "auth";
     this.#credsPath = (0, import_node_path10.join)(dir, "creds.json");
     this.#signalDir = (0, import_node_path10.join)(dir, "signal");
     this.#autoRecover = options.autoRecover !== false;
     this.#tcTokens = new TcTokens((0, import_node_path10.join)(dir, "signal", "tctokens.json"));
     this.logger = options.logger ?? new ProtocolLogger({ label: "client" });
-    this.#creds = loadAuthCreds(this.#credsPath) ?? initAuthCreds();
+    this.#creds = this.#isGuest ? initAuthCreds() : loadAuthCreds(this.#credsPath) ?? initAuthCreds();
     saveAuthCreds(this.#credsPath, this.#creds);
     this.#config = { ...DEFAULT_CONFIG, ...options.config };
     if (options.antiban) this.antiban = new AntiBan(options.antiban === true ? {} : options.antiban);
@@ -17989,8 +18353,17 @@ var Client = class {
   }
   async #live() {
     await this.#ready;
-    if (!this.#sender || !this.#receiver || !this.#creds.me) throw new Error("not connected");
-    return { sender: this.#sender, receiver: this.#receiver, meId: this.#creds.me.id };
+    if (!this.#sender || !this.#receiver) throw new Error("not connected");
+    if (!this.#isGuest && !this.#creds.me) throw new Error("not connected");
+    return { sender: this.#sender, receiver: this.#receiver, meId: this.#creds.me?.id ?? "" };
+  }
+  /** Next id for a stanza built by hand (`request`/`sendCallAndWait`), e.g. `callSig.buildLinkJoin`. */
+  async nextId() {
+    return (await this.#live()).receiver.nextId();
+  }
+  /** Send a `<call>` stanza and wait for the server's matching `<ack class="call">` (20 s timeout by default). */
+  async sendCallAndWait(node, timeoutMs) {
+    return (await this.#live()).receiver.sendCallAndWait(node, timeoutMs);
   }
   /** Send text, optionally as a reply (`quoted`) and/or with @mentions. Returns the message id. */
   async sendText(to, text4, opts = {}) {
@@ -18176,7 +18549,7 @@ var Client = class {
     const { sender } = await this.#live();
     const packId = pack.packId ?? newPackId();
     const zip = createStickerPackZip(packId, pack.stickers, pack.cover);
-    const mediaKey = (0, import_node_crypto18.randomBytes)(32);
+    const mediaKey = (0, import_node_crypto20.randomBytes)(32);
     const encZip = encryptMedia(zip.zip, "sticker-pack", mediaKey);
     const encThumb = encryptMedia(pack.thumbnail, "sticker-pack-thumbnail", mediaKey);
     const conn = await this.#getMediaConn();
@@ -18652,7 +19025,7 @@ var Client = class {
       {
         pinInChatMessage: { key, type: "PIN_FOR_ALL", senderTimestampMs: Date.now() },
         messageContextInfo: {
-          messageSecret: (0, import_node_crypto18.randomBytes)(32),
+          messageSecret: (0, import_node_crypto20.randomBytes)(32),
           messageAddOnDurationInSecs: seconds2,
           messageAddOnExpiryType: "STATIC"
         }
@@ -18666,7 +19039,7 @@ var Client = class {
       {
         pinInChatMessage: { key, type: "UNPIN_FOR_ALL", senderTimestampMs: Date.now() },
         messageContextInfo: {
-          messageSecret: (0, import_node_crypto18.randomBytes)(32),
+          messageSecret: (0, import_node_crypto20.randomBytes)(32),
           messageAddOnDurationInSecs: 0,
           messageAddOnExpiryType: "STATIC"
         }
@@ -18769,7 +19142,7 @@ var Client = class {
     const devices = await sender.getDevices([peer]);
     const ring = devices.map((d) => d.jid);
     if (!ring.length) throw new Error(`no devices found for ${peer}`);
-    const callKey = new Uint8Array((0, import_node_crypto18.randomBytes)(32));
+    const callKey = new Uint8Array((0, import_node_crypto20.randomBytes)(32));
     const keys = await sender.encryptForDevices(ring, { call: { callKey } });
     if (!keys.length) throw new Error("could not encrypt the call key for any device");
     const callId = newCallId();
@@ -18932,6 +19305,7 @@ var Client = class {
       status: "ringing",
       startedAt: Date.now(),
       ...c.isGroup && { group: c.group ?? c.from },
+      ...c.lightweight && { lightweight: true },
       ...node && { offer: node, offerFrom: c.from }
     });
     this.#pruneCalls();
@@ -18964,6 +19338,10 @@ var Client = class {
     o = await resolveCallFiles(o);
     const c = this.#calls.get(callId);
     if (!c || c.direction !== "incoming" || !c.offer) throw new Error(`no incoming call ${callId}`);
+    if (c.lightweight)
+      throw new Error(
+        `call ${callId} is a silent group call (a voice chat invitation): it rings nobody, and a linked device cannot join it (the server answers 403 while the account's voice_chat_companion_experience_version is below 2)`
+      );
     if (c.group) return this.#acceptGroupCall(c, o);
     const { receiver } = await this.#live();
     const own = this.#creds.me;
@@ -19018,6 +19396,29 @@ var Client = class {
     const { receiver } = await this.#live();
     const ack = await receiver.sendCallAndWait(buildLinkCreate(media, receiver.nextId()));
     return parseLinkCreateAck(ack);
+  }
+  /**
+   * Open a room: create a call link, join it as its owner and let people in by a rule (`admit`: everybody, only
+   * guests without a WhatsApp account, nobody automatically, or your own function). People open the link in a browser.
+   * The returned room tells you who asks, who is let in, who is inside and who leaves (see \`RoomEvents\`).
+   */
+  async createRoom(o = {}) {
+    const media = o.media ?? "video";
+    const { admit, maxGuests, media: _unused, ...mediaOptions } = o;
+    void _unused;
+    const link = await this.createCallLink(media);
+    const call = await this.joinCallLink(link.url, media, mediaOptions);
+    const me = this.#creds.me?.lid ?? this.#creds.me?.id ?? "";
+    const room = new Room(
+      this,
+      { url: link.url, token: link.token, callId: call.callId, media, owner: me },
+      { ...admit !== void 0 && { admit }, ...maxGuests !== void 0 && { maxGuests } }
+    );
+    room.on("trace", (t) => this.logger.event(`room.${t.kind}`, t.data));
+    for (const k of ["request", "admitted", "denied", "joined", "left", "closed"])
+      room.on(k, (p) => this.logger.event(`room.${k}`, p));
+    await room.setApprovalRequired(true);
+    return room;
   }
   /** Who made a call link and whether joiners have to be let in. `link` is the token or the whole URL. */
   async queryCallLink(link, media = "audio") {
@@ -19215,9 +19616,16 @@ var Client = class {
     if (!own) throw new Error("no own LID yet; wait for the login to finish");
     ensureVoipWasm();
     const ack = await receiver.sendCallAndWait(
-      buildLinkJoin(token, media, receiver.nextId())
+      buildLinkJoin(
+        token,
+        media,
+        receiver.nextId(),
+        this.#isGuest ? this.#options.guest.guestName : void 0
+      )
     );
     const join6 = parseLinkJoinAck(ack, token);
+    if (this.#isGuest && join6.inWaitingRoom && this.#guestSession)
+      void guestPreFlightLog("guest_calling_waiting_room_entered", this.#guestSession, this.#config);
     const user = (j) => j.replace(/:\d+@/, "@");
     const session = new GroupSession(join6.callId, join6.creator, own);
     const state = {
@@ -19445,7 +19853,7 @@ var Client = class {
     if (state.direction !== "outgoing" || !summary.transaction_id) return;
     if (state.epochTx !== void 0 && state.epochTx >= summary.transaction_id) return;
     const { sender, receiver } = await this.#live();
-    const raw = new Uint8Array((0, import_node_crypto18.randomBytes)(32));
+    const raw = new Uint8Array((0, import_node_crypto20.randomBytes)(32));
     const recipients = summary.epoch_recipients.filter(
       (j) => state.members?.has(j.replace(/:\d+@/, "@"))
     );
@@ -19762,36 +20170,84 @@ var Client = class {
     this.#appState = void 0;
     this.#isOpen = false;
   }
+  /**
+   * One-time `guest_reg` HTTP call for guest mode; cached so a reconnect does not re-register.
+   * Brackets it with the same `pre_pn_client_log` beacons a real browser guest session sends, under
+   * one shared `access_session_id`/`expid` (see `newGuestSession()` in `guest.ts`) — not required for
+   * `guest_reg` or the login to work, done to match the real client's request pattern.
+   */
+  async #registerGuest() {
+    const session = this.#guestSession ??= newGuestSession();
+    const inviteCode = parseCallLinkToken(this.#options.guest.inviteCode);
+    void guestPreFlightLog("guest_calling_join_clicked", session, this.#config);
+    const r = await guestReg(this.#creds, this.#config, {
+      ...this.#options.guest,
+      inviteCode,
+      accessSessionId: session.accessSessionId,
+      fingerprint: session.fingerprint
+    });
+    this.logger.event("guest.registered", { status: r.status, inviteCode, lid: r.lid });
+    if (r.status !== 200) throw new Error(`guest_reg failed: HTTP ${r.status} ${r.body.slice(0, 300)}`);
+    this.#guestLid = r.lid;
+    if (r.lid) this.#creds.me = { id: r.lid, lid: r.lid };
+    this.#guestRegistered = true;
+    void guestPreFlightLog("guest_calling_join_success", session, this.#config);
+  }
   #start() {
+    if (this.#isGuest && !this.#guestRegistered) {
+      this.#events.emit("connection", { state: "connecting" });
+      void this.#registerGuest().then(() => this.#startConnection()).catch((error) => {
+        this.logger.event("guest.reg-failed", error);
+        this.#events.emit("close", { reason: "guest-registration-failed", willReconnect: false });
+        this.#events.emit("connection", {
+          state: "close",
+          reason: "guest-registration-failed",
+          willReconnect: false
+        });
+      });
+      return;
+    }
+    this.#startConnection();
+  }
+  #startConnection() {
     const paired = Boolean(this.#creds.me);
-    const payload = paired ? loginPayload(this.#creds, this.#config) : registrationPayload(this.#creds, this.#config);
+    const payload = this.#isGuest ? guestPayload(this.#creds, this.#config, this.#guestLid) : paired ? loginPayload(this.#creds, this.#config) : registrationPayload(this.#creds, this.#config);
     this.logger.event("client.start", {
-      mode: paired ? "login" : "register",
+      mode: this.#isGuest ? "guest" : paired ? "login" : "register",
       version: this.#config.version,
       me: this.#creds.me
     });
-    const conn = new Connection(this.logger, this.#creds, payload, {
-      onOpen: () => {
+    const conn = new Connection(
+      this.logger,
+      this.#creds,
+      payload,
+      {
+        onOpen: () => {
+        },
+        onNode: (node) => this.#handle(conn, node),
+        onClose: ({ code, reason }) => {
+          this.#teardown();
+          const willReconnect = !this.#stopped && (this.#options.autoReconnect ?? true) && Boolean(this.#creds.me) && reason !== "logged-out";
+          this.#events.emit("close", { ...code !== void 0 && { code }, reason, willReconnect });
+          this.#events.emit("connection", {
+            state: willReconnect ? "connecting" : "close",
+            reason,
+            ...code !== void 0 && { code },
+            willReconnect,
+            loggedOut: reason === "logged-out"
+          });
+          if (willReconnect) setTimeout(() => !this.#stopped && this.#start(), 1e3);
+          else this.logger.close("disconnect", { code, reason });
+        }
       },
-      onNode: (node) => this.#handle(conn, node),
-      onClose: ({ code, reason }) => {
-        this.#teardown();
-        const willReconnect = !this.#stopped && (this.#options.autoReconnect ?? true) && Boolean(this.#creds.me) && reason !== "logged-out";
-        this.#events.emit("close", { ...code !== void 0 && { code }, reason, willReconnect });
-        this.#events.emit("connection", {
-          state: willReconnect ? "connecting" : "close",
-          reason,
-          ...code !== void 0 && { code },
-          willReconnect,
-          loggedOut: reason === "logged-out"
-        });
-        if (willReconnect) setTimeout(() => !this.#stopped && this.#start(), 1e3);
-        else this.logger.close("disconnect", { code, reason });
-      }
-    });
+      void 0,
+      this.#isGuest ? this.#guestSession?.fingerprint.userAgent : void 0
+    );
     this.#conn = conn;
     this.#events.emit("connection", { state: "connecting" });
     conn.connect();
+    if (this.#isGuest) void loggedFetch(this.logger, "https://web.whatsapp.com/status.json").catch(() => {
+    });
   }
   #handle(conn, node) {
     if (this.#receiver?.handle(node)) return;
@@ -19990,7 +20446,7 @@ var Client = class {
       onCall: (node) => {
         const c = parseCall(node);
         if (c) this.#trackCall(c, node);
-        if (c) this.#events.emit("call", c);
+        if (c) this.#events.emit("call", { ...c, node });
       },
       onReceipt: (node) => {
         if (node.attrs["from"]) this.#events.emit("receipt", parseReceipt(node));
@@ -20094,7 +20550,7 @@ var Client = class {
         });
     }, 3e4);
     this.#isOpen = true;
-    this.#events.emit("open", { id: creds.me.id });
+    this.#events.emit("open", { id: creds.me?.id ?? "" });
     if (!creds.signedPreKeyAt || Date.now() - creds.signedPreKeyAt >= SIGNED_PRE_KEY_INTERVAL_MS)
       void this.rotateSignedPreKey().catch((e) => this.logger.event("prekey.rotate-failed", e));
     this.#events.emit("connection", { state: "open" });
@@ -20355,6 +20811,7 @@ var MemoryStore = class {
   ProtocolLogger,
   REPORT_FLOWS,
   ReportStore,
+  Room,
   SignalCipher,
   TypedEmitter,
   WAM_EVENTS,

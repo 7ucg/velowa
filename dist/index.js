@@ -16,6 +16,7 @@ import {
   ProtocolLogger,
   REPORT_FLOWS,
   ReportStore,
+  Room,
   SignalCipher,
   TypedEmitter,
   WAM_EVENTS,
@@ -60,7 +61,7 @@ import {
   urlButton,
   vcardFor,
   writeWav
-} from "./chunk-W7GACTSU.js";
+} from "./chunk-VWRHMEG2.js";
 import {
   compressSession,
   listSessions,
@@ -336,6 +337,7 @@ export {
   ProtocolLogger,
   REPORT_FLOWS,
   ReportStore,
+  Room,
   SignalCipher,
   TypedEmitter,
   WAM_EVENTS,

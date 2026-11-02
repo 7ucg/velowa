@@ -20,7 +20,15 @@ import { TypedEmitter } from '../events/emitter.js'
 import { ProtocolLogger } from '../logging/protocol-logger.js'
 import { Connection, loggedFetch } from './connection.js'
 import {
+	guestPreFlightLog,
+	guestReg,
+	newGuestSession,
+	type GuestRegOptions,
+	type GuestSession,
+} from './guest.js'
+import {
 	DEFAULT_CONFIG,
+	guestPayload,
 	handlePairSuccess,
 	loginPayload,
 	qrString,
@@ -143,6 +151,18 @@ export interface ClientOptions {
 	config?: Partial<ClientConfig>
 	/** Link with a pairing code instead of a QR: the phone number (digits, with country code) of the account. */
 	pairWithPhoneNumber?: string
+	/**
+	 * Join one call link as a call-link guest instead of a WhatsApp account: no QR, no phone pairing.
+	 * The client registers a throwaway identity for `inviteCode` (a bare token or a full
+	 * `https://call.whatsapp.com/...` URL, same as `joinCallLink`) via `guest_reg` (see `guest.ts`)
+	 * before its first connection, then logs in with that identity (`ClientPayload.accountType = GUEST`,
+	 * `username` the lid `guest_reg` returned) — the same steps a browser does when a call link is
+	 * opened while logged out. Once `ready()` resolves, `me`/`me.lid` is that assigned lid and
+	 * `joinCallLink()` (relay, roster, media — audioFile/videoFile/localAudio included — and
+	 * `endCall()`) works exactly as it does for a paired account joining its own room; see "Joining as
+	 * a guest" in the README. `authDir`/`autoRecover` and chat/message/group features do not apply.
+	 */
+	guest?: GuestRegOptions
 	/** Reconnect automatically after a drop (default true). */
 	autoReconnect?: boolean
 	/**
@@ -266,16 +286,22 @@ export class Client {
 	#appState: AppStateSync | undefined
 	#pairing: { phone: string; code: string } | undefined
 	#ready: Promise<void> = Promise.resolve()
+	readonly #isGuest: boolean
+	#guestRegistered = false
+	#guestLid: string | undefined
+	#guestSession: GuestSession | undefined
 
 	constructor(options: ClientOptions = {}) {
 		this.#options = options
+		this.#isGuest = Boolean(options.guest)
 		const dir = options.authDir ?? 'auth'
 		this.#credsPath = join(dir, 'creds.json')
 		this.#signalDir = join(dir, 'signal')
 		this.#autoRecover = options.autoRecover !== false
 		this.#tcTokens = new TcTokens(join(dir, 'signal', 'tctokens.json'))
 		this.logger = options.logger ?? new ProtocolLogger({ label: 'client' })
-		this.#creds = loadAuthCreds(this.#credsPath) ?? initAuthCreds()
+		// A guest identity is throwaway and scoped to one call link: never reuse a saved one.
+		this.#creds = this.#isGuest ? initAuthCreds() : loadAuthCreds(this.#credsPath) ?? initAuthCreds()
 		saveAuthCreds(this.#credsPath, this.#creds)
 		this.#config = { ...DEFAULT_CONFIG, ...options.config }
 		if (options.antiban) this.antiban = new AntiBan(options.antiban === true ? {} : options.antiban)
@@ -311,8 +337,20 @@ export class Client {
 
 	async #live(): Promise<{ sender: Sender; receiver: Receiver; meId: string }> {
 		await this.#ready
-		if (!this.#sender || !this.#receiver || !this.#creds.me) throw new Error('not connected')
-		return { sender: this.#sender, receiver: this.#receiver, meId: this.#creds.me.id }
+		if (!this.#sender || !this.#receiver) throw new Error('not connected')
+		// `me` never gets set for a guest: there is no account, just an identity scoped to one call.
+		if (!this.#isGuest && !this.#creds.me) throw new Error('not connected')
+		return { sender: this.#sender, receiver: this.#receiver, meId: this.#creds.me?.id ?? '' }
+	}
+
+	/** Next id for a stanza built by hand (`request`/`sendCallAndWait`), e.g. `callSig.buildLinkJoin`. */
+	async nextId(): Promise<string> {
+		return (await this.#live()).receiver.nextId()
+	}
+
+	/** Send a `<call>` stanza and wait for the server's matching `<ack class="call">` (20 s timeout by default). */
+	async sendCallAndWait(node: BinaryNode, timeoutMs?: number): Promise<BinaryNode> {
+		return (await this.#live()).receiver.sendCallAndWait(node, timeoutMs)
 	}
 
 	/** Send text, optionally as a reply (`quoted`) and/or with @mentions. Returns the message id. */
@@ -1827,9 +1865,16 @@ export class Client {
 		if (!own) throw new Error('no own LID yet; wait for the login to finish')
 		ensureVoipWasm()
 		const ack = await receiver.sendCallAndWait(
-			callSig.buildLinkJoin(token, media, receiver.nextId()),
+			callSig.buildLinkJoin(
+				token,
+				media,
+				receiver.nextId(),
+				this.#isGuest ? this.#options.guest!.guestName : undefined,
+			),
 		)
 		const join = callSig.parseLinkJoinAck(ack, token)
+		if (this.#isGuest && join.inWaitingRoom && this.#guestSession)
+			void guestPreFlightLog('guest_calling_waiting_room_entered', this.#guestSession, this.#config)
 		const user = (j: string) => j.replace(/:\d+@/, '@')
 		const session = new GroupSession(join.callId, join.creator, own)
 		const state: callSig.CallState = {
@@ -2480,41 +2525,96 @@ export class Client {
 		this.#isOpen = false
 	}
 
+	/**
+	 * One-time `guest_reg` HTTP call for guest mode; cached so a reconnect does not re-register.
+	 * Brackets it with the same `pre_pn_client_log` beacons a real browser guest session sends, under
+	 * one shared `access_session_id`/`expid` (see `newGuestSession()` in `guest.ts`) — not required for
+	 * `guest_reg` or the login to work, done to match the real client's request pattern.
+	 */
+	async #registerGuest(): Promise<void> {
+		const session = (this.#guestSession ??= newGuestSession())
+		// Accept either a bare token or a full call-link URL, same as joinCallLink().
+		const inviteCode = callSig.parseCallLinkToken(this.#options.guest!.inviteCode)
+		void guestPreFlightLog('guest_calling_join_clicked', session, this.#config)
+		const r = await guestReg(this.#creds, this.#config, {
+			...this.#options.guest!,
+			inviteCode,
+			accessSessionId: session.accessSessionId,
+			fingerprint: session.fingerprint,
+		})
+		this.logger.event('guest.registered', { status: r.status, inviteCode, lid: r.lid })
+		if (r.status !== 200) throw new Error(`guest_reg failed: HTTP ${r.status} ${r.body.slice(0, 300)}`)
+		this.#guestLid = r.lid
+		if (r.lid) this.#creds.me = { id: r.lid, lid: r.lid }
+		this.#guestRegistered = true
+		void guestPreFlightLog('guest_calling_join_success', session, this.#config)
+	}
+
 	#start(): void {
+		if (this.#isGuest && !this.#guestRegistered) {
+			this.#events.emit('connection', { state: 'connecting' })
+			void this.#registerGuest()
+				.then(() => this.#startConnection())
+				.catch((error) => {
+					this.logger.event('guest.reg-failed', error)
+					this.#events.emit('close', { reason: 'guest-registration-failed', willReconnect: false })
+					this.#events.emit('connection', {
+						state: 'close',
+						reason: 'guest-registration-failed',
+						willReconnect: false,
+					})
+				})
+			return
+		}
+		this.#startConnection()
+	}
+
+	#startConnection(): void {
 		const paired = Boolean(this.#creds.me)
-		const payload = paired
-			? loginPayload(this.#creds, this.#config)
-			: registrationPayload(this.#creds, this.#config)
+		const payload = this.#isGuest
+			? guestPayload(this.#creds, this.#config, this.#guestLid)
+			: paired
+				? loginPayload(this.#creds, this.#config)
+				: registrationPayload(this.#creds, this.#config)
 		this.logger.event('client.start', {
-			mode: paired ? 'login' : 'register',
+			mode: this.#isGuest ? 'guest' : paired ? 'login' : 'register',
 			version: this.#config.version,
 			me: this.#creds.me,
 		})
-		const conn: Connection = new Connection(this.logger, this.#creds, payload, {
-			onOpen: () => {},
-			onNode: (node) => this.#handle(conn, node),
-			onClose: ({ code, reason }) => {
-				this.#teardown()
-				const willReconnect =
-					!this.#stopped &&
-					(this.#options.autoReconnect ?? true) &&
-					Boolean(this.#creds.me) &&
-					reason !== 'logged-out'
-				this.#events.emit('close', { ...(code !== undefined && { code }), reason, willReconnect })
-				this.#events.emit('connection', {
-					state: willReconnect ? 'connecting' : 'close',
-					reason,
-					...(code !== undefined && { code }),
-					willReconnect,
-					loggedOut: reason === 'logged-out',
-				})
-				if (willReconnect) setTimeout(() => !this.#stopped && this.#start(), 1000)
-				else this.logger.close('disconnect', { code, reason })
+		const conn: Connection = new Connection(
+			this.logger,
+			this.#creds,
+			payload,
+			{
+				onOpen: () => {},
+				onNode: (node) => this.#handle(conn, node),
+				onClose: ({ code, reason }) => {
+					this.#teardown()
+					const willReconnect =
+						!this.#stopped &&
+						(this.#options.autoReconnect ?? true) &&
+						Boolean(this.#creds.me) &&
+						reason !== 'logged-out'
+					this.#events.emit('close', { ...(code !== undefined && { code }), reason, willReconnect })
+					this.#events.emit('connection', {
+						state: willReconnect ? 'connecting' : 'close',
+						reason,
+						...(code !== undefined && { code }),
+						willReconnect,
+						loggedOut: reason === 'logged-out',
+					})
+					if (willReconnect) setTimeout(() => !this.#stopped && this.#start(), 1000)
+					else this.logger.close('disconnect', { code, reason })
+				},
 			},
-		})
+			undefined,
+			this.#isGuest ? this.#guestSession?.fingerprint.userAgent : undefined,
+		)
 		this.#conn = conn
 		this.#events.emit('connection', { state: 'connecting' })
 		conn.connect()
+		// The real guest page fetches this (a plain health check, no params) right as its WS opens.
+		if (this.#isGuest) void loggedFetch(this.logger, 'https://web.whatsapp.com/status.json').catch(() => {})
 	}
 
 	#handle(conn: Connection, node: BinaryNode): void {
@@ -2856,7 +2956,7 @@ export class Client {
 				})
 		}, 30_000)
 		this.#isOpen = true
-		this.#events.emit('open', { id: creds.me!.id })
+		this.#events.emit('open', { id: creds.me?.id ?? '' })
 		// A key of unknown age (a creds file from before the timestamp existed) counts as due.
 		if (!creds.signedPreKeyAt || Date.now() - creds.signedPreKeyAt >= SIGNED_PRE_KEY_INTERVAL_MS)
 			void this.rotateSignedPreKey().catch((e) => this.logger.event('prekey.rotate-failed', e))

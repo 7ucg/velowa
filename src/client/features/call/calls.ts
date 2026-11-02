@@ -508,12 +508,22 @@ export const buildWaitingRoomAdmit = (
 		{ tag: 'user', attrs: { jid: user } },
 	])
 
-/** Join a call link: audio (and video) announcement, network, capability. */
-export const buildLinkJoin = (token: string, media: CallLinkMedia, id: string): BinaryNode => {
+/**
+ * Join a call link: audio (and video) announcement, network, capability. `pushName` is the display
+ * name shown to the other participants — required for a call-link guest (it has no WhatsApp profile
+ * name to fall back on and ends up unnamed in the roster without it); an already-paired device
+ * re-joining its own link can omit it, the server already has its profile name.
+ */
+export const buildLinkJoin = (
+	token: string,
+	media: CallLinkMedia,
+	id: string,
+	pushName?: string,
+): BinaryNode => {
 	if (!TOKEN.test(token)) throw new Error('invalid call-link token')
 	return service(id, {
 		tag: 'link_join',
-		attrs: { token, media },
+		attrs: { token, media, ...(pushName && { push_name: pushName }) },
 		content: [
 			audio('16000'),
 			...(media === 'video'

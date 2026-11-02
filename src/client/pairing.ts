@@ -89,6 +89,32 @@ export function registrationPayload(creds: AuthCreds, config: ClientConfig): Uin
 	})
 }
 
+/**
+ * ClientPayload for a call-link guest: an ephemeral identity already registered with the server
+ * via `guestReg()` (see `guest.ts`), not paired to any phone. No `devicePairingData` (the identity
+ * bundle went out over HTTP already) — just the `accountType`/`product` pair a real browser guest
+ * session sends, confirmed from its own bundle source (see WA_CALL_LINKS.md §15 in whatsapp-docs).
+ *
+ * `lid` is the numeric id `guestReg()`'s response returned (its `lid` field, without `@lid`) — set
+ * as `username` the same way `loginPayload` sets it from `creds.me.id`. This is NOT source-confirmed
+ * like the rest of this payload: the dumped builder literal only showed `product`/`accountType`, not
+ * a complete object, and a guest connection without `username` set got its WebSocket silently closed
+ * (code 1006) right after the handshake in live testing — setting it from `guestReg()`'s own response
+ * is the fix that was tried, not something read out of the client's source.
+ */
+export function guestPayload(creds: AuthCreds, config: ClientConfig, lid?: string): Uint8Array {
+	void creds // the identity is proven by the Noise static key, not by anything in this payload
+	const username = lid?.split('@')[0]
+	return encode('ClientPayload', {
+		...basePayload(config),
+		passive: false,
+		pull: false,
+		product: 'WHATSAPP_LID',
+		accountType: 'GUEST',
+		...(username && { username: Number(username) }),
+	})
+}
+
 /** ClientPayload for an already-paired device (`me.id` like "4915…:12@s.whatsapp.net"). */
 export function loginPayload(creds: AuthCreds, config: ClientConfig): Uint8Array {
 	if (!creds.me) throw new Error('loginPayload needs a paired device')

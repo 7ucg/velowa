@@ -667,6 +667,30 @@ Raw media is also possible: `audioIn` (16 kHz mono PCM), `videoFrames` (H.264 ac
 PulseAudio or PipeWire (`parec`, `pacat`). Events of a call arrive as `call` events (`offer`, `accept`, `terminate`,
 `group_update`, `video`, `user_action`, …).
 
+**Joining as a guest** (no WhatsApp account, no pairing — one call link, one throwaway identity):
+
+```ts
+import { Client } from 'velowa'
+
+const guest = new Client({
+  guest: { inviteCode: link.url, guestName: 'Baron' }, // the token, or the whole https://call.whatsapp.com/... URL
+})
+await guest.connect()
+await guest.ready() // registers (guest_reg) then logs in; guest.me is the server-assigned lid once this resolves
+
+const call = await guest.joinCallLink(link.url, 'video', { audioFile: 'hello.mp3' }) // or localAudio, videoFile, ...
+// waits in the host's waiting room if one is on (call.waiting === true until a group_update admits it)
+
+await guest.endCall(call.callId) // leaves properly (the host sees it go, not just drop)
+```
+
+That's the whole guest API: `authDir`, chats, groups, channels and messaging do not apply (a guest is not an
+account) — everything else (`joinCallLink`'s media options, the `call` event, `enableCamera`/`raiseHand`/
+`sendReaction` during the call) works exactly as it does for a paired account joining its own room. A fresh,
+unused `Client` is a fresh guest identity every time: nothing is reused or persisted across runs by design.
+`guest_reg` may be gated behind an anti-automation check on repeated/high-volume registration (not handled here;
+this is for real interactive use, not for running many guests at once).
+
 ### Chats and app state
 
 Changes that sync to every device the account has (the phone shows them too):

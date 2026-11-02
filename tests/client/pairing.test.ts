@@ -6,6 +6,7 @@ import { initAuthCreds } from '../../src/auth/creds.js'
 import { newIdentityKeyPair, xeddsaSign } from '../../src/crypto/signal.js'
 import {
 	DEFAULT_CONFIG,
+	guestPayload,
 	handlePairSuccess,
 	loginPayload,
 	qrString,
@@ -40,6 +41,19 @@ describe('client payloads', () => {
 		expect(Number(d.username)).toBe(4915112345678)
 		expect(d.device).toBe(12)
 		expect(d.passive).toBe(true)
+	})
+
+	it('encodes a guest payload with accountType=GUEST, product=WHATSAPP_LID, no pairing data', () => {
+		const creds = initAuthCreds()
+		const decoded = T('ClientPayload').toObject(
+			T('ClientPayload').decode(guestPayload(creds, DEFAULT_CONFIG)),
+			{ enums: String, defaults: false },
+		) as any
+		expect(decoded.accountType).toBe('GUEST')
+		expect(decoded.product).toBe('WHATSAPP_LID')
+		expect(decoded.devicePairingData).toBeUndefined()
+		expect(decoded.username).toBeUndefined()
+		expect(decoded.device).toBeUndefined()
 	})
 
 	it('builds the QR string as ref,noise,identity,adv', () => {

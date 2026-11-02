@@ -809,12 +809,43 @@ interface LocalAudioOptions {
     speaker?: boolean | string;
 }
 
+/**
+ * A `User-Agent` string plus the `os_name`/`os_version`/`browser`/`browser_version` fields `guest_reg`
+ * takes separately (see `guest.ts`) — the four always describe the same browser, so they are generated
+ * together, never independently.
+ */
+interface BrowserFingerprint {
+    osName: string;
+    osVersion: string;
+    browser: string;
+    browserVersion: string;
+    userAgent: string;
+}
+
 interface ClientConfig {
     /** WhatsApp Web client revision, e.g. [2, 3000, 1050701434]. */
     version: [number, number, number];
     /** [os, device-type] shown under "Linked devices". */
     browser: [string, string];
     countryCode: string;
+}
+
+interface GuestRegOptions {
+    /** The call-link token (just the token; resolve a full URL with `parseCallLinkToken` first). */
+    inviteCode: string;
+    /** Display name shown to the other call participants; copied into the roster at admission. */
+    guestName: string;
+    /** UI locale as two codes, both the same case the real client sends. Default `['DE', 'DE']` (unconfirmed semantics — see guest.ts doc comment). */
+    locale?: [lc: string, lg: string];
+    /** Reuse an existing session's `accessSessionId` (from `newGuestSession()`) instead of generating a fresh one — the real client sends `guest_reg` and its `pre_pn_client_log` beacons (`guestPreFlightLog()`) under the same id. */
+    accessSessionId?: string;
+    /** The `os_name`/`os_version`/`browser`/`browser_version` to send and the `User-Agent` to send them
+     * under — one random, internally consistent pick from `randomFingerprint()` (`fingerprint.ts`) by
+     * default. Pass one explicitly to also use it for the WS connection's own `User-Agent` (see
+     * `newGuestSession()` below and `Client`'s guest mode, which does exactly that). */
+    fingerprint?: BrowserFingerprint;
+    /** Replaced in tests. */
+    fetch?: typeof fetch;
 }
 
 /** What the limiter does when a send would break a limit it cannot wait out. */
@@ -1021,9 +1052,33 @@ interface CallEvent {
         version?: number;
         id?: number;
     };
+    /**
+     * A "silent" group call (a voice chat that someone opened in a group, `lightweight="1"`): it does not ring.
+     * \`silence\` is the reason the app gives, for example \`vc_wave_all\` (the opener waves at everyone).
+     */
+    lightweight?: boolean;
+    silence?: string;
+    /** The caller's phone number, when the stanza names it (silent calls do). */
+    callerPn?: string;
     /** The group a call was placed in (`group-jid`). */
     group?: string;
     timestamp?: number;
+    /** `<waiting_room_update>` of a call link we run: who is waiting (or has just left the waiting room). */
+    waitingRoom?: {
+        jid: string;
+        name?: string;
+        guest: boolean;
+        state: string;
+    }[];
+    /** `<group_update>` of a call: everyone the roster names and whether they are `connected` or `terminated`. */
+    roster?: {
+        jid: string;
+        name?: string;
+        guest: boolean;
+        state: string;
+    }[];
+    /** The stanza as received, for everything the fields above do not cover (waiting room lists, rosters, ...). */
+    node?: BinaryNode;
 }
 
 /**
@@ -1556,6 +1611,83 @@ declare class ServerInfo {
     setPassive: (passive: boolean) => Promise<void>;
 }
 
+interface RoomPerson {
+    jid: string;
+    /** The name they typed (guests) or their push name. */
+    name?: string;
+    /** True for someone without a WhatsApp account. */
+    guest: boolean;
+}
+/**
+ * Who gets in: `'all'` everybody, `'guests'` only people without an account, `'none'` nobody automatically (you
+ * call `admit` yourself), or a function that decides per request.
+ */
+type RoomAdmit = 'all' | 'guests' | 'none' | ((p: RoomPerson) => boolean | Promise<boolean>);
+interface RoomOptions {
+    /** `'video'` (default) rooms also take cameras; `'audio'` rooms are voice only. */
+    media?: 'audio' | 'video';
+    /** Default `'all'`. */
+    admit?: RoomAdmit;
+    /** Stop letting people in once this many are inside (the owner not counted). Default no limit. */
+    maxGuests?: number;
+}
+type RoomEvents = {
+    /** Someone asked to join. */
+    request: RoomPerson;
+    /** Someone was let in (by the rule or by `admit`). */
+    admitted: RoomPerson;
+    /** Someone was turned away. */
+    denied: RoomPerson;
+    /** Someone is in the call (connected). */
+    joined: RoomPerson;
+    /** Someone left the call. */
+    left: RoomPerson;
+    /** The room was closed. */
+    closed: {
+        reason: string;
+    };
+    /** Everything the room saw, as it came: for logging. */
+    trace: {
+        kind: string;
+        data: unknown;
+    };
+};
+/** What a room needs from the client. */
+interface RoomHost {
+    on(event: 'call', listener: (e: CallEvent) => void): () => void;
+    setApprovalRequired(callId: string, enabled: boolean): Promise<void>;
+    answerWaitingRoom(callId: string, user: string, admit?: boolean): Promise<void>;
+    endCall(callId: string): Promise<void>;
+}
+declare class Room extends TypedEmitter<RoomEvents> {
+    #private;
+    /** The link to hand out. */
+    readonly url: string;
+    readonly token: string;
+    readonly callId: string;
+    readonly media: 'audio' | 'video';
+    constructor(host: RoomHost, info: {
+        url: string;
+        token: string;
+        callId: string;
+        media: 'audio' | 'video';
+        owner: string;
+    }, o?: RoomOptions);
+    /** People waiting to be let in. */
+    get waiting(): RoomPerson[];
+    /** People in the call now (the owner not included). */
+    get inside(): RoomPerson[];
+    get closed(): boolean;
+    /** Let a waiting person in. */
+    admit(jid: string): Promise<void>;
+    /** Turn a waiting person away. */
+    deny(jid: string): Promise<void>;
+    /** Ask for approval (the default) or let everybody straight in. */
+    setApprovalRequired(on: boolean): Promise<void>;
+    /** End the call for everybody and stop watching. */
+    close(reason?: string): Promise<void>;
+}
+
 interface ProductInput {
     name?: string;
     description?: string;
@@ -1948,6 +2080,8 @@ interface CallState {
     direction: 'outgoing' | 'incoming';
     video: boolean;
     group?: string;
+    /** A silent group call (voice chat invitation, `lightweight="1"`): a notification that cannot be answered. */
+    lightweight?: boolean;
     /** Devices the call rang on / came from; terminate goes to each. */
     devices: string[];
     status: 'calling' | 'ringing' | 'connected' | 'ended';
@@ -2274,6 +2408,18 @@ interface ClientOptions {
     config?: Partial<ClientConfig>;
     /** Link with a pairing code instead of a QR: the phone number (digits, with country code) of the account. */
     pairWithPhoneNumber?: string;
+    /**
+     * Join one call link as a call-link guest instead of a WhatsApp account: no QR, no phone pairing.
+     * The client registers a throwaway identity for `inviteCode` (a bare token or a full
+     * `https://call.whatsapp.com/...` URL, same as `joinCallLink`) via `guest_reg` (see `guest.ts`)
+     * before its first connection, then logs in with that identity (`ClientPayload.accountType = GUEST`,
+     * `username` the lid `guest_reg` returned) — the same steps a browser does when a call link is
+     * opened while logged out. Once `ready()` resolves, `me`/`me.lid` is that assigned lid and
+     * `joinCallLink()` (relay, roster, media — audioFile/videoFile/localAudio included — and
+     * `endCall()`) works exactly as it does for a paired account joining its own room; see "Joining as
+     * a guest" in the README. `authDir`/`autoRecover` and chat/message/group features do not apply.
+     */
+    guest?: GuestRegOptions;
     /** Reconnect automatically after a drop (default true). */
     autoReconnect?: boolean;
     /**
@@ -2385,6 +2531,10 @@ declare class Client {
     connect(): Promise<void>;
     /** Resolves once logged in and ready. */
     ready(): Promise<void>;
+    /** Next id for a stanza built by hand (`request`/`sendCallAndWait`), e.g. `callSig.buildLinkJoin`. */
+    nextId(): Promise<string>;
+    /** Send a `<call>` stanza and wait for the server's matching `<ack class="call">` (20 s timeout by default). */
+    sendCallAndWait(node: BinaryNode, timeoutMs?: number): Promise<BinaryNode>;
     /** Send text, optionally as a reply (`quoted`) and/or with @mentions. Returns the message id. */
     sendText(to: string, text: string, opts?: TextOptions): Promise<string>;
     /** Forward a received message (its WAProto content) to another chat. */
@@ -2676,6 +2826,12 @@ declare class Client {
     } & CallFileOptions): Promise<CallState>;
     /** Create a call link (a "room") that others can join: `https://call.whatsapp.com/{voice|video}/{token}`. */
     createCallLink(media?: CallLinkMedia): Promise<CallLink>;
+    /**
+     * Open a room: create a call link, join it as its owner and let people in by a rule (`admit`: everybody, only
+     * guests without a WhatsApp account, nobody automatically, or your own function). People open the link in a browser.
+     * The returned room tells you who asks, who is let in, who is inside and who leaves (see \`RoomEvents\`).
+     */
+    createRoom(o?: RoomOptions & GroupMediaOptions & CallFileOptions): Promise<Room>;
     /** Who made a call link and whether joiners have to be let in. `link` is the token or the whole URL. */
     queryCallLink(link: string, media?: CallLinkMedia): Promise<CallLinkPreview>;
     /**
@@ -2987,4 +3143,4 @@ declare class MemoryStore {
     }[];
 }
 
-export { ANTIBAN_DEFAULTS, type AbProps, AntiBan, type AntiBanConfig, AntiBanError, AppStateCollection, type AppStateKeyLookup, type AppStateMac, type AppStateMutation, type AppStateResult, type AuthStore, type BinaryNode, type BotDirectory, type BotEntry, type BotSection, type BroadcastQuota, type ButtonReply, type ButtonsOptions, type CallFileOptions, Client, type ClientEvents, type ClientOptions, type ConnectionUpdate, type DecryptedMessage, type EncryptedMessage, type EventOptions, type EventResponseType, FrameDecoder, GroupCache, type GroupInfo, type InteractiveOptions, type LinkPreview, type LinkPreviewOptions, type ListOptions, type ListSection, type Listener, type LocalAudioOptions, type MediaFileOptions, type MediaRetryResult, type MediaSource, MemoryAuthStore, MemorySignalStorage, MemoryStore, type Message, type MessageContent, type MessageKey, type NativeButton, NoiseTransport, NoiseXxHandshake, type PaymentRequestInput, type PreKeyBundleInput, type ProductInput, ProtocolLogger, type ProtocolLoggerOptions, type Quoted, type QuotedMessage, REPORT_FLOWS, type ReportOptions, ReportStore, type ReportedMessage, type RetentionOptions, type RichResponseOptions, type SendContentOptions, type SessionInfo, SignalCipher, type SignalStorage, type StickerInput, type TemplateOptions, type TextOptions, TypedEmitter, type Unsubscribe, type VideoFileOptions, WAM_EVENTS, WAM_GLOBALS, type WamEvent, type WamValue, areJidsSameUser, buildReport, callButton, compressSession, connHeader, copyButton, createSignalCipher, decodeAudioFile, decodeNode, decodeVideoFile, encodeFrame, encodeNode, encodeWam, fetchLinkPreview, findUrl, getContentType, isGroupAdmin, isJidBroadcast, isJidGroup, isJidNewsletter, isJidStatusBroadcast, isJidUser, isLidUser, isMe, jidDecode, jidEncode, jidNormalizedUser, linkPreviewMessage, listSessions, messageText, migrateFlatSessions, newAppStateCollection, newIdentityKeyPair, newPreKeys, newSignedPreKey, normalizeMessageContent, parseButtonReply, pollOptionHash, pruneSessions, quickReply, restoreAppStateCollection, richResponse, serialize, singleSelect, splitAnnexB, startXxHandshake, tokenizeCode, urlButton, vcardFor, writeWav };
+export { ANTIBAN_DEFAULTS, type AbProps, AntiBan, type AntiBanConfig, AntiBanError, AppStateCollection, type AppStateKeyLookup, type AppStateMac, type AppStateMutation, type AppStateResult, type AuthStore, type BinaryNode, type BotDirectory, type BotEntry, type BotSection, type BroadcastQuota, type ButtonReply, type ButtonsOptions, type CallFileOptions, Client, type ClientEvents, type ClientOptions, type ConnectionUpdate, type DecryptedMessage, type EncryptedMessage, type EventOptions, type EventResponseType, FrameDecoder, GroupCache, type GroupInfo, type InteractiveOptions, type LinkPreview, type LinkPreviewOptions, type ListOptions, type ListSection, type Listener, type LocalAudioOptions, type MediaFileOptions, type MediaRetryResult, type MediaSource, MemoryAuthStore, MemorySignalStorage, MemoryStore, type Message, type MessageContent, type MessageKey, type NativeButton, NoiseTransport, NoiseXxHandshake, type PaymentRequestInput, type PreKeyBundleInput, type ProductInput, ProtocolLogger, type ProtocolLoggerOptions, type Quoted, type QuotedMessage, REPORT_FLOWS, type ReportOptions, ReportStore, type ReportedMessage, type RetentionOptions, type RichResponseOptions, Room, type RoomAdmit, type RoomEvents, type RoomOptions, type RoomPerson, type SendContentOptions, type SessionInfo, SignalCipher, type SignalStorage, type StickerInput, type TemplateOptions, type TextOptions, TypedEmitter, type Unsubscribe, type VideoFileOptions, WAM_EVENTS, WAM_GLOBALS, type WamEvent, type WamValue, areJidsSameUser, buildReport, callButton, compressSession, connHeader, copyButton, createSignalCipher, decodeAudioFile, decodeNode, decodeVideoFile, encodeFrame, encodeNode, encodeWam, fetchLinkPreview, findUrl, getContentType, isGroupAdmin, isJidBroadcast, isJidGroup, isJidNewsletter, isJidStatusBroadcast, isJidUser, isLidUser, isMe, jidDecode, jidEncode, jidNormalizedUser, linkPreviewMessage, listSessions, messageText, migrateFlatSessions, newAppStateCollection, newIdentityKeyPair, newPreKeys, newSignedPreKey, normalizeMessageContent, parseButtonReply, pollOptionHash, pruneSessions, quickReply, restoreAppStateCollection, richResponse, serialize, singleSelect, splitAnnexB, startXxHandshake, tokenizeCode, urlButton, vcardFor, writeWav };

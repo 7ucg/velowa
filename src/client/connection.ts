@@ -71,6 +71,8 @@ export class Connection {
 		private readonly clientPayload: Uint8Array,
 		private readonly events: ConnectionEvents,
 		private readonly url = WA_WS_URL,
+		/** Overrides the default `User-Agent` — guest mode sends the same one its `guest_reg` call used. */
+		private readonly userAgent = USER_AGENT,
 	) {
 		ensureWasm()
 		this.#decoder = new FrameDecoder()
@@ -81,7 +83,7 @@ export class Connection {
 	}
 
 	connect(): void {
-		const headers = { Origin: WA_ORIGIN, 'User-Agent': USER_AGENT }
+		const headers = { Origin: WA_ORIGIN, 'User-Agent': this.userAgent }
 		this.logger.event('ws.connect', { url: this.url, headers })
 		const ws = new WebSocket(this.url, { headers, handshakeTimeout: 20_000 })
 		this.#ws = ws
