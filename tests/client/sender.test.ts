@@ -147,6 +147,20 @@ describe('Sender: groups', () => {
 		}
 		void creds
 	})
+
+	it('distributes the sender key again after the device was linked again (new device number)', async () => {
+		const { sender, stanzas, bob0, creds } = await world()
+		const group = '120363000000000001@g.us'
+		await sender.sendText(group, 'first')
+		await sender.sendText(group, 'second')
+		expect(kids(stanzas[1]!, 'participants')).toHaveLength(0) // same key, nobody new: skmsg only
+
+		// the account is linked again and gets a new device number: its sender key is a new one
+		creds.me = { id: '4915600000000:30@s.whatsapp.net', lid: '111111111111:30@lid' }
+		await sender.sendText(group, 'third')
+		const parts = kids(kids(stanzas[2]!, 'participants')[0] ?? { tag: 'x', attrs: {} }, 'to')
+		expect(parts.map((p) => p.attrs['jid'])).toContain(bob0.jid)
+	})
 })
 
 describe('Sender: channel polls and rich posts', () => {

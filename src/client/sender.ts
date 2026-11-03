@@ -112,6 +112,7 @@ export class Sender {
 	readonly #lidAlias = new Map<string, string>()
 	/** Resends done per message+device (we do not trust the count in the receipt). */
 	readonly #resends = new Map<string, number>()
+	/** `group|senderKeyId` -> the devices that already got that sender key (keyed by the key's owner: see #groupStanza). */
 	readonly #memory: Record<string, string[]>
 
 	constructor(private readonly d: SenderDeps) {
@@ -631,7 +632,10 @@ export class Sender {
 			padRandomMax16(encodeProto('Message', message)),
 		)
 
-		const known = new Set(this.#memory[group] ?? [])
+		// "Who already has our key" belongs to this sender key, not just to the group: after the device was linked again
+		// (a new device number) the key is a new one and every device needs it, whatever an older entry says.
+		const memoryKey = `${group}|${senderKeyId}`
+		const known = new Set(this.#memory[memoryKey] ?? [])
 		const fresh = devices.filter((d) => !known.has(d.jid))
 		const nodes: BinaryNode[] = []
 		let needsIdentity = false
@@ -662,7 +666,9 @@ export class Sender {
 				})
 				known.add(t.jid)
 			}
-			this.#memory[group] = [...known]
+			for (const k of Object.keys(this.#memory))
+				if (k === group || (k.startsWith(`${group}|`) && k !== memoryKey)) delete this.#memory[k] // entries of older keys
+			this.#memory[memoryKey] = [...known]
 			this.#saveMemory()
 		}
 		const content: BinaryNode[] = [

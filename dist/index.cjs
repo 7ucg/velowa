@@ -6055,6 +6055,7 @@ var Sender = class {
   #lidAlias = /* @__PURE__ */ new Map();
   /** Resends done per message+device (we do not trust the count in the receipt). */
   #resends = /* @__PURE__ */ new Map();
+  /** `group|senderKeyId` -> the devices that already got that sender key (keyed by the key's owner: see #groupStanza). */
   #memory;
   /** Send plain text to a user or group JID. Returns the message id. */
   async sendText(to, text4) {
@@ -6487,7 +6488,8 @@ var Sender = class {
       senderKeyId,
       padRandomMax16(encodeProto("Message", message))
     );
-    const known = new Set(this.#memory[group] ?? []);
+    const memoryKey = `${group}|${senderKeyId}`;
+    const known = new Set(this.#memory[memoryKey] ?? []);
     const fresh = devices.filter((d) => !known.has(d.jid));
     const nodes = [];
     let needsIdentity = false;
@@ -6518,7 +6520,9 @@ var Sender = class {
         });
         known.add(t.jid);
       }
-      this.#memory[group] = [...known];
+      for (const k of Object.keys(this.#memory))
+        if (k === group || k.startsWith(`${group}|`) && k !== memoryKey) delete this.#memory[k];
+      this.#memory[memoryKey] = [...known];
       this.#saveMemory();
     }
     const content = [

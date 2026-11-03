@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Fixed: after the account was linked again (a new device number), messages to groups showed "Waiting for this message" on every device. The memory of who already has our sender key was kept per group only, so the new key was never distributed. It is now kept per sender key (`group|senderKeyId`); old entries are dropped and the key goes out to all devices at the next send.
 - Fixed: the answer to a native-flow message (`sendInteractive` with `quickReply`, `singleSelect`, ...) and to a template button left `Message.text` empty. `messageText()` now returns the id of the tapped button or row for `interactiveResponseMessage` and `templateButtonReplyMessage`, as it already did for `buttonsResponseMessage` and `listResponseMessage`.
 
 ## 1.2.0 - 2026-11-03
