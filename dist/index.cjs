@@ -3015,6 +3015,7 @@ var MediaSession = class extends TypedEmitter {
   #localAudioOptions;
   #local;
   #audioPos = 0;
+  #paused = false;
   constructor(o) {
     super();
     ensureVoipWasm();
@@ -3283,7 +3284,7 @@ var MediaSession = class extends TypedEmitter {
     this.#mic = setInterval(() => {
       if (this.#closed) return;
       const frame = new Int16Array(FRAME_SAMPLES);
-      if (this.#audioIn) {
+      if (this.#audioIn && !this.#paused) {
         frame.set(this.#audioIn.subarray(this.#audioPos, this.#audioPos + FRAME_SAMPLES));
         this.#audioPos += FRAME_SAMPLES;
         if (this.#audioPos >= this.#audioIn.length) this.#audioIn = void 0;
@@ -3299,7 +3300,7 @@ var MediaSession = class extends TypedEmitter {
     if (this.#videoTimer || !this.#videoOut?.length) return;
     this.#videoTimer = setInterval(
       () => {
-        if (this.#closed || !this.#videoOut) return;
+        if (this.#closed || !this.#videoOut || this.#paused) return;
         const au = this.#videoOut[this.#videoPos % this.#videoOut.length];
         this.#videoPos++;
         this.#engine.handleVideoFrame(this.#now(), au);
@@ -3322,6 +3323,16 @@ var MediaSession = class extends TypedEmitter {
     next.set(all.subarray(all.length - next.length));
     this.#audioIn = next;
     this.#audioPos = 0;
+  }
+  /** Hold the audio queue and freeze the picture; `resume()` goes on exactly where it stopped. The call carries silence meanwhile. */
+  pause() {
+    this.#paused = true;
+  }
+  resume() {
+    this.#paused = false;
+  }
+  get paused() {
+    return this.#paused;
   }
   /** Seconds of queued audio that are still to be played (0 while the call carries only silence). */
   get queuedSeconds() {
@@ -19992,6 +20003,22 @@ var Client = class {
     if (o.replace) media.clearAudio();
     media.speak(pcm);
     return media.queuedSeconds;
+  }
+  /** Pause a running call's media: the queued audio is held (the call carries silence) and the picture freezes. */
+  pauseMedia(callId) {
+    const media = this.#calls.get(callId)?.media;
+    if (!media) throw new Error(`call ${callId} has no media path yet`);
+    media.pause();
+  }
+  /** Go on after `pauseMedia`, exactly where it stopped. */
+  resumeMedia(callId) {
+    const media = this.#calls.get(callId)?.media;
+    if (!media) throw new Error(`call ${callId} has no media path yet`);
+    media.resume();
+  }
+  /** Is the media of this call paused? undefined when the call has no media path. */
+  isMediaPaused(callId) {
+    return this.#calls.get(callId)?.media?.paused;
   }
   /** Silence a running call (drops the audio that is still queued). The call itself goes on. */
   stopAudio(callId) {

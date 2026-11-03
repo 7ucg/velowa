@@ -7,11 +7,21 @@ import { Client } from '../../../../src/client/client.js'
 // A stand-in for the media path with the same queue rules as MediaSession (speak appends, clearAudio drops).
 function fakeMedia() {
 	let queue = 0
+	let paused = false
 	const log: string[] = []
 	return {
 		log,
 		get queuedSeconds() {
 			return queue / 16000
+		},
+		get paused() {
+			return paused
+		},
+		pause: () => {
+			paused = true
+		},
+		resume: () => {
+			paused = false
 		},
 		clearAudio: () => {
 			queue = 0
@@ -50,5 +60,17 @@ describe('playInCall / stopAudio', () => {
 		expect(client.queuedAudioSeconds('c2')).toBeUndefined()
 		await expect(client.playInCall('c2', new Int16Array(16))).rejects.toThrow(/no media path/)
 		expect(() => client.stopAudio('nope')).toThrow(/no media path/)
+	})
+
+	it('pauses and resumes the media of a call and knows when there is none', async () => {
+		const { client } = clientWithCall()
+		expect(client.isMediaPaused('c1')).toBe(false)
+		client.pauseMedia('c1')
+		expect(client.isMediaPaused('c1')).toBe(true)
+		client.resumeMedia('c1')
+		expect(client.isMediaPaused('c1')).toBe(false)
+		expect(client.isMediaPaused('c2')).toBeUndefined()
+		expect(() => client.pauseMedia('c2')).toThrow(/no media path/)
+		expect(() => client.resumeMedia('nope')).toThrow(/no media path/)
 	})
 })

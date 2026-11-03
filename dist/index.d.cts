@@ -2055,6 +2055,10 @@ declare class MediaSession extends TypedEmitter<MediaEvents> {
      * capture that runs ahead of the call clock drops its oldest audio instead of falling behind.
      */
     feedMic(pcm: Int16Array): void;
+    /** Hold the audio queue and freeze the picture; `resume()` goes on exactly where it stopped. The call carries silence meanwhile. */
+    pause(): void;
+    resume(): void;
+    get paused(): boolean;
     /** Seconds of queued audio that are still to be played (0 while the call carries only silence). */
     get queuedSeconds(): number;
     /** Drop whatever is still queued: the call carries silence from the next tick on. */
@@ -2898,6 +2902,12 @@ declare class Client {
         replace?: boolean;
         maxSeconds?: number;
     }): Promise<number>;
+    /** Pause a running call's media: the queued audio is held (the call carries silence) and the picture freezes. */
+    pauseMedia(callId: string): void;
+    /** Go on after `pauseMedia`, exactly where it stopped. */
+    resumeMedia(callId: string): void;
+    /** Is the media of this call paused? undefined when the call has no media path. */
+    isMediaPaused(callId: string): boolean | undefined;
     /** Silence a running call (drops the audio that is still queued). The call itself goes on. */
     stopAudio(callId: string): void;
     /** Seconds of audio still queued in a call (0 when silent), or undefined when the call has no media path. */

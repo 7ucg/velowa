@@ -2237,6 +2237,25 @@ export class Client {
 		return media.queuedSeconds
 	}
 
+	/** Pause a running call's media: the queued audio is held (the call carries silence) and the picture freezes. */
+	pauseMedia(callId: string): void {
+		const media = this.#calls.get(callId)?.media
+		if (!media) throw new Error(`call ${callId} has no media path yet`)
+		media.pause()
+	}
+
+	/** Go on after `pauseMedia`, exactly where it stopped. */
+	resumeMedia(callId: string): void {
+		const media = this.#calls.get(callId)?.media
+		if (!media) throw new Error(`call ${callId} has no media path yet`)
+		media.resume()
+	}
+
+	/** Is the media of this call paused? undefined when the call has no media path. */
+	isMediaPaused(callId: string): boolean | undefined {
+		return this.#calls.get(callId)?.media?.paused
+	}
+
 	/** Silence a running call (drops the audio that is still queued). The call itself goes on. */
 	stopAudio(callId: string): void {
 		const media = this.#calls.get(callId)?.media

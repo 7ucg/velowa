@@ -140,6 +140,7 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 	#localAudioOptions: LocalAudioOptions | undefined
 	#local: LocalAudioHandle | undefined
 	#audioPos = 0
+	#paused = false
 
 	constructor(o: MediaSessionOptions) {
 		super()
@@ -444,7 +445,8 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		this.#mic = setInterval(() => {
 			if (this.#closed) return
 			const frame = new Int16Array(FRAME_SAMPLES)
-			if (this.#audioIn) {
+			// Pausiert: die Warteschlange bleibt stehen, der Anruf sendet Stille
+			if (this.#audioIn && !this.#paused) {
 				frame.set(this.#audioIn.subarray(this.#audioPos, this.#audioPos + FRAME_SAMPLES))
 				this.#audioPos += FRAME_SAMPLES
 				if (this.#audioPos >= this.#audioIn.length) this.#audioIn = undefined
@@ -461,7 +463,7 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		if (this.#videoTimer || !this.#videoOut?.length) return
 		this.#videoTimer = setInterval(
 			() => {
-				if (this.#closed || !this.#videoOut) return
+				if (this.#closed || !this.#videoOut || this.#paused) return // pausiert: kein neues Bild, die Gegenseite behält das letzte
 				const au = this.#videoOut[this.#videoPos % this.#videoOut.length]!
 				this.#videoPos++
 				this.#engine.handleVideoFrame(this.#now(), au)
@@ -485,6 +487,19 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		next.set(all.subarray(all.length - next.length))
 		this.#audioIn = next
 		this.#audioPos = 0
+	}
+
+	/** Hold the audio queue and freeze the picture; `resume()` goes on exactly where it stopped. The call carries silence meanwhile. */
+	pause(): void {
+		this.#paused = true
+	}
+
+	resume(): void {
+		this.#paused = false
+	}
+
+	get paused(): boolean {
+		return this.#paused
 	}
 
 	/** Seconds of queued audio that are still to be played (0 while the call carries only silence). */

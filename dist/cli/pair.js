@@ -7,7 +7,7 @@
 import {
   Client,
   ProtocolLogger
-} from "../chunk-VASPTR6S.js";
+} from "../chunk-YIWLKER4.js";
 import "../chunk-UJTLWSE6.js";
 
 // src/cli/pair.ts
