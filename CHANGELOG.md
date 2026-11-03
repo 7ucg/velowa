@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Fixed: the answer to a native-flow message (`sendInteractive` with `quickReply`, `singleSelect`, ...) and to a template button left `Message.text` empty. `messageText()` now returns the id of the tapped button or row for `interactiveResponseMessage` and `templateButtonReplyMessage`, as it already did for `buttonsResponseMessage` and `listResponseMessage`.
 
 ## 1.2.0 - 2026-11-03
 - `customPairingCode` (needs `pairWithPhoneNumber`): use your own 8-character code instead of a random one.

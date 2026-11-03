@@ -34,6 +34,19 @@ export function normalizeMessageContent(
 	return c
 }
 
+/** The id of the button or row someone tapped on a native-flow message (`interactiveResponseMessage`). */
+function nativeFlowReplyId(reply: Record<string, unknown> | undefined): string | undefined {
+	const flow = reply?.['nativeFlowResponseMessage'] as { paramsJson?: string } | undefined
+	if (!flow?.paramsJson) return undefined
+	try {
+		const p = JSON.parse(flow.paramsJson) as { id?: unknown; selected_id?: unknown }
+		const id = p.id ?? p.selected_id
+		return typeof id === 'string' && id ? id : undefined
+	} catch {
+		return undefined // broken JSON: no text
+	}
+}
+
 /** The text of a message, whatever kind carries it. */
 export function messageText(
 	content: Record<string, unknown> | undefined | null,
@@ -49,6 +62,8 @@ export function messageText(
 		(get('documentMessage')?.['caption'] as string | undefined) ??
 		(get('buttonsResponseMessage')?.['selectedButtonId'] as string | undefined) ??
 		(get('listResponseMessage')?.['singleSelectReply'] as { selectedRowId?: string } | undefined)
-			?.selectedRowId
+			?.selectedRowId ??
+		(get('templateButtonReplyMessage')?.['selectedId'] as string | undefined) ??
+		nativeFlowReplyId(get('interactiveResponseMessage'))
 	)
 }

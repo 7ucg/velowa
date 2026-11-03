@@ -27,6 +27,22 @@ function fakeClient() {
 }
 
 describe('serialize', () => {
+	it('puts the id of a tapped native-flow button, list row or template button into text', () => {
+		const { client } = fakeClient()
+		const tap = (message: Record<string, unknown>) =>
+			serialize(client, { id: 'T1', from: BOB, message }).text
+		const flow = (name: string, params: unknown) => ({
+			interactiveResponseMessage: {
+				body: { text: 'shown' },
+				nativeFlowResponseMessage: { name, paramsJson: JSON.stringify(params), version: 3 },
+			},
+		})
+		expect(tap(flow('quick_reply', { display_text: 'Info', id: '.menu info' }))).toBe('.menu info')
+		expect(tap(flow('single_select', { title: 'Anrufe', id: '.menu anrufe' }))).toBe('.menu anrufe')
+		expect(tap({ templateButtonReplyMessage: { selectedId: '.ping', selectedDisplayText: 'Ping' } })).toBe('.ping')
+		expect(tap({ interactiveResponseMessage: { nativeFlowResponseMessage: { paramsJson: '{broken' } } })).toBe('')
+	})
+
 	it('does NOT unwrap a deviceSentMessage that someone else sent us', () => {
 		const { client } = fakeClient()
 		const m = serialize(client, {

@@ -108,11 +108,22 @@ function normalizeMessageContent(content) {
   }
   return c;
 }
+function nativeFlowReplyId(reply) {
+  const flow = reply?.["nativeFlowResponseMessage"];
+  if (!flow?.paramsJson) return void 0;
+  try {
+    const p = JSON.parse(flow.paramsJson);
+    const id = p.id ?? p.selected_id;
+    return typeof id === "string" && id ? id : void 0;
+  } catch {
+    return void 0;
+  }
+}
 function messageText(content) {
   const c = normalizeMessageContent(content);
   if (!c) return void 0;
   const get = (k) => c[k];
-  return (typeof c["conversation"] === "string" ? c["conversation"] : void 0) ?? get("extendedTextMessage")?.["text"] ?? get("imageMessage")?.["caption"] ?? get("videoMessage")?.["caption"] ?? get("documentMessage")?.["caption"] ?? get("buttonsResponseMessage")?.["selectedButtonId"] ?? get("listResponseMessage")?.["singleSelectReply"]?.selectedRowId;
+  return (typeof c["conversation"] === "string" ? c["conversation"] : void 0) ?? get("extendedTextMessage")?.["text"] ?? get("imageMessage")?.["caption"] ?? get("videoMessage")?.["caption"] ?? get("documentMessage")?.["caption"] ?? get("buttonsResponseMessage")?.["selectedButtonId"] ?? get("listResponseMessage")?.["singleSelectReply"]?.selectedRowId ?? get("templateButtonReplyMessage")?.["selectedId"] ?? nativeFlowReplyId(get("interactiveResponseMessage"));
 }
 
 // src/bot/message.ts
