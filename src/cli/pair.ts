@@ -2,7 +2,8 @@
 // velowa (https://github.com/7ucg/velowa) (c) 2026 Baron. Copying any part of this file, however small, requires credit: see LICENSE.
 // Dev tool: link velowa by QR code (if needed), then stay connected, log everything and take commands.
 //   node dist/cli/pair.js [--log=false] [--log-dir=logs] [--auth=auth] [--phone=4915...  (pairing code instead of QR)]
-//     [--code=ABCD2345  (use this pairing code instead of a random one; needs --phone)]
+//     [--code=ABCD2345  (use this pairing code instead of a random one; needs --phone. Visible to anything that
+//       can list this machine's processes - on a shared machine prefer the VELOWA_PAIRING_CODE env var instead.)]
 // Commands on stdin: type `help` (send, react, edit, delete, image, poll, groups, archive, privacy, ...)
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
@@ -24,7 +25,8 @@ console.log(
 )
 
 const phone = arg('phone', '')
-const code = arg('code', '')
+// The env var first: an argv value is visible to anything that can list this machine's processes.
+const code = process.env['VELOWA_PAIRING_CODE'] || arg('code', '')
 const client = new Client({
 	authDir: arg('auth', 'auth'),
 	logger,
