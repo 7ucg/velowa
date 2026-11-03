@@ -2409,6 +2409,16 @@ interface ClientOptions {
     /** Link with a pairing code instead of a QR: the phone number (digits, with country code) of the account. */
     pairWithPhoneNumber?: string;
     /**
+     * Use this code instead of a random one (only with `pairWithPhoneNumber`): exactly 8 characters from the
+     * Crockford alphabet `123456789ABCDEFGHJKLMNPQRSTVWXYZ` (no `0`, `I`, `O`, `U`), case-insensitive - it is
+     * uppercased before use. Throws immediately (in the constructor) if it is not that shape.
+     *
+     * A pairing code is short-lived (minutes) and typed by hand on the phone either way, not a durable secret -
+     * but it is what proves that request is the account owner's own pairing attempt, so pick one only you know,
+     * the same way you would a random one; do not reuse a code anyone else could guess or has seen.
+     */
+    customPairingCode?: string;
+    /**
      * Join one call link as a call-link guest instead of a WhatsApp account: no QR, no phone pairing.
      * The client registers a throwaway identity for `inviteCode` (a bare token or a full
      * `https://call.whatsapp.com/...` URL, same as `joinCallLink`) via `guest_reg` (see `guest.ts`)

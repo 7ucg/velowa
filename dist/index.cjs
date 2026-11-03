@@ -8654,6 +8654,14 @@ function generatePairingCode() {
   }
   return out;
 }
+var isValidPairingCode = (code) => code.length === 8 && [...code.toUpperCase()].every((c) => CROCKFORD.includes(c));
+function normalizePairingCode(code) {
+  if (!isValidPairingCode(code))
+    throw new Error(
+      `invalid pairing code "${code}": must be exactly 8 characters from ${CROCKFORD}`
+    );
+  return code.toUpperCase();
+}
 var x25519Private = (raw) => (0, import_node_crypto13.createPrivateKey)({
   key: Buffer.concat([Buffer.from("302e020100300506032b656e04220420", "hex"), raw]),
   format: "der",
@@ -8669,6 +8677,31 @@ var sharedKey = (privateKey, publicKey) => (0, import_node_crypto13.diffieHellma
   publicKey: x25519Public(publicKey.length === 33 ? publicKey.subarray(1) : publicKey)
 });
 var codeKey = (code, salt) => pbkdf2Async(Buffer.from(code), salt, PBKDF2_ITERATIONS, 32, "sha256");
+var COMPANION_WEB_CLIENT = {
+  CHROME: { id: "1", name: "Chrome" },
+  EDGE: { id: "2", name: "Edge" },
+  FIREFOX: { id: "3", name: "Firefox" },
+  IE: { id: "4", name: "IE" },
+  OPERA: { id: "5", name: "Opera" },
+  SAFARI: { id: "6", name: "Safari" },
+  // A desktop app (Electron); the library's own default browser[1].
+  DESKTOP: { id: "7", name: "Chrome" },
+  UWP: { id: "8", name: "Chrome" }
+};
+var OTHER_WEB_CLIENT = { id: "9", name: "Chrome" };
+var companionWebClient = (deviceType) => COMPANION_WEB_CLIENT[deviceType.toUpperCase()] ?? OTHER_WEB_CLIENT;
+function canonicalOs(os) {
+  const o = os.trim().toLowerCase();
+  const word = (w) => new RegExp(`(^|[^a-z0-9])${w}($|[^a-z0-9])`).test(o);
+  if (!o) return "Linux";
+  if (o.includes("windows")) return "Windows";
+  if (o.includes("mac") || o.includes("osx") || o.includes("darwin")) return "Mac OS";
+  if (o.includes("ipad") || o.includes("iphone") || word("ios")) return "iOS";
+  if (o.includes("android")) return "Android";
+  if (o.includes("linux") || o.includes("ubuntu") || o.includes("debian") || o.includes("fedora") || o.includes("chrome os") || o.includes("chromeos") || o.includes("chromium") || word("arch") || word("cros"))
+    return "Linux";
+  return "Linux";
+}
 var ctr = (decrypt, data, key, iv) => {
   const c = (decrypt ? import_node_crypto13.createDecipheriv : import_node_crypto13.createCipheriv)("aes-256-ctr", key, iv);
   return Buffer.concat([c.update(data), c.final()]);
@@ -8681,6 +8714,7 @@ async function companionHello(creds, phoneNumber, code, browser = ["Windows", "D
     iv,
     ctr(false, creds.pairingEphemeralKey.publicKey, await codeKey(code, salt), iv)
   ]);
+  const client = companionWebClient(browser[1]);
   return {
     tag: "iq",
     attrs: { to: "s.whatsapp.net", type: "set", xmlns: "md" },
@@ -8695,13 +8729,15 @@ async function companionHello(creds, phoneNumber, code, browser = ["Windows", "D
         content: [
           { tag: "link_code_pairing_wrapped_companion_ephemeral_pub", attrs: {}, content: wrapped },
           { tag: "companion_server_auth_key_pub", attrs: {}, content: creds.noiseKey.publicKey },
-          { tag: "companion_platform_id", attrs: {}, content: "1" },
+          { tag: "companion_platform_id", attrs: {}, content: client.id },
           {
             tag: "companion_platform_display",
             attrs: {},
-            content: `${browser[1]} (${browser[0]})`
+            content: `${client.name} (${canonicalOs(browser[0])})`
           },
-          { tag: "link_code_pairing_nonce", attrs: {}, content: "0" }
+          // The raw byte 0x00 (`new Uint8Array(1)` on WA Web, `[]byte{0}` in whatsmeow) - NOT the
+          // ASCII character '0' (0x30), which a plain JS string here would encode as.
+          { tag: "link_code_pairing_nonce", attrs: {}, content: new Uint8Array([0]) }
         ]
       }
     ]
@@ -18317,6 +18353,9 @@ var Client = class {
   #guestLid;
   #guestSession;
   constructor(options = {}) {
+    if (options.customPairingCode !== void 0 && !options.pairWithPhoneNumber)
+      throw new Error("customPairingCode needs pairWithPhoneNumber");
+    if (options.customPairingCode !== void 0) normalizePairingCode(options.customPairingCode);
     this.#options = options;
     this.#isGuest = Boolean(options.guest);
     const dir = options.authDir ?? "auth";
@@ -20187,7 +20226,8 @@ var Client = class {
       fingerprint: session.fingerprint
     });
     this.logger.event("guest.registered", { status: r.status, inviteCode, lid: r.lid });
-    if (r.status !== 200) throw new Error(`guest_reg failed: HTTP ${r.status} ${r.body.slice(0, 300)}`);
+    if (r.status !== 200)
+      throw new Error(`guest_reg failed: HTTP ${r.status} ${r.body.slice(0, 300)}`);
     this.#guestLid = r.lid;
     if (r.lid) this.#creds.me = { id: r.lid, lid: r.lid };
     this.#guestRegistered = true;
@@ -20246,8 +20286,9 @@ var Client = class {
     this.#conn = conn;
     this.#events.emit("connection", { state: "connecting" });
     conn.connect();
-    if (this.#isGuest) void loggedFetch(this.logger, "https://web.whatsapp.com/status.json").catch(() => {
-    });
+    if (this.#isGuest)
+      void loggedFetch(this.logger, "https://web.whatsapp.com/status.json").catch(() => {
+      });
   }
   #handle(conn, node) {
     if (this.#receiver?.handle(node)) return;
@@ -20280,6 +20321,15 @@ var Client = class {
       });
       return;
     }
+    if (node.tag === "iq" && node.attrs["type"] === "error" && this.#pairing && (node.attrs["id"] === this.#pairing.helloId || node.attrs["id"] === this.#pairing.finishId)) {
+      this.logger.event("pairing-code.rejected", {
+        phone: this.#pairing.phone,
+        detail: node.content
+      });
+      this.#pairing = void 0;
+      conn.close("pairing-code-rejected");
+      return;
+    }
     const pairDevice = node.tag === "iq" && child4("pair-device");
     if (pairDevice) {
       conn.send({
@@ -20289,13 +20339,11 @@ var Client = class {
       const phone = this.#options.pairWithPhoneNumber;
       if (phone) {
         if (!this.#pairing) {
-          const code = generatePairingCode();
-          this.#pairing = { phone, code };
-          void companionHello(this.#creds, phone, code).then((hello) => {
-            conn.send({
-              ...hello,
-              attrs: { ...hello.attrs, id: `pc-${Date.now().toString(36)}` }
-            });
+          const code = this.#options.customPairingCode ? normalizePairingCode(this.#options.customPairingCode) : generatePairingCode();
+          const helloId = `pc-${Date.now().toString(36)}`;
+          this.#pairing = { phone, code, helloId };
+          void companionHello(this.#creds, phone, code, this.#config.browser).then((hello) => {
+            conn.send({ ...hello, attrs: { ...hello.attrs, id: helloId } });
             this.logger.event("pairing-code.requested", { phone });
             this.#events.emit("pairing-code", { code });
             this.#events.emit("connection", { state: "connecting", pairingCode: code });
@@ -20333,14 +20381,13 @@ var Client = class {
         }
       });
       const p = this.#pairing;
+      const finishId = `pf-${Date.now().toString(36)}`;
+      this.#pairing = { ...p, finishId };
       void companionFinish(node, this.#creds, p.phone, p.code).then((r) => {
         if (!r) return this.logger.event("pairing-code.empty-notification");
         this.#creds.advSecretKey = r.advSecretKey;
         saveAuthCreds(this.#credsPath, this.#creds);
-        conn.send({
-          ...r.finish,
-          attrs: { ...r.finish.attrs, id: `pf-${Date.now().toString(36)}` }
-        });
+        conn.send({ ...r.finish, attrs: { ...r.finish.attrs, id: finishId } });
         this.logger.event("pairing-code.finish-sent");
       }).catch((error) => this.logger.event("pairing-code.error", error));
       return;

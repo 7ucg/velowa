@@ -7,7 +7,7 @@
 import {
   Client,
   ProtocolLogger
-} from "../chunk-VWRHMEG2.js";
+} from "../chunk-2K6Q36W4.js";
 import "../chunk-UJTLWSE6.js";
 
 // src/cli/pair.ts
@@ -25,16 +25,18 @@ console.log(
   logEnabled ? `Logging everything to ${logger.sessionDir}` : "Logging disabled (--log=false)"
 );
 var phone = arg("phone", "");
+var code = process.env["VELOWA_PAIRING_CODE"] || arg("code", "");
 var client = new Client({
   authDir: arg("auth", "auth"),
   logger,
-  ...phone && { pairWithPhoneNumber: phone }
+  ...phone && { pairWithPhoneNumber: phone },
+  ...code && { customPairingCode: code }
 });
 client.on(
   "pairing-code",
-  ({ code }) => console.log(
+  ({ code: code2 }) => console.log(
     `
-Pairing code: ${code.slice(0, 4)}-${code.slice(4)}
+Pairing code: ${code2.slice(0, 4)}-${code2.slice(4)}
 On the phone: WhatsApp > Linked devices > Link a device > Link with phone number instead
 `
   )
@@ -243,5 +245,5 @@ process.on("uncaughtException", (error) => {
   process.exit(1);
 });
 process.on("unhandledRejection", (error) => logger.event("process.unhandledRejection", error));
-process.on("exit", (code) => logger.close(`process exit ${code}`));
+process.on("exit", (code2) => logger.close(`process exit ${code2}`));
 await client.connect();
