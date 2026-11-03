@@ -284,7 +284,7 @@ export class Client {
 	#isOpen = false
 	#mediaConn: media.MediaConn | undefined
 	#appState: AppStateSync | undefined
-	#pairing: { phone: string; code: string } | undefined
+	#pairing: { phone: string; code: string; helloId?: string; finishId?: string } | undefined
 	#ready: Promise<void> = Promise.resolve()
 	readonly #isGuest: boolean
 	#guestRegistered = false
@@ -301,7 +301,9 @@ export class Client {
 		this.#tcTokens = new TcTokens(join(dir, 'signal', 'tctokens.json'))
 		this.logger = options.logger ?? new ProtocolLogger({ label: 'client' })
 		// A guest identity is throwaway and scoped to one call link: never reuse a saved one.
-		this.#creds = this.#isGuest ? initAuthCreds() : loadAuthCreds(this.#credsPath) ?? initAuthCreds()
+		this.#creds = this.#isGuest
+			? initAuthCreds()
+			: (loadAuthCreds(this.#credsPath) ?? initAuthCreds())
 		saveAuthCreds(this.#credsPath, this.#creds)
 		this.#config = { ...DEFAULT_CONFIG, ...options.config }
 		if (options.antiban) this.antiban = new AntiBan(options.antiban === true ? {} : options.antiban)
@@ -2543,7 +2545,8 @@ export class Client {
 			fingerprint: session.fingerprint,
 		})
 		this.logger.event('guest.registered', { status: r.status, inviteCode, lid: r.lid })
-		if (r.status !== 200) throw new Error(`guest_reg failed: HTTP ${r.status} ${r.body.slice(0, 300)}`)
+		if (r.status !== 200)
+			throw new Error(`guest_reg failed: HTTP ${r.status} ${r.body.slice(0, 300)}`)
 		this.#guestLid = r.lid
 		if (r.lid) this.#creds.me = { id: r.lid, lid: r.lid }
 		this.#guestRegistered = true
@@ -2614,7 +2617,8 @@ export class Client {
 		this.#events.emit('connection', { state: 'connecting' })
 		conn.connect()
 		// The real guest page fetches this (a plain health check, no params) right as its WS opens.
-		if (this.#isGuest) void loggedFetch(this.logger, 'https://web.whatsapp.com/status.json').catch(() => {})
+		if (this.#isGuest)
+			void loggedFetch(this.logger, 'https://web.whatsapp.com/status.json').catch(() => {})
 	}
 
 	#handle(conn: Connection, node: BinaryNode): void {
@@ -2651,6 +2655,24 @@ export class Client {
 			})
 			return
 		}
+		// The companion_hello / companion_finish iqs below are sent with `conn.send` (no `Receiver` exists yet
+		// during pairing), so a server rejection of either would otherwise vanish silently: the id matches
+		// nothing, `#receiver?.handle` is a no-op, and no later branch here looks at a bare `iq type="error"`.
+		// Surface it instead, so a code that was never actually accepted does not sit on screen forever.
+		if (
+			node.tag === 'iq' &&
+			node.attrs['type'] === 'error' &&
+			this.#pairing &&
+			(node.attrs['id'] === this.#pairing.helloId || node.attrs['id'] === this.#pairing.finishId)
+		) {
+			this.logger.event('pairing-code.rejected', {
+				phone: this.#pairing.phone,
+				detail: node.content,
+			})
+			this.#pairing = undefined
+			conn.close('pairing-code-rejected')
+			return
+		}
 		const pairDevice = node.tag === 'iq' && child('pair-device')
 		if (pairDevice) {
 			conn.send({
@@ -2662,13 +2684,13 @@ export class Client {
 				// Pairing-code mode: no QR; ask the phone for a code instead.
 				if (!this.#pairing) {
 					const code = generatePairingCode()
-					this.#pairing = { phone, code }
-					void companionHello(this.#creds, phone, code)
+					// Fixed before the request goes out (not inside the `.then`), so a fast error reply can
+					// never arrive before `#pairing.helloId` is there to match it against.
+					const helloId = `pc-${Date.now().toString(36)}`
+					this.#pairing = { phone, code, helloId }
+					void companionHello(this.#creds, phone, code, this.#config.browser)
 						.then((hello) => {
-							conn.send({
-								...hello,
-								attrs: { ...hello.attrs, id: `pc-${Date.now().toString(36)}` },
-							})
+							conn.send({ ...hello, attrs: { ...hello.attrs, id: helloId } })
 							this.logger.event('pairing-code.requested', { phone })
 							this.#events.emit('pairing-code', { code })
 							this.#events.emit('connection', { state: 'connecting', pairingCode: code })
@@ -2711,15 +2733,14 @@ export class Client {
 				},
 			})
 			const p = this.#pairing
+			const finishId = `pf-${Date.now().toString(36)}`
+			this.#pairing = { ...p, finishId }
 			void companionFinish(node, this.#creds, p.phone, p.code)
 				.then((r) => {
 					if (!r) return this.logger.event('pairing-code.empty-notification')
 					this.#creds.advSecretKey = r.advSecretKey
 					saveAuthCreds(this.#credsPath, this.#creds)
-					conn.send({
-						...r.finish,
-						attrs: { ...r.finish.attrs, id: `pf-${Date.now().toString(36)}` },
-					})
+					conn.send({ ...r.finish, attrs: { ...r.finish.attrs, id: finishId } })
 					this.logger.event('pairing-code.finish-sent')
 				})
 				.catch((error) => this.logger.event('pairing-code.error', error))

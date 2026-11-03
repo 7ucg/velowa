@@ -57,6 +57,60 @@ export const sharedKey = (privateKey: Uint8Array, publicKey: Uint8Array): Buffer
 const codeKey = (code: string, salt: Uint8Array) =>
 	pbkdf2Async(Buffer.from(code), salt, PBKDF2_ITERATIONS, 32, 'sha256')
 
+/**
+ * `companion_platform_id` wire bytes and the browser name `companion_platform_display` has to show with them.
+ * This is its own small id space (`'1'`-`'9'`), NOT the `DeviceProps.PlatformType` proto enum used elsewhere in
+ * this file for QR pairing (there a `platformType`/`os` mismatch is tolerated; here the `companion_hello` server
+ * validates it and a mismatch is the kind of thing that leaves the phone saying "couldn't link device" with no
+ * error on the wire). A non-browser client (a desktop app, UWP, anything unrecognised) always shows "Chrome" as
+ * its name: that's the underlying Chromium renderer WA Web's own UA parser reports for those. Cross-checked
+ * against `whatsapp-rust`'s `companion_reg.rs`, which carries wire-level tests for these exact values.
+ */
+const COMPANION_WEB_CLIENT: Record<string, { id: string; name: string }> = {
+	CHROME: { id: '1', name: 'Chrome' },
+	EDGE: { id: '2', name: 'Edge' },
+	FIREFOX: { id: '3', name: 'Firefox' },
+	IE: { id: '4', name: 'IE' },
+	OPERA: { id: '5', name: 'Opera' },
+	SAFARI: { id: '6', name: 'Safari' },
+	// A desktop app (Electron); the library's own default browser[1].
+	DESKTOP: { id: '7', name: 'Chrome' },
+	UWP: { id: '8', name: 'Chrome' },
+}
+/** Anything not in `COMPANION_WEB_CLIENT` above (id `'9'`, "OtherWebClient" in the reference). */
+const OTHER_WEB_CLIENT = { id: '9', name: 'Chrome' }
+
+const companionWebClient = (deviceType: string): { id: string; name: string } =>
+	COMPANION_WEB_CLIENT[deviceType.toUpperCase()] ?? OTHER_WEB_CLIENT
+
+/**
+ * The `companion_hello` server only accepts a real OS name in `companion_platform_display` (unlike QR pairing,
+ * which never sends this field and tolerates an arbitrary branding string there) — an unrecognised one is coerced
+ * to `Linux` here, the same default the reference uses, rather than risk sending something it rejects.
+ */
+function canonicalOs(os: string): string {
+	const o = os.trim().toLowerCase()
+	const word = (w: string) => new RegExp(`(^|[^a-z0-9])${w}($|[^a-z0-9])`).test(o)
+	if (!o) return 'Linux'
+	if (o.includes('windows')) return 'Windows'
+	if (o.includes('mac') || o.includes('osx') || o.includes('darwin')) return 'Mac OS'
+	if (o.includes('ipad') || o.includes('iphone') || word('ios')) return 'iOS'
+	if (o.includes('android')) return 'Android'
+	if (
+		o.includes('linux') ||
+		o.includes('ubuntu') ||
+		o.includes('debian') ||
+		o.includes('fedora') ||
+		o.includes('chrome os') ||
+		o.includes('chromeos') ||
+		o.includes('chromium') ||
+		word('arch') ||
+		word('cros')
+	)
+		return 'Linux'
+	return 'Linux'
+}
+
 const ctr = (decrypt: boolean, data: Uint8Array, key: Uint8Array, iv: Uint8Array): Buffer => {
 	const c = (decrypt ? createDecipheriv : createCipheriv)('aes-256-ctr', key, iv)
 	return Buffer.concat([c.update(data), c.final()])
@@ -76,6 +130,7 @@ export async function companionHello(
 		iv,
 		ctr(false, creds.pairingEphemeralKey.publicKey, await codeKey(code, salt), iv),
 	])
+	const client = companionWebClient(browser[1])
 	return {
 		tag: 'iq',
 		attrs: { to: 's.whatsapp.net', type: 'set', xmlns: 'md' },
@@ -90,13 +145,15 @@ export async function companionHello(
 				content: [
 					{ tag: 'link_code_pairing_wrapped_companion_ephemeral_pub', attrs: {}, content: wrapped },
 					{ tag: 'companion_server_auth_key_pub', attrs: {}, content: creds.noiseKey.publicKey },
-					{ tag: 'companion_platform_id', attrs: {}, content: '1' },
+					{ tag: 'companion_platform_id', attrs: {}, content: client.id },
 					{
 						tag: 'companion_platform_display',
 						attrs: {},
-						content: `${browser[1]} (${browser[0]})`,
+						content: `${client.name} (${canonicalOs(browser[0])})`,
 					},
-					{ tag: 'link_code_pairing_nonce', attrs: {}, content: '0' },
+					// The raw byte 0x00 (`new Uint8Array(1)` on WA Web, `[]byte{0}` in whatsmeow) - NOT the
+					// ASCII character '0' (0x30), which a plain JS string here would encode as.
+					{ tag: 'link_code_pairing_nonce', attrs: {}, content: new Uint8Array([0]) },
 				],
 			},
 		],

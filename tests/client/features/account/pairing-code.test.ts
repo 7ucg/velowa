@@ -18,6 +18,52 @@ describe('pairing-code linking', () => {
 		for (let i = 0; i < 100; i++) expect(generatePairingCode()).toMatch(/^[1-9A-HJ-NP-TV-Z]{8}$/)
 	})
 
+	it('sends link_code_pairing_nonce as the single raw byte 0x00, not the text "0"', async () => {
+		const hello = await companionHello(initAuthCreds(), '4915699887766', 'ABCD2345')
+		const reg = (hello.content as BinaryNode[])[0]!
+		const nonce = (reg.content as BinaryNode[]).find(
+			(c) => c.tag === 'link_code_pairing_nonce',
+		)!.content
+		expect(nonce).toBeInstanceOf(Uint8Array)
+		expect([...(nonce as Uint8Array)]).toEqual([0])
+	})
+
+	it('sends the companion_platform_id/display the server actually validates for pairing-code linking', async () => {
+		const creds = initAuthCreds()
+		const pairingFieldsOf = async (browser: [string, string]) => {
+			const hello = await companionHello(creds, '4915699887766', 'ABCD2345', browser)
+			const reg = (hello.content as BinaryNode[])[0]!
+			const field = (tag: string) =>
+				(reg.content as BinaryNode[]).find((c) => c.tag === tag)!.content
+			return { id: field('companion_platform_id'), display: field('companion_platform_display') }
+		}
+		// The library's own default: a desktop app reports as "Chrome" (the underlying Chromium renderer),
+		// id '7' - NOT the literal word "Desktop", which the phone does not recognise as a browser and is
+		// the reason a pairing code could be shown yet the phone still says "couldn't link device".
+		expect(await pairingFieldsOf(['Windows', 'Desktop'])).toEqual({
+			id: '7',
+			display: 'Chrome (Windows)',
+		})
+		expect(await pairingFieldsOf(['macOS', 'Chrome'])).toEqual({
+			id: '1',
+			display: 'Chrome (Mac OS)',
+		})
+		expect(await pairingFieldsOf(['Windows', 'Edge'])).toEqual({
+			id: '2',
+			display: 'Edge (Windows)',
+		})
+		expect(await pairingFieldsOf(['Ubuntu', 'Firefox'])).toEqual({
+			id: '3',
+			display: 'Firefox (Linux)',
+		})
+		// An unrecognised browser falls back to id '9' ("OtherWebClient") and still shows as "Chrome";
+		// an unrecognised OS is coerced to "Linux" rather than sent as whatever branding string it was.
+		expect(await pairingFieldsOf(['SomeOS', 'SomeUnknownBrowser'])).toEqual({
+			id: '9',
+			display: 'Chrome (Linux)',
+		})
+	})
+
 	it('runs the full exchange against a simulated phone and both sides derive the same ADV secret', async () => {
 		const creds = initAuthCreds()
 		const code = 'ABCD2345'
