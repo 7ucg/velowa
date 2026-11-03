@@ -1,6 +1,6 @@
 {
 	"name": "velowa",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"description": "WhatsApp Web multi-device client library — TypeScript, with libsignal/WABinary/Noise/app-state crypto ported to Rust and compiled to WASM",
 	"type": "module",
 	"main": "./dist/index.cjs",
