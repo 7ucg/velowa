@@ -7,6 +7,7 @@ import {
 	type MessageContent,
 	type SendContentOptions,
 } from './features/message/send-content.js'
+import { classifyServerFailure, type ServerFailure } from './server-failure.js'
 import { decodeAudioFile, resolveCallFiles, type CallFileOptions } from './features/call/media-files.js'
 import type { LocalAudioOptions } from './features/call/local-audio.js'
 import { randomBytes } from 'node:crypto'
@@ -292,6 +293,8 @@ export class Client {
 	#qrTimer: NodeJS.Timeout | undefined
 	#keepAlive: NodeJS.Timeout | undefined
 	#stopped = false
+	/** Set when the server ended the session for good (see `classifyServerFailure`): no reconnect, reported on close. */
+	#terminal: ServerFailure | undefined
 	#isOpen = false
 	#mediaConn: media.MediaConn | undefined
 	#appState: AppStateSync | undefined
@@ -2603,6 +2606,7 @@ export class Client {
 	}
 
 	#start(): void {
+		this.#terminal = undefined
 		if (this.#isGuest && !this.#guestRegistered) {
 			this.#events.emit('connection', { state: 'connecting' })
 			void this.#registerGuest()
@@ -2640,10 +2644,13 @@ export class Client {
 			{
 				onOpen: () => {},
 				onNode: (node) => this.#handle(conn, node),
-				onClose: ({ code, reason }) => {
+				onClose: ({ code, reason: closeReason }) => {
 					this.#teardown()
+					// The reason the server gave for ending the session (if it did) beats the bare socket close.
+					const reason = this.#terminal ?? closeReason
 					const willReconnect =
 						!this.#stopped &&
+						!this.#terminal &&
 						(this.#options.autoReconnect ?? true) &&
 						Boolean(this.#creds.me) &&
 						reason !== 'logged-out'
@@ -2671,6 +2678,15 @@ export class Client {
 	}
 
 	#handle(conn: Connection, node: BinaryNode): void {
+		const failure = classifyServerFailure(node)
+		if (failure) {
+			// The server will refuse every retry: stop here and say why, instead of reconnecting in a loop.
+			this.#terminal = failure
+			this.#stopped = true
+			this.logger.event('server.terminal', { reason: failure, node })
+			conn.close(failure)
+			return
+		}
 		if (this.#receiver?.handle(node)) return
 		const child = (tag: string) =>
 			Array.isArray(node.content) ? node.content.find((c) => c.tag === tag) : undefined

@@ -11599,6 +11599,18 @@ async function sendContent(client, jid, content, options = {}) {
   throw new Error(`send: this content is not supported (keys: ${Object.keys(c).join(", ")})`);
 }
 
+// src/client/server-failure.ts
+function classifyServerFailure(node) {
+  const byCode = (code) => code === "401" ? "logged-out" : code === "403" ? "forbidden" : void 0;
+  if (node.tag === "failure") return byCode(node.attrs["reason"]);
+  if (node.tag !== "stream:error") return void 0;
+  const conflict = Array.isArray(node.content) ? node.content.find((c) => c.tag === "conflict") : void 0;
+  const type = conflict?.attrs["type"];
+  if (type === "device_removed") return "logged-out";
+  if (type === "replaced") return "replaced";
+  return byCode(node.attrs["code"]);
+}
+
 // src/client/client.ts
 import { randomBytes as randomBytes12 } from "crypto";
 import { join as join4 } from "path";
@@ -18060,6 +18072,8 @@ var Client = class {
   #qrTimer;
   #keepAlive;
   #stopped = false;
+  /** Set when the server ended the session for good (see `classifyServerFailure`): no reconnect, reported on close. */
+  #terminal;
   #isOpen = false;
   #mediaConn;
   #appState;
@@ -19974,6 +19988,7 @@ var Client = class {
     void guestPreFlightLog("guest_calling_join_success", session, this.#config);
   }
   #start() {
+    this.#terminal = void 0;
     if (this.#isGuest && !this.#guestRegistered) {
       this.#events.emit("connection", { state: "connecting" });
       void this.#registerGuest().then(() => this.#startConnection()).catch((error) => {
@@ -20005,9 +20020,10 @@ var Client = class {
         onOpen: () => {
         },
         onNode: (node) => this.#handle(conn, node),
-        onClose: ({ code, reason }) => {
+        onClose: ({ code, reason: closeReason }) => {
           this.#teardown();
-          const willReconnect = !this.#stopped && (this.#options.autoReconnect ?? true) && Boolean(this.#creds.me) && reason !== "logged-out";
+          const reason = this.#terminal ?? closeReason;
+          const willReconnect = !this.#stopped && !this.#terminal && (this.#options.autoReconnect ?? true) && Boolean(this.#creds.me) && reason !== "logged-out";
           this.#events.emit("close", { ...code !== void 0 && { code }, reason, willReconnect });
           this.#events.emit("connection", {
             state: willReconnect ? "connecting" : "close",
@@ -20031,6 +20047,14 @@ var Client = class {
       });
   }
   #handle(conn, node) {
+    const failure = classifyServerFailure(node);
+    if (failure) {
+      this.#terminal = failure;
+      this.#stopped = true;
+      this.logger.event("server.terminal", { reason: failure, node });
+      conn.close(failure);
+      return;
+    }
     if (this.#receiver?.handle(node)) return;
     const child4 = (tag) => Array.isArray(node.content) ? node.content.find((c) => c.tag === tag) : void 0;
     if (node.tag === "presence" || node.tag === "chatstate") {
