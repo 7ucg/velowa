@@ -40,7 +40,7 @@ the built package. It is built once from the repository (Rust and `wasm-pack` ne
 
 | Area | What you get | Checked |
 | --- | --- | --- |
-| Connection | QR or pairing-code linking, login from the saved folder, automatic reconnect, `connection` event | live (QR); tests (pairing code) |
+| Connection | QR or pairing-code linking, login from the saved folder, automatic reconnect, `connection` event | live |
 | Messages | text, replies, mentions, reactions, edit, delete, forward, view-once, link previews, typing / presence, read receipts | live |
 | Media | image, video, audio, voice note, document, sticker: encrypted upload and download, from bytes, files, URLs or streams | live |
 | Interactive | buttons, lists, templates, native-flow buttons, Meta-AI style rich answers (text, code, table, LaTeX, map) and HTML | live |
