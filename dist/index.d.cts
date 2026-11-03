@@ -1046,6 +1046,8 @@ interface CallEvent {
     videoState?: number;
     /** `<user_action>` raise-hand: true raised, false lowered. */
     handRaised?: boolean;
+    /** `<mute_v2 mute-state>`: someone's microphone state in a group call (true muted). Who it concerns is `from`. */
+    muteState?: boolean;
     /** `<screen_share>`: a participant started or stopped sharing their screen (the signal only, no picture). */
     screenShare?: {
         state: 'started' | 'stopped';
@@ -2883,6 +2885,8 @@ declare class Client {
     } & CallFileOptions): Promise<void>;
     /** Refuse the other side's request to turn video on. */
     rejectVideoUpgrade(callId: string): Promise<void>;
+    /** Tell a group call whether our microphone counts as muted (the sound we send is not changed). */
+    setMuteState(callId: string, muted: boolean): Promise<void>;
     /** Raise (or lower) the hand in a group call. */
     raiseHand(callId: string, raised?: boolean): Promise<void>;
     /**

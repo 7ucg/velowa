@@ -2067,6 +2067,14 @@ export class Client {
 		)
 	}
 
+	/** Tell a group call whether our microphone counts as muted (the sound we send is not changed). */
+	async setMuteState(callId: string, muted: boolean): Promise<void> {
+		const c = this.#calls.get(callId)
+		if (!c?.groupSession) throw new Error(`${callId} is not a running group call`)
+		const { receiver } = await this.#live()
+		receiver.sendNode(callSig.buildMuteState(callId, c.creator, muted, receiver.nextId()))
+	}
+
 	/** Raise (or lower) the hand in a group call. */
 	async raiseHand(callId: string, raised = true): Promise<void> {
 		const c = this.#calls.get(callId)

@@ -4742,6 +4742,7 @@ function parseCall(node) {
     ...info.tag === "user_action" && info.attrs["action"] === "raise_hand" && {
       handRaised: (Array.isArray(info.content) ? info.content : []).find((k) => k.tag === "raise_hand")?.attrs["raise-hand-state"] === "1"
     },
+    ...info.tag === "mute_v2" && /^[01]$/.test(info.attrs["mute-state"] ?? "") && { muteState: info.attrs["mute-state"] === "1" },
     ...info.tag === "screen_share" && /^[12]$/.test(info.attrs["screenshare_state"] ?? "") && {
       screenShare: {
         state: info.attrs["screenshare_state"] === "1" ? "started" : "stopped",
@@ -19881,6 +19882,13 @@ var Client = class {
         VIDEO_STATE.reject
       )
     );
+  }
+  /** Tell a group call whether our microphone counts as muted (the sound we send is not changed). */
+  async setMuteState(callId, muted) {
+    const c = this.#calls.get(callId);
+    if (!c?.groupSession) throw new Error(`${callId} is not a running group call`);
+    const { receiver } = await this.#live();
+    receiver.sendNode(buildMuteState(callId, c.creator, muted, receiver.nextId()));
   }
   /** Raise (or lower) the hand in a group call. */
   async raiseHand(callId, raised = true) {

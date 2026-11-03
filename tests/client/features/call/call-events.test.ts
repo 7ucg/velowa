@@ -174,4 +174,15 @@ describe('call events', () => {
 			{ jid: '29@lid', name: 'Gast', guest: true, state: 'terminated' },
 		])
 	})
+	it('reads the mute state of a mute_v2 stanza', () => {
+		const mk = (v: string) =>
+			parseCall({
+				tag: 'call',
+				attrs: { from: '5@lid' },
+				content: [{ tag: 'mute_v2', attrs: { 'call-id': 'C1', 'mute-state': v } }],
+			})!
+		expect(mk('1').muteState).toBe(true)
+		expect(mk('0').muteState).toBe(false)
+		expect(mk('x').muteState).toBeUndefined()
+	})
 })

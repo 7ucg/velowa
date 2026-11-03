@@ -15,6 +15,8 @@ export interface CallEvent {
 	videoState?: number
 	/** `<user_action>` raise-hand: true raised, false lowered. */
 	handRaised?: boolean
+	/** `<mute_v2 mute-state>`: someone's microphone state in a group call (true muted). Who it concerns is `from`. */
+	muteState?: boolean
 	/** `<screen_share>`: a participant started or stopped sharing their screen (the signal only, no picture). */
 	screenShare?: { state: 'started' | 'stopped'; version?: number; id?: number }
 	/**
@@ -107,6 +109,8 @@ export function parseCall(node: BinaryNode): CallEvent | undefined {
 					(Array.isArray(info.content) ? info.content : []).find((k) => k.tag === 'raise_hand')
 						?.attrs['raise-hand-state'] === '1',
 			}),
+		...(info.tag === 'mute_v2' &&
+			/^[01]$/.test(info.attrs['mute-state'] ?? '') && { muteState: info.attrs['mute-state'] === '1' }),
 		...(info.tag === 'screen_share' &&
 			/^[12]$/.test(info.attrs['screenshare_state'] ?? '') && {
 				screenShare: {
