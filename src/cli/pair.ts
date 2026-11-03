@@ -2,6 +2,7 @@
 // velowa (https://github.com/7ucg/velowa) (c) 2026 Baron. Copying any part of this file, however small, requires credit: see LICENSE.
 // Dev tool: link velowa by QR code (if needed), then stay connected, log everything and take commands.
 //   node dist/cli/pair.js [--log=false] [--log-dir=logs] [--auth=auth] [--phone=4915...  (pairing code instead of QR)]
+//     [--code=ABCD2345  (use this pairing code instead of a random one; needs --phone)]
 // Commands on stdin: type `help` (send, react, edit, delete, image, poll, groups, archive, privacy, ...)
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
@@ -23,10 +24,12 @@ console.log(
 )
 
 const phone = arg('phone', '')
+const code = arg('code', '')
 const client = new Client({
 	authDir: arg('auth', 'auth'),
 	logger,
 	...(phone && { pairWithPhoneNumber: phone }),
+	...(code && { customPairingCode: code }),
 })
 client.on('pairing-code', ({ code }) =>
 	console.log(

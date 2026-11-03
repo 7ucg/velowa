@@ -174,7 +174,9 @@ await client.connect()
 ```
 
 **Pairing code instead of a QR:** `new Client({ authDir: 'auth', pairWithPhoneNumber: '4915...' })` and show
-`pairingCode` from the `connection` event; on the phone choose *Link with phone number instead*.
+`pairingCode` from the `connection` event; on the phone choose *Link with phone number instead*. Add
+`customPairingCode: 'ABCD2345'` to use your own 8-character code instead of a random one (exactly 8 characters
+from `123456789ABCDEFGHJKLMNPQRSTVWXYZ`, case-insensitive; an invalid one throws right away, in the constructor).
 
 **Connection states:** `connecting` (also while a code or QR is on offer and after a drop that will reconnect),
 `open` (ready to send and receive), `close` (finished: the client does not retry). velowa reconnects by itself
@@ -734,6 +736,7 @@ new Client({
   logger: new ProtocolLogger({ enabled: false }), // or { dir, label, rotateMB, retention, compressAfterHours, keep }
   autoReconnect: true, // reconnect after a drop (default)
   pairWithPhoneNumber: '4915…', // link with a code instead of a QR
+  customPairingCode: 'ABCD2345', // your own code instead of a random one (needs pairWithPhoneNumber)
   antiban: true, // or your own limits, see below
   config: { /* override the WhatsApp Web version / browser identity */ },
 })

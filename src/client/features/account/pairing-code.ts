@@ -34,6 +34,23 @@ export function generatePairingCode(): string {
 	return out
 }
 
+/** Whether `code` could be typed on the phone: exactly 8 characters, all from the Crockford alphabet (case-insensitive). */
+export const isValidPairingCode = (code: string): boolean =>
+	code.length === 8 && [...code.toUpperCase()].every((c) => CROCKFORD.includes(c))
+
+/**
+ * A caller-chosen pairing code instead of a random one (e.g. one easy to read aloud). `code` is uppercased - the
+ * phone does the same, and the derived key is case-sensitive, so a lowercase code must be uppercased before it is
+ * used for anything, not just for display. Throws if `code` is not exactly 8 Crockford characters.
+ */
+export function normalizePairingCode(code: string): string {
+	if (!isValidPairingCode(code))
+		throw new Error(
+			`invalid pairing code "${code}": must be exactly 8 characters from ${CROCKFORD}`,
+		)
+	return code.toUpperCase()
+}
+
 const x25519Private = (raw: Uint8Array) =>
 	createPrivateKey({
 		key: Buffer.concat([Buffer.from('302e020100300506032b656e04220420', 'hex'), raw]),

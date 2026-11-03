@@ -7,6 +7,8 @@ import {
 	companionFinish,
 	companionHello,
 	generatePairingCode,
+	isValidPairingCode,
+	normalizePairingCode,
 	sharedKey,
 } from '../../../../src/client/features/account/pairing-code.js'
 
@@ -16,6 +18,44 @@ const kid = (n: BinaryNode, tag: string) =>
 describe('pairing-code linking', () => {
 	it('generates 8 Crockford characters', () => {
 		for (let i = 0; i < 100; i++) expect(generatePairingCode()).toMatch(/^[1-9A-HJ-NP-TV-Z]{8}$/)
+	})
+
+	it('validates a custom code: exactly 8 Crockford characters, case-insensitive', () => {
+		expect(isValidPairingCode('ABCD2345')).toBe(true)
+		expect(isValidPairingCode('abcd2345')).toBe(true)
+		expect(isValidPairingCode('ABCD234')).toBe(false) // 7 chars
+		expect(isValidPairingCode('ABCD23456')).toBe(false) // 9 chars
+		expect(isValidPairingCode('ABCD234I')).toBe(false) // I is not in the alphabet
+		expect(isValidPairingCode('ABCD234O')).toBe(false) // neither is O
+		expect(isValidPairingCode('ABCD234U')).toBe(false) // neither is U
+		expect(isValidPairingCode('')).toBe(false)
+	})
+
+	it('normalizes a custom code to uppercase and rejects an invalid one', () => {
+		expect(normalizePairingCode('abcd2345')).toBe('ABCD2345')
+		expect(normalizePairingCode('ABCD2345')).toBe('ABCD2345')
+		expect(() => normalizePairingCode('tooshort')).toThrow(/8 characters/)
+		expect(() => normalizePairingCode('ABCD234I')).toThrow(/8 characters/)
+	})
+
+	it('sends a lowercase custom code uppercased, so it matches the phone', async () => {
+		const creds = initAuthCreds()
+		const code = normalizePairingCode('abcd2345')
+		const hello = await companionHello(creds, '4915699887766', code)
+		const reg = (hello.content as BinaryNode[])[0]!
+		const wrapped = kid(reg, 'link_code_pairing_wrapped_companion_ephemeral_pub')
+		const salt = wrapped.subarray(0, 32)
+		const iv = wrapped.subarray(32, 48)
+		// Decrypting with the lowercase form must fail: the wire key was derived from the uppercase code.
+		const wrongKey = pbkdf2Sync('abcd2345', salt, 2 << 16, 32, 'sha256')
+		const d1 = createDecipheriv('aes-256-ctr', wrongKey, iv)
+		const wrongDecrypt = Buffer.concat([d1.update(wrapped.subarray(48)), d1.final()])
+		expect(wrongDecrypt.equals(Buffer.from(creds.pairingEphemeralKey.publicKey))).toBe(false)
+		// Decrypting with the uppercase form (what normalizePairingCode produced) succeeds.
+		const rightKey = pbkdf2Sync('ABCD2345', salt, 2 << 16, 32, 'sha256')
+		const d2 = createDecipheriv('aes-256-ctr', rightKey, iv)
+		const rightDecrypt = Buffer.concat([d2.update(wrapped.subarray(48)), d2.final()])
+		expect(rightDecrypt.equals(Buffer.from(creds.pairingEphemeralKey.publicKey))).toBe(true)
 	})
 
 	it('sends link_code_pairing_nonce as the single raw byte 0x00, not the text "0"', async () => {

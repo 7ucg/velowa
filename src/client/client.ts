@@ -58,6 +58,7 @@ import {
 	companionFinish,
 	companionHello,
 	generatePairingCode,
+	normalizePairingCode,
 } from './features/account/pairing-code.js'
 import {
 	Groups,
@@ -151,6 +152,12 @@ export interface ClientOptions {
 	config?: Partial<ClientConfig>
 	/** Link with a pairing code instead of a QR: the phone number (digits, with country code) of the account. */
 	pairWithPhoneNumber?: string
+	/**
+	 * Use this code instead of a random one (only with `pairWithPhoneNumber`): exactly 8 characters from the
+	 * Crockford alphabet `123456789ABCDEFGHJKLMNPQRSTVWXYZ` (no `0`, `I`, `O`, `U`), case-insensitive - it is
+	 * uppercased before use. Throws immediately (in the constructor) if it is not that shape.
+	 */
+	customPairingCode?: string
 	/**
 	 * Join one call link as a call-link guest instead of a WhatsApp account: no QR, no phone pairing.
 	 * The client registers a throwaway identity for `inviteCode` (a bare token or a full
@@ -292,6 +299,11 @@ export class Client {
 	#guestSession: GuestSession | undefined
 
 	constructor(options: ClientOptions = {}) {
+		if (options.customPairingCode !== undefined && !options.pairWithPhoneNumber)
+			throw new Error('customPairingCode needs pairWithPhoneNumber')
+		// Validated eagerly: a bad code would otherwise only surface deep inside the connection, the first
+		// time the server pushes `pair-device` - far from the call site that actually got it wrong.
+		if (options.customPairingCode !== undefined) normalizePairingCode(options.customPairingCode)
 		this.#options = options
 		this.#isGuest = Boolean(options.guest)
 		const dir = options.authDir ?? 'auth'
@@ -2683,7 +2695,11 @@ export class Client {
 			if (phone) {
 				// Pairing-code mode: no QR; ask the phone for a code instead.
 				if (!this.#pairing) {
-					const code = generatePairingCode()
+					// Already validated and uppercased in the constructor; normalize again rather than trust
+					// that nothing in between changed it.
+					const code = this.#options.customPairingCode
+						? normalizePairingCode(this.#options.customPairingCode)
+						: generatePairingCode()
 					// Fixed before the request goes out (not inside the `.then`), so a fast error reply can
 					// never arrive before `#pairing.helloId` is there to match it against.
 					const helloId = `pc-${Date.now().toString(36)}`

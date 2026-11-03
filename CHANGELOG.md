@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- `customPairingCode` (needs `pairWithPhoneNumber`): use your own 8-character code instead of a random one.
+  Validated and uppercased in the `Client` constructor, so a bad one throws right away rather than failing deep
+  inside the connection; `--code=` on `velowa-pair` too.
 - Fixed pairing-code linking (`pairWithPhoneNumber`), reported as not working: `companion_platform_id` was hardcoded
   to `1` (Chrome) regardless of the configured `browser`, instead of the id that actually matches it (`7` for the
   library's own default, `['Windows', 'Desktop']`) — a mismatch against `companion_platform_display` the phone may
