@@ -68,6 +68,15 @@ const MAX_DECODERS = 64
 
 /** One mic frame is 60 ms of 16 kHz mono PCM. */
 export const FRAME_SAMPLES = 960
+
+/** Scale 16-bit samples in place by `gain` (1 = unchanged, 0 = silence, 2 = twice as loud). Loud peaks are clipped, not wrapped. */
+export function applyGain(frame: Int16Array, gain: number): void {
+	if (gain === 1) return
+	for (let i = 0; i < frame.length; i++) {
+		const v = Math.round(frame[i]! * gain)
+		frame[i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v
+	}
+}
 const FRAME_MS = 60
 
 export interface RelayConfig {
@@ -141,6 +150,7 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 	#local: LocalAudioHandle | undefined
 	#audioPos = 0
 	#paused = false
+	#gain = 1
 
 	constructor(o: MediaSessionOptions) {
 		super()
@@ -451,6 +461,7 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 				this.#audioPos += FRAME_SAMPLES
 				if (this.#audioPos >= this.#audioIn.length) this.#audioIn = undefined
 			}
+			applyGain(frame, this.#gain) // Lautstärke: gilt für alles, was gesendet wird, auch für schon eingereihte Musik
 			if (this.#opus) {
 				const enc = this.#opus.encode(Buffer.from(frame.buffer), FRAME_SAMPLES)
 				this.#engine.handleEncodedAudio(this.#now(), enc)
@@ -487,6 +498,16 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		next.set(all.subarray(all.length - next.length))
 		this.#audioIn = next
 		this.#audioPos = 0
+	}
+
+	/** Loudness of what this call sends: 0 (silent) to 2 (twice as loud, loud peaks are clipped). Default 1. Takes effect at once, also for audio already queued. */
+	setVolume(gain: number): void {
+		if (!Number.isFinite(gain) || gain < 0 || gain > 2) throw new Error('volume is a number from 0 to 2')
+		this.#gain = gain
+	}
+
+	get volume(): number {
+		return this.#gain
 	}
 
 	/** Hold the audio queue and freeze the picture; `resume()` goes on exactly where it stopped. The call carries silence meanwhile. */

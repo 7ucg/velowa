@@ -3,16 +3,25 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '../../../../src/client/client.js'
+import { applyGain } from '../../../../src/client/features/call/call-media.js'
 
 // A stand-in for the media path with the same queue rules as MediaSession (speak appends, clearAudio drops).
 function fakeMedia() {
 	let queue = 0
 	let paused = false
+	let gain = 1
 	const log: string[] = []
 	return {
 		log,
 		get queuedSeconds() {
 			return queue / 16000
+		},
+		get volume() {
+			return gain
+		},
+		setVolume: (g: number) => {
+			if (!Number.isFinite(g) || g < 0 || g > 2) throw new Error('volume is a number from 0 to 2')
+			gain = g
 		},
 		get paused() {
 			return paused
@@ -74,3 +83,32 @@ describe('playInCall / stopAudio', () => {
 		expect(() => client.resumeMedia('nope')).toThrow(/no media path/)
 	})
 })
+
+describe('volume', () => {
+	it('scales samples and clips instead of wrapping around', () => {
+		const f = Int16Array.from([1000, -1000, 20000, -20000, 0])
+		applyGain(f, 1)
+		expect([...f]).toEqual([1000, -1000, 20000, -20000, 0]) // unchanged
+		applyGain(f, 0.5)
+		expect([...f]).toEqual([500, -500, 10000, -10000, 0])
+		const loud = Int16Array.from([20000, -20000, 100])
+		applyGain(loud, 2)
+		expect([...loud]).toEqual([32767, -32768, 200]) // peaks are clipped
+		const mute = Int16Array.from([123, -456])
+		applyGain(mute, 0)
+		expect([...mute]).toEqual([0, 0])
+	})
+
+	it('sets and reads the volume of a call and rejects values out of range', () => {
+		const { client } = clientWithCall()
+		expect(client.callVolume('c1')).toBe(1)
+		client.setCallVolume('c1', 0.4)
+		expect(client.callVolume('c1')).toBe(0.4)
+		expect(() => client.setCallVolume('c1', 3)).toThrow(/0 to 2/)
+		expect(() => client.setCallVolume('c1', -1)).toThrow(/0 to 2/)
+		expect(() => client.setCallVolume('c1', Number.NaN)).toThrow(/0 to 2/)
+		expect(client.callVolume('c2')).toBeUndefined()
+		expect(() => client.setCallVolume('c2', 1)).toThrow(/no media path/)
+	})
+})
+

@@ -2997,6 +2997,13 @@ function splitAnnexB(data) {
 }
 var MAX_DECODERS = 64;
 var FRAME_SAMPLES = 960;
+function applyGain(frame, gain) {
+  if (gain === 1) return;
+  for (let i = 0; i < frame.length; i++) {
+    const v = Math.round(frame[i] * gain);
+    frame[i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
+  }
+}
 var FRAME_MS = 60;
 var MediaSession = class extends TypedEmitter {
   #engine;
@@ -3016,6 +3023,7 @@ var MediaSession = class extends TypedEmitter {
   #local;
   #audioPos = 0;
   #paused = false;
+  #gain = 1;
   constructor(o) {
     super();
     ensureVoipWasm();
@@ -3289,6 +3297,7 @@ var MediaSession = class extends TypedEmitter {
         this.#audioPos += FRAME_SAMPLES;
         if (this.#audioPos >= this.#audioIn.length) this.#audioIn = void 0;
       }
+      applyGain(frame, this.#gain);
       if (this.#opus) {
         const enc2 = this.#opus.encode(Buffer.from(frame.buffer), FRAME_SAMPLES);
         this.#engine.handleEncodedAudio(this.#now(), enc2);
@@ -3323,6 +3332,14 @@ var MediaSession = class extends TypedEmitter {
     next.set(all.subarray(all.length - next.length));
     this.#audioIn = next;
     this.#audioPos = 0;
+  }
+  /** Loudness of what this call sends: 0 (silent) to 2 (twice as loud, loud peaks are clipped). Default 1. Takes effect at once, also for audio already queued. */
+  setVolume(gain) {
+    if (!Number.isFinite(gain) || gain < 0 || gain > 2) throw new Error("volume is a number from 0 to 2");
+    this.#gain = gain;
+  }
+  get volume() {
+    return this.#gain;
   }
   /** Hold the audio queue and freeze the picture; `resume()` goes on exactly where it stopped. The call carries silence meanwhile. */
   pause() {
@@ -20003,6 +20020,16 @@ var Client = class {
     if (o.replace) media.clearAudio();
     media.speak(pcm);
     return media.queuedSeconds;
+  }
+  /** Set how loud this call's outgoing audio is: 0 (silent) to 2 (twice as loud, peaks are clipped), 1 = unchanged. Works at once, also for queued audio. */
+  setCallVolume(callId, gain) {
+    const media = this.#calls.get(callId)?.media;
+    if (!media) throw new Error(`call ${callId} has no media path yet`);
+    media.setVolume(gain);
+  }
+  /** The outgoing volume of a call (1 = unchanged), or undefined when it has no media path. */
+  callVolume(callId) {
+    return this.#calls.get(callId)?.media?.volume;
   }
   /** Pause a running call's media: the queued audio is held (the call carries silence) and the picture freezes. */
   pauseMedia(callId) {

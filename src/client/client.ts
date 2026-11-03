@@ -2237,6 +2237,18 @@ export class Client {
 		return media.queuedSeconds
 	}
 
+	/** Set how loud this call's outgoing audio is: 0 (silent) to 2 (twice as loud, peaks are clipped), 1 = unchanged. Works at once, also for queued audio. */
+	setCallVolume(callId: string, gain: number): void {
+		const media = this.#calls.get(callId)?.media
+		if (!media) throw new Error(`call ${callId} has no media path yet`)
+		media.setVolume(gain)
+	}
+
+	/** The outgoing volume of a call (1 = unchanged), or undefined when it has no media path. */
+	callVolume(callId: string): number | undefined {
+		return this.#calls.get(callId)?.media?.volume
+	}
+
 	/** Pause a running call's media: the queued audio is held (the call carries silence) and the picture freezes. */
 	pauseMedia(callId: string): void {
 		const media = this.#calls.get(callId)?.media
