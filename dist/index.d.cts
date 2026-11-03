@@ -2055,6 +2055,10 @@ declare class MediaSession extends TypedEmitter<MediaEvents> {
      * capture that runs ahead of the call clock drops its oldest audio instead of falling behind.
      */
     feedMic(pcm: Int16Array): void;
+    /** Seconds of queued audio that are still to be played (0 while the call carries only silence). */
+    get queuedSeconds(): number;
+    /** Drop whatever is still queued: the call carries silence from the next tick on. */
+    clearAudio(): void;
     /** Say something (16 kHz mono PCM); queued after whatever is still playing. */
     speak(pcm: Int16Array): void;
     close(reason?: string): void;
@@ -2885,6 +2889,19 @@ declare class Client {
     setApprovalRequired(callId: string, enabled: boolean): Promise<void>;
     /** Creator of a call link: let a waiting person in, or turn them away. */
     answerWaitingRoom(callId: string, user: string, admit?: boolean): Promise<void>;
+    /**
+     * Play audio into a running call: an audio file path (mp3, ogg, wav, m4a, ...; needs ffmpeg) or 16 kHz mono PCM.
+     * By default it is queued after what is still playing; with `replace` the current audio is dropped first, so this is
+     * "change the music". The call must have its media path up (status `connected`). Returns the seconds now queued.
+     */
+    playInCall(callId: string, source: string | Int16Array, o?: {
+        replace?: boolean;
+        maxSeconds?: number;
+    }): Promise<number>;
+    /** Silence a running call (drops the audio that is still queued). The call itself goes on. */
+    stopAudio(callId: string): void;
+    /** Seconds of audio still queued in a call (0 when silent), or undefined when the call has no media path. */
+    queuedAudioSeconds(callId: string): number | undefined;
     /** Hang up a call we placed or answered (also cancels one that is still ringing). */
     endCall(callId: string): Promise<void>;
     /** Up to three reply buttons under a text (`buttonsMessage`). The tap arrives as a `message` event; see `parseButtonReply`. */

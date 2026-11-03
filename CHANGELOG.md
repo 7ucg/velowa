@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- New: control the audio of a running call. `client.playInCall(callId, fileOrPcm, { replace?, maxSeconds? })` plays a file (or 16 kHz mono PCM) into a call, queued after what is playing or, with `replace`, instead of it ("change the music"); `client.stopAudio(callId)` silences it; `client.queuedAudioSeconds(callId)` says how much is still queued. `MediaSession` gets `queuedSeconds` and `clearAudio()` for this. They work for any call with a media path: your own calls, answered calls, rooms and guests.
 - Fixed: after the account was linked again (a new device number), messages to groups showed "Waiting for this message" on every device. The memory of who already has our sender key was kept per group only, so the new key was never distributed. It is now kept per sender key (`group|senderKeyId`); old entries are dropped and the key goes out to all devices at the next send.
 - Fixed: the answer to a native-flow message (`sendInteractive` with `quickReply`, `singleSelect`, ...) and to a template button left `Message.text` empty. `messageText()` now returns the id of the tapped button or row for `interactiveResponseMessage` and `templateButtonReplyMessage`, as it already did for `buttonsResponseMessage` and `listResponseMessage`.
 

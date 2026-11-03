@@ -7,7 +7,7 @@ import {
 	type MessageContent,
 	type SendContentOptions,
 } from './features/message/send-content.js'
-import { resolveCallFiles, type CallFileOptions } from './features/call/media-files.js'
+import { decodeAudioFile, resolveCallFiles, type CallFileOptions } from './features/call/media-files.js'
 import type { LocalAudioOptions } from './features/call/local-audio.js'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
@@ -2206,6 +2206,39 @@ export class Client {
 		// The invitation may already carry the relay; otherwise the roster update after our accept does.
 		await this.#startGroupMedia(c, summary, o)
 		return c
+	}
+
+	/**
+	 * Play audio into a running call: an audio file path (mp3, ogg, wav, m4a, ...; needs ffmpeg) or 16 kHz mono PCM.
+	 * By default it is queued after what is still playing; with `replace` the current audio is dropped first, so this is
+	 * "change the music". The call must have its media path up (status `connected`). Returns the seconds now queued.
+	 */
+	async playInCall(
+		callId: string,
+		source: string | Int16Array,
+		o: { replace?: boolean; maxSeconds?: number } = {},
+	): Promise<number> {
+		const media = this.#calls.get(callId)?.media
+		if (!media) throw new Error(`call ${callId} has no media path yet`)
+		const pcm =
+			typeof source === 'string'
+				? await decodeAudioFile(source, o.maxSeconds ? { maxSeconds: o.maxSeconds } : {})
+				: source
+		if (o.replace) media.clearAudio()
+		media.speak(pcm)
+		return media.queuedSeconds
+	}
+
+	/** Silence a running call (drops the audio that is still queued). The call itself goes on. */
+	stopAudio(callId: string): void {
+		const media = this.#calls.get(callId)?.media
+		if (!media) throw new Error(`call ${callId} has no media path yet`)
+		media.clearAudio()
+	}
+
+	/** Seconds of audio still queued in a call (0 when silent), or undefined when the call has no media path. */
+	queuedAudioSeconds(callId: string): number | undefined {
+		return this.#calls.get(callId)?.media?.queuedSeconds
 	}
 
 	/** Hang up a call we placed or answered (also cancels one that is still ringing). */

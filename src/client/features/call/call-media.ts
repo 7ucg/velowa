@@ -487,6 +487,17 @@ export class MediaSession extends TypedEmitter<MediaEvents> {
 		this.#audioPos = 0
 	}
 
+	/** Seconds of queued audio that are still to be played (0 while the call carries only silence). */
+	get queuedSeconds(): number {
+		return this.#audioIn ? (this.#audioIn.length - this.#audioPos) / 16000 : 0
+	}
+
+	/** Drop whatever is still queued: the call carries silence from the next tick on. */
+	clearAudio(): void {
+		this.#audioIn = undefined
+		this.#audioPos = 0
+	}
+
 	/** Say something (16 kHz mono PCM); queued after whatever is still playing. */
 	speak(pcm: Int16Array): void {
 		const rest = this.#audioIn ? this.#audioIn.subarray(this.#audioPos) : new Int16Array(0)
