@@ -1517,7 +1517,7 @@ function restoreAppStateCollection(name, state) {
 }
 
 // src/client/client.ts
-var import_node_fs14 = require("fs");
+var import_node_fs15 = require("fs");
 
 // src/client/features/message/send-content.ts
 var import_promises2 = require("fs/promises");
@@ -1870,9 +1870,19 @@ function classifyServerFailure(node) {
   return byCode(node.attrs["code"]);
 }
 
+// src/client/auth-dir.ts
+var import_node_fs2 = require("fs");
+var import_node_os = require("os");
+var import_node_path = require("path");
+function resolveAuthDir(o) {
+  if (o.authDir !== void 0) return { dir: o.authDir, temporary: false };
+  if (o.guest) return { dir: (0, import_node_fs2.mkdtempSync)((0, import_node_path.join)((0, import_node_os.tmpdir)(), "velowa-guest-")), temporary: true };
+  return { dir: "auth", temporary: false };
+}
+
 // src/client/features/call/media-files.ts
 var import_node_child_process2 = require("child_process");
-var import_node_path = require("path");
+var import_node_path2 = require("path");
 
 // src/client/features/call/local-audio.ts
 var import_node_child_process = require("child_process");
@@ -1931,11 +1941,11 @@ function startLocalAudio(o, onMic, onError) {
 // src/client/features/call/call-media.ts
 var import_node_dgram = require("dgram");
 var import_node_module = require("module");
-var import_node_fs3 = require("fs");
+var import_node_fs4 = require("fs");
 var import_node_perf_hooks = require("perf_hooks");
 
 // src/voip-wasm.ts
-var import_node_fs2 = require("fs");
+var import_node_fs3 = require("fs");
 
 // src/wasm-voip/velowa_wasm_voip.js
 var CallEngine = class _CallEngine {
@@ -2949,7 +2959,7 @@ var ready2 = false;
 function ensureVoipWasm() {
   if (ready2) return;
   initSync2({
-    module: (0, import_node_fs2.readFileSync)(new URL("./wasm-voip/velowa_wasm_voip_bg.wasm", importMetaUrl))
+    module: (0, import_node_fs3.readFileSync)(new URL("./wasm-voip/velowa_wasm_voip_bg.wasm", importMetaUrl))
   });
   ready2 = true;
 }
@@ -2974,7 +2984,7 @@ function writeWav(path, pcm, rate = 16e3) {
   h.writeUInt16LE(16, 34);
   h.write("data", 36);
   h.writeUInt32LE(data.length, 40);
-  (0, import_node_fs3.writeFileSync)(path, Buffer.concat([h, data]));
+  (0, import_node_fs4.writeFileSync)(path, Buffer.concat([h, data]));
 }
 function splitAnnexB(data) {
   const starts = [];
@@ -3345,7 +3355,7 @@ var MediaSession = class extends TypedEmitter {
     }
     if (this.#videoTimer) clearInterval(this.#videoTimer);
     if (this.#recordVideoTo && this.#videoIn.length)
-      (0, import_node_fs3.writeFileSync)(this.#recordVideoTo, Buffer.concat(this.#videoIn));
+      (0, import_node_fs4.writeFileSync)(this.#recordVideoTo, Buffer.concat(this.#videoIn));
     for (const d of this.#decoders.values()) d.delete();
     this.#opus?.delete();
     if (this.#timer) clearTimeout(this.#timer);
@@ -3391,7 +3401,7 @@ function ffmpeg(args, limit) {
     );
   });
 }
-var input = (path) => ["-i", (0, import_node_path.resolve)(path)];
+var input = (path) => ["-i", (0, import_node_path2.resolve)(path)];
 async function decodeAudioFile(path, o = {}) {
   const seconds2 = Math.max(1, Math.min(o.maxSeconds ?? 600, 3600));
   const raw = await ffmpeg(
@@ -3457,12 +3467,12 @@ async function resolveCallFiles(o) {
 
 // src/client/client.ts
 var import_node_crypto20 = require("crypto");
-var import_node_path10 = require("path");
+var import_node_path11 = require("path");
 
 // src/auth/creds.ts
 var import_node_crypto = require("crypto");
-var import_node_fs4 = require("fs");
-var import_node_path2 = require("path");
+var import_node_fs5 = require("fs");
+var import_node_path3 = require("path");
 function initAuthCreds() {
   const signedIdentityKey = newIdentityKeyPair();
   const spk = newSignedPreKey(signedIdentityKey.privateKey, 1);
@@ -3496,38 +3506,38 @@ function reviver(_k, v) {
   return v;
 }
 function saveAuthCreds(path, creds) {
-  (0, import_node_fs4.mkdirSync)((0, import_node_path2.dirname)(path), { recursive: true, mode: 448 });
-  (0, import_node_fs4.writeFileSync)(path, JSON.stringify(creds, replacer, 2), { mode: 384 });
-  (0, import_node_fs4.chmodSync)(path, 384);
+  (0, import_node_fs5.mkdirSync)((0, import_node_path3.dirname)(path), { recursive: true, mode: 448 });
+  (0, import_node_fs5.writeFileSync)(path, JSON.stringify(creds, replacer, 2), { mode: 384 });
+  (0, import_node_fs5.chmodSync)(path, 384);
 }
 function loadAuthCreds(path) {
-  if (!(0, import_node_fs4.existsSync)(path)) return void 0;
-  const creds = JSON.parse((0, import_node_fs4.readFileSync)(path, "utf8"), reviver);
+  if (!(0, import_node_fs5.existsSync)(path)) return void 0;
+  const creds = JSON.parse((0, import_node_fs5.readFileSync)(path, "utf8"), reviver);
   creds.nextPreKeyId ??= 1;
   creds.pairingEphemeralKey ??= newIdentityKeyPair();
   return creds;
 }
 
 // src/auth/file-signal-storage.ts
-var import_node_fs5 = require("fs");
-var import_node_path3 = require("path");
+var import_node_fs6 = require("fs");
+var import_node_path4 = require("path");
 var FileSignalStorage = class {
   constructor(dir, identity, registrationId) {
     this.dir = dir;
     this.identity = identity;
     this.registrationId = registrationId;
     for (const sub of ["sessions", "identities", "prekeys", "signed-prekeys", "sender-keys"])
-      (0, import_node_fs5.mkdirSync)((0, import_node_path3.join)(dir, sub), { recursive: true, mode: 448 });
+      (0, import_node_fs6.mkdirSync)((0, import_node_path4.join)(dir, sub), { recursive: true, mode: 448 });
   }
   dir;
   identity;
   registrationId;
   #path(kind, id) {
-    return (0, import_node_path3.join)(this.dir, kind, encodeURIComponent(id));
+    return (0, import_node_path4.join)(this.dir, kind, encodeURIComponent(id));
   }
   #read(kind, id) {
     try {
-      return new Uint8Array((0, import_node_fs5.readFileSync)(this.#path(kind, id)));
+      return new Uint8Array((0, import_node_fs6.readFileSync)(this.#path(kind, id)));
     } catch (e) {
       if (e.code === "ENOENT") return void 0;
       throw e;
@@ -3536,14 +3546,14 @@ var FileSignalStorage = class {
   #write(kind, id, data) {
     const target = this.#path(kind, id);
     const tmp = `${target}.tmp`;
-    (0, import_node_fs5.writeFileSync)(tmp, data, { mode: 384 });
-    const fd = (0, import_node_fs5.openSync)(tmp, "r");
+    (0, import_node_fs6.writeFileSync)(tmp, data, { mode: 384 });
+    const fd = (0, import_node_fs6.openSync)(tmp, "r");
     try {
-      (0, import_node_fs5.fsyncSync)(fd);
+      (0, import_node_fs6.fsyncSync)(fd);
     } finally {
-      (0, import_node_fs5.closeSync)(fd);
+      (0, import_node_fs6.closeSync)(fd);
     }
-    (0, import_node_fs5.renameSync)(tmp, target);
+    (0, import_node_fs6.renameSync)(tmp, target);
   }
   getIdentityKeyPair() {
     return Promise.resolve(this.identity);
@@ -3573,7 +3583,7 @@ var FileSignalStorage = class {
     return Promise.resolve();
   }
   removePreKey(id) {
-    (0, import_node_fs5.rmSync)(this.#path("prekeys", String(id)), { force: true });
+    (0, import_node_fs6.rmSync)(this.#path("prekeys", String(id)), { force: true });
     return Promise.resolve();
   }
   loadSignedPreKey(id) {
@@ -3585,7 +3595,7 @@ var FileSignalStorage = class {
   }
   /** Destroy a rotated-out signed pre-key (its private key must not outlive the time messages can still use it). */
   removeSignedPreKey(id) {
-    (0, import_node_fs5.rmSync)(this.#path("signed-prekeys", String(id)), { force: true });
+    (0, import_node_fs6.rmSync)(this.#path("signed-prekeys", String(id)), { force: true });
     return Promise.resolve();
   }
   loadSenderKey(key) {
@@ -3598,13 +3608,13 @@ var FileSignalStorage = class {
 };
 
 // src/logging/protocol-logger.ts
-var import_node_fs8 = require("fs");
-var import_node_path5 = require("path");
+var import_node_fs9 = require("fs");
+var import_node_path6 = require("path");
 
 // src/logging/storage.ts
-var import_node_fs6 = require("fs");
 var import_node_fs7 = require("fs");
-var import_node_path4 = require("path");
+var import_node_fs8 = require("fs");
+var import_node_path5 = require("path");
 var import_promises3 = require("stream/promises");
 var import_node_zlib = require("zlib");
 var DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -3613,20 +3623,20 @@ var KEEP_FILE = ".keep";
 var SESSION_FILE = "session.json";
 function dirBytes(path) {
   let total = 0;
-  for (const f of (0, import_node_fs7.readdirSync)(path, { withFileTypes: true })) {
-    if (f.isFile()) total += (0, import_node_fs7.lstatSync)((0, import_node_path4.join)(path, f.name)).size;
+  for (const f of (0, import_node_fs8.readdirSync)(path, { withFileTypes: true })) {
+    if (f.isFile()) total += (0, import_node_fs8.lstatSync)((0, import_node_path5.join)(path, f.name)).size;
   }
   return total;
 }
 function readMeta(path) {
   try {
-    return JSON.parse((0, import_node_fs7.readFileSync)((0, import_node_path4.join)(path, SESSION_FILE), "utf8"));
+    return JSON.parse((0, import_node_fs8.readFileSync)((0, import_node_path5.join)(path, SESSION_FILE), "utf8"));
   } catch {
     return void 0;
   }
 }
 function describe(path, name) {
-  const files = (0, import_node_fs7.readdirSync)(path);
+  const files = (0, import_node_fs8.readdirSync)(path);
   const meta = readMeta(path);
   const legacy = LEGACY.exec(name.split("/").pop());
   if (!meta && !(legacy && files.some((f) => f.startsWith("events.jsonl")))) return void 0;
@@ -3648,17 +3658,17 @@ function listSessions(dir) {
   const out = [];
   let entries;
   try {
-    entries = (0, import_node_fs7.readdirSync)(dir, { withFileTypes: true });
+    entries = (0, import_node_fs8.readdirSync)(dir, { withFileTypes: true });
   } catch {
     return out;
   }
   for (const e of entries) {
     if (!e.isDirectory()) continue;
-    const path = (0, import_node_path4.join)(dir, e.name);
+    const path = (0, import_node_path5.join)(dir, e.name);
     if (DAY.test(e.name)) {
-      for (const s of (0, import_node_fs7.readdirSync)(path, { withFileTypes: true })) {
+      for (const s of (0, import_node_fs8.readdirSync)(path, { withFileTypes: true })) {
         if (!s.isDirectory()) continue;
-        const info = describe((0, import_node_path4.join)(path, s.name), `${e.name}/${s.name}`);
+        const info = describe((0, import_node_path5.join)(path, s.name), `${e.name}/${s.name}`);
         if (info) out.push(info);
       }
     } else {
@@ -3680,16 +3690,16 @@ function migrateFlatSessions(dir) {
   for (const s of listSessions(dir)) {
     if (s.name.includes("/")) continue;
     const { day, time } = dayAndTime(s.startedAt);
-    const target = (0, import_node_path4.join)(dir, day, `${time}-${s.label}`);
+    const target = (0, import_node_path5.join)(dir, day, `${time}-${s.label}`);
     try {
-      (0, import_node_fs7.mkdirSync)((0, import_node_path4.join)(dir, day), { recursive: true, mode: 448 });
-      (0, import_node_fs7.renameSync)(s.path, target);
+      (0, import_node_fs8.mkdirSync)((0, import_node_path5.join)(dir, day), { recursive: true, mode: 448 });
+      (0, import_node_fs8.renameSync)(s.path, target);
       if (!readMeta(target)) {
         const newest = Math.max(
-          ...(0, import_node_fs7.readdirSync)(target).map((f) => (0, import_node_fs7.lstatSync)((0, import_node_path4.join)(target, f)).mtimeMs)
+          ...(0, import_node_fs8.readdirSync)(target).map((f) => (0, import_node_fs8.lstatSync)((0, import_node_path5.join)(target, f)).mtimeMs)
         );
-        (0, import_node_fs7.writeFileSync)(
-          (0, import_node_path4.join)(target, SESSION_FILE),
+        (0, import_node_fs8.writeFileSync)(
+          (0, import_node_path5.join)(target, SESSION_FILE),
           JSON.stringify(
             {
               version: 1,
@@ -3712,24 +3722,24 @@ function migrateFlatSessions(dir) {
 }
 async function compressSession(path) {
   let saved = 0;
-  for (const f of (0, import_node_fs7.readdirSync)(path)) {
+  for (const f of (0, import_node_fs8.readdirSync)(path)) {
     if (f.endsWith(".gz") || f === SESSION_FILE || f === KEEP_FILE) continue;
     if (!/\.(jsonl|log)$/.test(f)) continue;
-    const from = (0, import_node_path4.join)(path, f);
-    const before = (0, import_node_fs7.lstatSync)(from).size;
+    const from = (0, import_node_path5.join)(path, f);
+    const before = (0, import_node_fs8.lstatSync)(from).size;
     if (before < 4096) continue;
     const to = `${from}.gz`;
     try {
       await (0, import_promises3.pipeline)(
-        (0, import_node_fs6.createReadStream)(from),
+        (0, import_node_fs7.createReadStream)(from),
         (0, import_node_zlib.createGzip)({ level: 9 }),
-        (0, import_node_fs6.createWriteStream)(to, { mode: 384 })
+        (0, import_node_fs7.createWriteStream)(to, { mode: 384 })
       );
-      saved += before - (0, import_node_fs7.lstatSync)(to).size;
-      (0, import_node_fs7.unlinkSync)(from);
+      saved += before - (0, import_node_fs8.lstatSync)(to).size;
+      (0, import_node_fs8.unlinkSync)(from);
     } catch {
       try {
-        (0, import_node_fs7.unlinkSync)(to);
+        (0, import_node_fs8.unlinkSync)(to);
       } catch {
       }
     }
@@ -3738,8 +3748,8 @@ async function compressSession(path) {
     const meta = readMeta(path);
     if (meta) {
       try {
-        (0, import_node_fs7.writeFileSync)(
-          (0, import_node_path4.join)(path, SESSION_FILE),
+        (0, import_node_fs8.writeFileSync)(
+          (0, import_node_path5.join)(path, SESSION_FILE),
           JSON.stringify({ ...meta, compressed: true }, null, 2) + "\n"
         );
       } catch {
@@ -3757,7 +3767,7 @@ function pruneSessions(dir, retention = {}, keep = []) {
   const gone = [];
   const remove = (s) => {
     try {
-      (0, import_node_fs7.rmSync)(s.path, { recursive: true, force: true });
+      (0, import_node_fs8.rmSync)(s.path, { recursive: true, force: true });
       gone.push(s);
     } catch {
     }
@@ -3788,10 +3798,10 @@ function pruneSessions(dir, retention = {}, keep = []) {
     }
   }
   try {
-    for (const e of (0, import_node_fs7.readdirSync)(dir, { withFileTypes: true }))
+    for (const e of (0, import_node_fs8.readdirSync)(dir, { withFileTypes: true }))
       if (e.isDirectory() && DAY.test(e.name)) {
         try {
-          (0, import_node_fs7.rmdirSync)((0, import_node_path4.join)(dir, e.name));
+          (0, import_node_fs8.rmdirSync)((0, import_node_path5.join)(dir, e.name));
         } catch {
         }
       }
@@ -3836,10 +3846,10 @@ var ProtocolLogger = class {
     this.#rotateBytes = (options.rotateMB ?? 32) * 1024 * 1024;
     if (!this.enabled) return;
     const { day, time } = dayAndTime(this.#startedAt);
-    this.sessionDir = (0, import_node_path5.join)(this.#baseDir, day, `${time}-${this.#label}`);
-    (0, import_node_fs8.mkdirSync)(this.sessionDir, { recursive: true, mode: 448 });
+    this.sessionDir = (0, import_node_path6.join)(this.#baseDir, day, `${time}-${this.#label}`);
+    (0, import_node_fs9.mkdirSync)(this.sessionDir, { recursive: true, mode: 448 });
     this.#writeSession();
-    if (options.keep) this.#tryWrite((0, import_node_path5.join)(this.sessionDir, KEEP_FILE), "");
+    if (options.keep) this.#tryWrite((0, import_node_path6.join)(this.sessionDir, KEEP_FILE), "");
     this.#linkLatest();
     this.event("logger.start", { pid: process.pid, node: process.version, argv: process.argv });
     const dir = this.#baseDir;
@@ -3858,7 +3868,7 @@ var ProtocolLogger = class {
     const files = {};
     for (const [name, t] of this.#totals) files[name] = t;
     this.#tryWrite(
-      (0, import_node_path5.join)(this.sessionDir, SESSION_FILE),
+      (0, import_node_path6.join)(this.sessionDir, SESSION_FILE),
       JSON.stringify(
         {
           version: 1,
@@ -3879,14 +3889,14 @@ var ProtocolLogger = class {
   #linkLatest() {
     if (!this.sessionDir) return;
     for (const name of ["latest", `latest-${this.#label}`]) {
-      const link = (0, import_node_path5.join)(this.#baseDir, name);
+      const link = (0, import_node_path6.join)(this.#baseDir, name);
       const tmp = `${link}.${process.pid}.tmp`;
       try {
-        (0, import_node_fs8.symlinkSync)((0, import_node_path5.relative)(this.#baseDir, this.sessionDir), tmp, "dir");
-        (0, import_node_fs8.renameSync)(tmp, link);
+        (0, import_node_fs9.symlinkSync)((0, import_node_path6.relative)(this.#baseDir, this.sessionDir), tmp, "dir");
+        (0, import_node_fs9.renameSync)(tmp, link);
       } catch {
         try {
-          (0, import_node_fs8.unlinkSync)(tmp);
+          (0, import_node_fs9.unlinkSync)(tmp);
         } catch {
         }
       }
@@ -3894,7 +3904,7 @@ var ProtocolLogger = class {
   }
   #tryWrite(path, data) {
     try {
-      (0, import_node_fs8.writeFileSync)(path, data, { mode: 384 });
+      (0, import_node_fs9.writeFileSync)(path, data, { mode: 384 });
     } catch {
     }
   }
@@ -3944,7 +3954,7 @@ ${toXml(node)}
     this.#writeSession({ reason, detail });
     for (const f of this.#files.values()) {
       try {
-        (0, import_node_fs8.closeSync)(f.fd);
+        (0, import_node_fs9.closeSync)(f.fd);
       } catch {
       }
     }
@@ -3963,13 +3973,13 @@ ${toXml(node)}
       const data = Buffer.from(line);
       let f = this.#files.get(file);
       if (f && this.#rotateBytes > 0 && f.bytes > 0 && f.bytes + data.length > this.#rotateBytes) {
-        (0, import_node_fs8.closeSync)(f.fd);
+        (0, import_node_fs9.closeSync)(f.fd);
         f.part++;
         const dot = file.lastIndexOf(".");
         const part = `${file.slice(0, dot)}.${String(f.part).padStart(4, "0")}${file.slice(dot)}`;
-        (0, import_node_fs8.renameSync)((0, import_node_path5.join)(this.sessionDir, file), (0, import_node_path5.join)(this.sessionDir, part));
+        (0, import_node_fs9.renameSync)((0, import_node_path6.join)(this.sessionDir, file), (0, import_node_path6.join)(this.sessionDir, part));
         f = {
-          fd: (0, import_node_fs8.openSync)((0, import_node_path5.join)(this.sessionDir, file), "a", 384),
+          fd: (0, import_node_fs9.openSync)((0, import_node_path6.join)(this.sessionDir, file), "a", 384),
           bytes: 0,
           lines: 0,
           part: f.part
@@ -3977,10 +3987,10 @@ ${toXml(node)}
         this.#files.set(file, f);
       }
       if (!f) {
-        f = { fd: (0, import_node_fs8.openSync)((0, import_node_path5.join)(this.sessionDir, file), "a", 384), bytes: 0, lines: 0, part: 0 };
+        f = { fd: (0, import_node_fs9.openSync)((0, import_node_path6.join)(this.sessionDir, file), "a", 384), bytes: 0, lines: 0, part: 0 };
         this.#files.set(file, f);
       }
-      (0, import_node_fs8.writeSync)(f.fd, data);
+      (0, import_node_fs9.writeSync)(f.fd, data);
       f.bytes += data.length;
       f.lines++;
       const t = this.#totals.get(file) ?? { bytes: 0, lines: 0 };
@@ -4385,13 +4395,13 @@ function curlGet(url, headers) {
 var import_node_crypto4 = require("crypto");
 
 // src/client/proto.ts
-var import_node_fs9 = require("fs");
+var import_node_fs10 = require("fs");
 var import_node_url = require("url");
 var import_protobufjs = __toESM(require("protobufjs"), 1);
 function schemaPath() {
   for (const rel of ["./proto/WAProto.proto", "../../proto/WAProto.proto"]) {
     const path = (0, import_node_url.fileURLToPath)(new URL(rel, importMetaUrl));
-    if ((0, import_node_fs9.existsSync)(path)) return path;
+    if ((0, import_node_fs10.existsSync)(path)) return path;
   }
   throw new Error("WAProto.proto not found next to the library");
 }
@@ -5883,8 +5893,8 @@ var AntiBan = class {
 
 // src/client/sender.ts
 var import_node_crypto11 = require("crypto");
-var import_node_fs10 = require("fs");
-var import_node_path6 = require("path");
+var import_node_fs11 = require("fs");
+var import_node_path7 = require("path");
 
 // src/client/reporting.ts
 var import_node_crypto10 = require("crypto");
@@ -6067,7 +6077,7 @@ function generateMessageId(meId) {
 var Sender = class {
   constructor(d) {
     this.d = d;
-    this.#memory = d.senderKeyMemoryPath && (0, import_node_fs10.existsSync)(d.senderKeyMemoryPath) ? JSON.parse((0, import_node_fs10.readFileSync)(d.senderKeyMemoryPath, "utf8")) : {};
+    this.#memory = d.senderKeyMemoryPath && (0, import_node_fs11.existsSync)(d.senderKeyMemoryPath) ? JSON.parse((0, import_node_fs11.readFileSync)(d.senderKeyMemoryPath, "utf8")) : {};
   }
   d;
   /** Recently sent messages, kept so a device that could not decrypt one can be answered (retry receipts). */
@@ -6591,9 +6601,9 @@ var Sender = class {
   #saveMemory() {
     const path = this.d.senderKeyMemoryPath;
     if (!path) return;
-    (0, import_node_fs10.mkdirSync)((0, import_node_path6.dirname)(path), { recursive: true, mode: 448 });
-    (0, import_node_fs10.writeFileSync)(`${path}.tmp`, JSON.stringify(this.#memory), { mode: 384 });
-    (0, import_node_fs10.renameSync)(`${path}.tmp`, path);
+    (0, import_node_fs11.mkdirSync)((0, import_node_path7.dirname)(path), { recursive: true, mode: 448 });
+    (0, import_node_fs11.writeFileSync)(`${path}.tmp`, JSON.stringify(this.#memory), { mode: 384 });
+    (0, import_node_fs11.renameSync)(`${path}.tmp`, path);
   }
 };
 function channelPost(message) {
@@ -6651,8 +6661,8 @@ function parseBundle(user) {
 }
 
 // src/client/features/chat/appstate-sync.ts
-var import_node_fs11 = require("fs");
-var import_node_path7 = require("path");
+var import_node_fs12 = require("fs");
+var import_node_path8 = require("path");
 
 // src/client/features/message/media.ts
 var import_node_crypto12 = require("crypto");
@@ -6975,13 +6985,13 @@ var b64 = (b) => Buffer.from(b).toString("base64");
 var AppStateSync = class {
   constructor(d) {
     this.d = d;
-    (0, import_node_fs11.mkdirSync)((0, import_node_path7.join)(d.dir, "keys"), { recursive: true, mode: 448 });
-    for (const f of (0, import_node_fs11.readdirSync)((0, import_node_path7.join)(d.dir, "keys"))) {
+    (0, import_node_fs12.mkdirSync)((0, import_node_path8.join)(d.dir, "keys"), { recursive: true, mode: 448 });
+    for (const f of (0, import_node_fs12.readdirSync)((0, import_node_path8.join)(d.dir, "keys"))) {
       if (f === ".latest") continue;
-      this.#keys.set(decodeURIComponent(f), new Uint8Array((0, import_node_fs11.readFileSync)((0, import_node_path7.join)(d.dir, "keys", f))));
+      this.#keys.set(decodeURIComponent(f), new Uint8Array((0, import_node_fs12.readFileSync)((0, import_node_path8.join)(d.dir, "keys", f))));
     }
-    const latest = (0, import_node_path7.join)(d.dir, "keys", ".latest");
-    if ((0, import_node_fs11.existsSync)(latest)) this.#latestKeyId = (0, import_node_fs11.readFileSync)(latest, "utf8");
+    const latest = (0, import_node_path8.join)(d.dir, "keys", ".latest");
+    if ((0, import_node_fs12.existsSync)(latest)) this.#latestKeyId = (0, import_node_fs12.readFileSync)(latest, "utf8");
   }
   d;
   #keys = /* @__PURE__ */ new Map();
@@ -6997,10 +7007,10 @@ var AppStateSync = class {
     for (const k of keys) {
       const id = b64(k.keyId);
       this.#keys.set(id, k.keyData);
-      this.#write((0, import_node_path7.join)(this.d.dir, "keys", encodeURIComponent(id)), k.keyData);
+      this.#write((0, import_node_path8.join)(this.d.dir, "keys", encodeURIComponent(id)), k.keyData);
       this.#latestKeyId = id;
     }
-    if (this.#latestKeyId) this.#write((0, import_node_path7.join)(this.d.dir, "keys", ".latest"), this.#latestKeyId);
+    if (this.#latestKeyId) this.#write((0, import_node_path8.join)(this.d.dir, "keys", ".latest"), this.#latestKeyId);
     this.d.logger.event("appstate.keys-added", { count: keys.length });
   }
   /**
@@ -7079,7 +7089,7 @@ var AppStateSync = class {
     for (const name of names) {
       assertKnown(name);
       this.#collections.delete(name);
-      (0, import_node_fs11.rmSync)((0, import_node_path7.join)(this.d.dir, `${name}.state`), { force: true });
+      (0, import_node_fs12.rmSync)((0, import_node_path8.join)(this.d.dir, `${name}.state`), { force: true });
     }
   }
   /** Sync the given collections (serialised: concurrent calls queue up). */
@@ -7091,8 +7101,8 @@ var AppStateSync = class {
     assertKnown(name);
     let c = this.#collections.get(name);
     if (!c) {
-      const p = (0, import_node_path7.join)(this.d.dir, `${name}.state`);
-      c = (0, import_node_fs11.existsSync)(p) ? restoreAppStateCollection(name, new Uint8Array((0, import_node_fs11.readFileSync)(p))) : newAppStateCollection(name);
+      const p = (0, import_node_path8.join)(this.d.dir, `${name}.state`);
+      c = (0, import_node_fs12.existsSync)(p) ? restoreAppStateCollection(name, new Uint8Array((0, import_node_fs12.readFileSync)(p))) : newAppStateCollection(name);
       this.#collections.set(name, c);
     }
     return c;
@@ -7101,9 +7111,9 @@ var AppStateSync = class {
     assertKnown(name);
     let m = this.#macs.get(name);
     if (!m) {
-      const p = (0, import_node_path7.join)(this.d.dir, `${name}.macs.json`);
+      const p = (0, import_node_path8.join)(this.d.dir, `${name}.macs.json`);
       m = new Map(
-        (0, import_node_fs11.existsSync)(p) ? Object.entries(JSON.parse((0, import_node_fs11.readFileSync)(p, "utf8"))) : []
+        (0, import_node_fs12.existsSync)(p) ? Object.entries(JSON.parse((0, import_node_fs12.readFileSync)(p, "utf8"))) : []
       );
       this.#macs.set(name, m);
     }
@@ -7111,15 +7121,15 @@ var AppStateSync = class {
   }
   #persist(name) {
     assertKnown(name);
-    this.#write((0, import_node_path7.join)(this.d.dir, `${name}.state`), this.#collection(name).serializeState());
+    this.#write((0, import_node_path8.join)(this.d.dir, `${name}.state`), this.#collection(name).serializeState());
     this.#write(
-      (0, import_node_path7.join)(this.d.dir, `${name}.macs.json`),
+      (0, import_node_path8.join)(this.d.dir, `${name}.macs.json`),
       JSON.stringify(Object.fromEntries(this.#macsOf(name)))
     );
   }
   #write(path, data) {
-    (0, import_node_fs11.writeFileSync)(`${path}.tmp`, data, { mode: 384 });
-    (0, import_node_fs11.renameSync)(`${path}.tmp`, path);
+    (0, import_node_fs12.writeFileSync)(`${path}.tmp`, data, { mode: 384 });
+    (0, import_node_fs12.renameSync)(`${path}.tmp`, path);
   }
   #missing = /* @__PURE__ */ new Map();
   #requestedAt = /* @__PURE__ */ new Map();
@@ -8594,14 +8604,14 @@ var Communities = class {
 };
 
 // src/client/lid-map.ts
-var import_node_fs12 = require("fs");
-var import_node_path8 = require("path");
+var import_node_fs13 = require("fs");
+var import_node_path9 = require("path");
 var LidMap = class {
   constructor(path) {
     this.path = path;
-    if (path && (0, import_node_fs12.existsSync)(path)) {
+    if (path && (0, import_node_fs13.existsSync)(path)) {
       for (const [pn, lid] of Object.entries(
-        JSON.parse((0, import_node_fs12.readFileSync)(path, "utf8"))
+        JSON.parse((0, import_node_fs13.readFileSync)(path, "utf8"))
       )) {
         this.#pnToLid.set(pn, lid);
         this.#lidToPn.set(lid, pn);
@@ -8651,11 +8661,11 @@ var LidMap = class {
   }
   #save() {
     if (!this.path) return;
-    (0, import_node_fs12.mkdirSync)((0, import_node_path8.dirname)(this.path), { recursive: true, mode: 448 });
-    (0, import_node_fs12.writeFileSync)(`${this.path}.tmp`, JSON.stringify(Object.fromEntries(this.#pnToLid)), {
+    (0, import_node_fs13.mkdirSync)((0, import_node_path9.dirname)(this.path), { recursive: true, mode: 448 });
+    (0, import_node_fs13.writeFileSync)(`${this.path}.tmp`, JSON.stringify(Object.fromEntries(this.#pnToLid)), {
       mode: 384
     });
-    (0, import_node_fs12.renameSync)(`${this.path}.tmp`, this.path);
+    (0, import_node_fs13.renameSync)(`${this.path}.tmp`, this.path);
   }
 };
 
@@ -9631,8 +9641,8 @@ function decryptMediaRetry(media, mediaKey, msgId) {
 }
 
 // src/client/features/contact/tctoken.ts
-var import_node_fs13 = require("fs");
-var import_node_path9 = require("path");
+var import_node_fs14 = require("fs");
+var import_node_path10 = require("path");
 var BUCKET = 604800;
 var BUCKETS = 4;
 var isTcTokenExpired = (t, now = Date.now() / 1e3) => {
@@ -9650,10 +9660,10 @@ var bare = (jid) => jid.replace(/:\d+@/, "@");
 var TcTokens = class {
   constructor(path) {
     this.path = path;
-    if (path && (0, import_node_fs13.existsSync)(path)) {
+    if (path && (0, import_node_fs14.existsSync)(path)) {
       try {
         for (const [k, v] of Object.entries(
-          JSON.parse((0, import_node_fs13.readFileSync)(path, "utf8"))
+          JSON.parse((0, import_node_fs14.readFileSync)(path, "utf8"))
         ))
           this.#data.set(k, v);
       } catch {
@@ -9665,10 +9675,10 @@ var TcTokens = class {
   #issuing = /* @__PURE__ */ new Set();
   #save() {
     if (!this.path) return;
-    (0, import_node_fs13.mkdirSync)((0, import_node_path9.dirname)(this.path), { recursive: true, mode: 448 });
+    (0, import_node_fs14.mkdirSync)((0, import_node_path10.dirname)(this.path), { recursive: true, mode: 448 });
     const tmp = `${this.path}.tmp`;
-    (0, import_node_fs13.writeFileSync)(tmp, JSON.stringify(Object.fromEntries(this.#data)), { mode: 384 });
-    (0, import_node_fs13.renameSync)(tmp, this.path);
+    (0, import_node_fs14.writeFileSync)(tmp, JSON.stringify(Object.fromEntries(this.#data)), { mode: 384 });
+    (0, import_node_fs14.renameSync)(tmp, this.path);
   }
   /** The token to attach to a message for `jid`, if we hold a fresh one. */
   tokenFor(jid) {
@@ -18370,6 +18380,8 @@ var Client = class {
   #stopped = false;
   /** Set when the server ended the session for good (see `classifyServerFailure`): no reconnect, reported on close. */
   #terminal;
+  /** A guest's private auth folder, removed again on `close()`. */
+  #guestTmp;
   #isOpen = false;
   #mediaConn;
   #appState;
@@ -18385,11 +18397,12 @@ var Client = class {
     if (options.customPairingCode !== void 0) normalizePairingCode(options.customPairingCode);
     this.#options = options;
     this.#isGuest = Boolean(options.guest);
-    const dir = options.authDir ?? "auth";
-    this.#credsPath = (0, import_node_path10.join)(dir, "creds.json");
-    this.#signalDir = (0, import_node_path10.join)(dir, "signal");
+    const { dir, temporary } = resolveAuthDir(options);
+    this.#guestTmp = temporary ? dir : void 0;
+    this.#credsPath = (0, import_node_path11.join)(dir, "creds.json");
+    this.#signalDir = (0, import_node_path11.join)(dir, "signal");
     this.#autoRecover = options.autoRecover !== false;
-    this.#tcTokens = new TcTokens((0, import_node_path10.join)(dir, "signal", "tctokens.json"));
+    this.#tcTokens = new TcTokens((0, import_node_path11.join)(dir, "signal", "tctokens.json"));
     this.logger = options.logger ?? new ProtocolLogger({ label: "client" });
     this.#creds = this.#isGuest ? initAuthCreds() : loadAuthCreds(this.#credsPath) ?? initAuthCreds();
     saveAuthCreds(this.#credsPath, this.#creds);
@@ -19689,38 +19702,38 @@ var Client = class {
         this.#isGuest ? this.#options.guest.guestName : void 0
       )
     );
-    const join6 = parseLinkJoinAck(ack, token);
-    if (this.#isGuest && join6.inWaitingRoom && this.#guestSession)
+    const join7 = parseLinkJoinAck(ack, token);
+    if (this.#isGuest && join7.inWaitingRoom && this.#guestSession)
       void guestPreFlightLog("guest_calling_waiting_room_entered", this.#guestSession, this.#config);
     const user = (j) => j.replace(/:\d+@/, "@");
-    const session = new GroupSession(join6.callId, join6.creator, own);
+    const session = new GroupSession(join7.callId, join7.creator, own);
     const state = {
-      callId: join6.callId,
-      peer: user(join6.creator),
-      creator: join6.creator,
+      callId: join7.callId,
+      peer: user(join7.creator),
+      creator: join7.creator,
       direction: "outgoing",
-      video: join6.media === "video",
+      video: join7.media === "video",
       devices: [],
-      status: join6.admitted ? "connected" : "ringing",
+      status: join7.admitted ? "connected" : "ringing",
       startedAt: Date.now(),
       groupSession: session,
-      members: /* @__PURE__ */ new Set([user(join6.creator), user(own)]),
+      members: /* @__PURE__ */ new Set([user(join7.creator), user(own)]),
       mediaOptions: pickMediaOptions(o),
-      ...join6.inWaitingRoom && { waiting: true },
+      ...join7.inWaitingRoom && { waiting: true },
       awaitsRelay: true
     };
-    this.#calls.set(join6.callId, state);
+    this.#calls.set(join7.callId, state);
     try {
-      if (join6.admitted) {
+      if (join7.admitted) {
         this.#startHeartbeat(state);
       } else this.#startWaitingHeartbeat(state);
     } catch (e) {
       try {
         receiver.sendNode(
           buildTerminate(
-            join6.callId,
-            `${join6.callId}@call`,
-            join6.creator,
+            join7.callId,
+            `${join7.callId}@call`,
+            join7.creator,
             receiver.nextId()
           )
         );
@@ -20223,9 +20236,9 @@ var Client = class {
     }
     this.close("logged-out");
     if (o.deleteAuth) {
-      (0, import_node_fs14.rmSync)(this.#credsPath, { force: true });
-      (0, import_node_fs14.rmSync)(this.#signalDir, { recursive: true, force: true });
-      (0, import_node_fs14.rmSync)((0, import_node_path10.join)(this.#signalDir, "..", "app-state"), { recursive: true, force: true });
+      (0, import_node_fs15.rmSync)(this.#credsPath, { force: true });
+      (0, import_node_fs15.rmSync)(this.#signalDir, { recursive: true, force: true });
+      (0, import_node_fs15.rmSync)((0, import_node_path11.join)(this.#signalDir, "..", "app-state"), { recursive: true, force: true });
     }
   }
   /** Close the connection and stop reconnecting. */
@@ -20234,6 +20247,7 @@ var Client = class {
     this.#teardown();
     this.#conn?.close(reason);
     this.logger.close(reason);
+    if (this.#guestTmp) (0, import_node_fs15.rmSync)(this.#guestTmp, { recursive: true, force: true });
   }
   // ---- internals -----------------------------------------------------------------------------
   async #resolveVersion() {
@@ -20504,7 +20518,7 @@ var Client = class {
     await storage.storeSignedPreKey(creds.signedPreKey.keyId, creds.signedPreKey.record);
     this.#signalStorage = storage;
     const cipher = createSignalCipher(storage);
-    const lids = new LidMap((0, import_node_path10.join)(this.#signalDir, "lid-map.json"));
+    const lids = new LidMap((0, import_node_path11.join)(this.#signalDir, "lid-map.json"));
     if (creds.me?.lid) lids.set(creds.me.id, creds.me.lid);
     const receiver = new Receiver({
       creds,
@@ -20602,7 +20616,7 @@ var Client = class {
     });
     this.#receiver = receiver;
     this.#appState = new AppStateSync({
-      dir: (0, import_node_path10.join)(this.#signalDir, "..", "app-state"),
+      dir: (0, import_node_path11.join)(this.#signalDir, "..", "app-state"),
       request: (n) => receiver.request(n),
       logger: this.logger,
       onEvent: (e) => this.#onAppState(e),
@@ -20622,7 +20636,7 @@ var Client = class {
       cipher,
       receiver,
       logger: this.logger,
-      senderKeyMemoryPath: (0, import_node_path10.join)(this.#signalDir, "sender-key-memory.json"),
+      senderKeyMemoryPath: (0, import_node_path11.join)(this.#signalDir, "sender-key-memory.json"),
       tc: this.#tcTokens,
       onSent: (id, to, m) => {
         receiver.rememberOwn(id, to, m);

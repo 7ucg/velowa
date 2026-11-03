@@ -8,6 +8,7 @@ import {
 	type SendContentOptions,
 } from './features/message/send-content.js'
 import { classifyServerFailure, type ServerFailure } from './server-failure.js'
+import { resolveAuthDir } from './auth-dir.js'
 import { decodeAudioFile, resolveCallFiles, type CallFileOptions } from './features/call/media-files.js'
 import type { LocalAudioOptions } from './features/call/local-audio.js'
 import { randomBytes } from 'node:crypto'
@@ -295,6 +296,8 @@ export class Client {
 	#stopped = false
 	/** Set when the server ended the session for good (see `classifyServerFailure`): no reconnect, reported on close. */
 	#terminal: ServerFailure | undefined
+	/** A guest's private auth folder, removed again on `close()`. */
+	#guestTmp: string | undefined
 	#isOpen = false
 	#mediaConn: media.MediaConn | undefined
 	#appState: AppStateSync | undefined
@@ -313,7 +316,9 @@ export class Client {
 		if (options.customPairingCode !== undefined) normalizePairingCode(options.customPairingCode)
 		this.#options = options
 		this.#isGuest = Boolean(options.guest)
-		const dir = options.authDir ?? 'auth'
+		// A guest never shares the account folder (see resolveAuthDir): its credentials would overwrite the account's.
+		const { dir, temporary } = resolveAuthDir(options)
+		this.#guestTmp = temporary ? dir : undefined
 		this.#credsPath = join(dir, 'creds.json')
 		this.#signalDir = join(dir, 'signal')
 		this.#autoRecover = options.autoRecover !== false
@@ -2550,6 +2555,7 @@ export class Client {
 		this.#teardown()
 		this.#conn?.close(reason)
 		this.logger.close(reason)
+		if (this.#guestTmp) rmSync(this.#guestTmp, { recursive: true, force: true })
 	}
 
 	// ---- internals -----------------------------------------------------------------------------

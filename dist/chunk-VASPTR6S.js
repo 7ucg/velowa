@@ -11611,9 +11611,19 @@ function classifyServerFailure(node) {
   return byCode(node.attrs["code"]);
 }
 
+// src/client/auth-dir.ts
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
+import { join as join2 } from "path";
+function resolveAuthDir(o) {
+  if (o.authDir !== void 0) return { dir: o.authDir, temporary: false };
+  if (o.guest) return { dir: mkdtempSync(join2(tmpdir(), "velowa-guest-")), temporary: true };
+  return { dir: "auth", temporary: false };
+}
+
 // src/client/client.ts
 import { randomBytes as randomBytes12 } from "crypto";
-import { join as join4 } from "path";
+import { join as join5 } from "path";
 
 // src/auth/creds.ts
 import { randomBytes as randomBytes3, randomInt } from "crypto";
@@ -11675,20 +11685,20 @@ import {
   openSync as openSync2,
   closeSync as closeSync2
 } from "fs";
-import { join as join2 } from "path";
+import { join as join3 } from "path";
 var FileSignalStorage = class {
   constructor(dir, identity, registrationId) {
     this.dir = dir;
     this.identity = identity;
     this.registrationId = registrationId;
     for (const sub of ["sessions", "identities", "prekeys", "signed-prekeys", "sender-keys"])
-      mkdirSync3(join2(dir, sub), { recursive: true, mode: 448 });
+      mkdirSync3(join3(dir, sub), { recursive: true, mode: 448 });
   }
   dir;
   identity;
   registrationId;
   #path(kind, id) {
-    return join2(this.dir, kind, encodeURIComponent(id));
+    return join3(this.dir, kind, encodeURIComponent(id));
   }
   #read(kind, id) {
     try {
@@ -13883,7 +13893,7 @@ import {
   existsSync as existsSync4,
   rmSync as rmSync2
 } from "fs";
-import { join as join3 } from "path";
+import { join as join4 } from "path";
 
 // src/client/features/message/media.ts
 import {
@@ -14214,12 +14224,12 @@ var b64 = (b) => Buffer.from(b).toString("base64");
 var AppStateSync = class {
   constructor(d) {
     this.d = d;
-    mkdirSync5(join3(d.dir, "keys"), { recursive: true, mode: 448 });
-    for (const f of readdirSync(join3(d.dir, "keys"))) {
+    mkdirSync5(join4(d.dir, "keys"), { recursive: true, mode: 448 });
+    for (const f of readdirSync(join4(d.dir, "keys"))) {
       if (f === ".latest") continue;
-      this.#keys.set(decodeURIComponent(f), new Uint8Array(readFileSync6(join3(d.dir, "keys", f))));
+      this.#keys.set(decodeURIComponent(f), new Uint8Array(readFileSync6(join4(d.dir, "keys", f))));
     }
-    const latest = join3(d.dir, "keys", ".latest");
+    const latest = join4(d.dir, "keys", ".latest");
     if (existsSync4(latest)) this.#latestKeyId = readFileSync6(latest, "utf8");
   }
   d;
@@ -14236,10 +14246,10 @@ var AppStateSync = class {
     for (const k of keys) {
       const id = b64(k.keyId);
       this.#keys.set(id, k.keyData);
-      this.#write(join3(this.d.dir, "keys", encodeURIComponent(id)), k.keyData);
+      this.#write(join4(this.d.dir, "keys", encodeURIComponent(id)), k.keyData);
       this.#latestKeyId = id;
     }
-    if (this.#latestKeyId) this.#write(join3(this.d.dir, "keys", ".latest"), this.#latestKeyId);
+    if (this.#latestKeyId) this.#write(join4(this.d.dir, "keys", ".latest"), this.#latestKeyId);
     this.d.logger.event("appstate.keys-added", { count: keys.length });
   }
   /**
@@ -14318,7 +14328,7 @@ var AppStateSync = class {
     for (const name of names) {
       assertKnown(name);
       this.#collections.delete(name);
-      rmSync2(join3(this.d.dir, `${name}.state`), { force: true });
+      rmSync2(join4(this.d.dir, `${name}.state`), { force: true });
     }
   }
   /** Sync the given collections (serialised: concurrent calls queue up). */
@@ -14330,7 +14340,7 @@ var AppStateSync = class {
     assertKnown(name);
     let c = this.#collections.get(name);
     if (!c) {
-      const p = join3(this.d.dir, `${name}.state`);
+      const p = join4(this.d.dir, `${name}.state`);
       c = existsSync4(p) ? restoreAppStateCollection(name, new Uint8Array(readFileSync6(p))) : newAppStateCollection(name);
       this.#collections.set(name, c);
     }
@@ -14340,7 +14350,7 @@ var AppStateSync = class {
     assertKnown(name);
     let m = this.#macs.get(name);
     if (!m) {
-      const p = join3(this.d.dir, `${name}.macs.json`);
+      const p = join4(this.d.dir, `${name}.macs.json`);
       m = new Map(
         existsSync4(p) ? Object.entries(JSON.parse(readFileSync6(p, "utf8"))) : []
       );
@@ -14350,9 +14360,9 @@ var AppStateSync = class {
   }
   #persist(name) {
     assertKnown(name);
-    this.#write(join3(this.d.dir, `${name}.state`), this.#collection(name).serializeState());
+    this.#write(join4(this.d.dir, `${name}.state`), this.#collection(name).serializeState());
     this.#write(
-      join3(this.d.dir, `${name}.macs.json`),
+      join4(this.d.dir, `${name}.macs.json`),
       JSON.stringify(Object.fromEntries(this.#macsOf(name)))
     );
   }
@@ -18074,6 +18084,8 @@ var Client = class {
   #stopped = false;
   /** Set when the server ended the session for good (see `classifyServerFailure`): no reconnect, reported on close. */
   #terminal;
+  /** A guest's private auth folder, removed again on `close()`. */
+  #guestTmp;
   #isOpen = false;
   #mediaConn;
   #appState;
@@ -18089,11 +18101,12 @@ var Client = class {
     if (options.customPairingCode !== void 0) normalizePairingCode(options.customPairingCode);
     this.#options = options;
     this.#isGuest = Boolean(options.guest);
-    const dir = options.authDir ?? "auth";
-    this.#credsPath = join4(dir, "creds.json");
-    this.#signalDir = join4(dir, "signal");
+    const { dir, temporary } = resolveAuthDir(options);
+    this.#guestTmp = temporary ? dir : void 0;
+    this.#credsPath = join5(dir, "creds.json");
+    this.#signalDir = join5(dir, "signal");
     this.#autoRecover = options.autoRecover !== false;
-    this.#tcTokens = new TcTokens(join4(dir, "signal", "tctokens.json"));
+    this.#tcTokens = new TcTokens(join5(dir, "signal", "tctokens.json"));
     this.logger = options.logger ?? new ProtocolLogger({ label: "client" });
     this.#creds = this.#isGuest ? initAuthCreds() : loadAuthCreds(this.#credsPath) ?? initAuthCreds();
     saveAuthCreds(this.#credsPath, this.#creds);
@@ -19393,38 +19406,38 @@ var Client = class {
         this.#isGuest ? this.#options.guest.guestName : void 0
       )
     );
-    const join5 = parseLinkJoinAck(ack, token);
-    if (this.#isGuest && join5.inWaitingRoom && this.#guestSession)
+    const join6 = parseLinkJoinAck(ack, token);
+    if (this.#isGuest && join6.inWaitingRoom && this.#guestSession)
       void guestPreFlightLog("guest_calling_waiting_room_entered", this.#guestSession, this.#config);
     const user = (j) => j.replace(/:\d+@/, "@");
-    const session = new GroupSession(join5.callId, join5.creator, own);
+    const session = new GroupSession(join6.callId, join6.creator, own);
     const state = {
-      callId: join5.callId,
-      peer: user(join5.creator),
-      creator: join5.creator,
+      callId: join6.callId,
+      peer: user(join6.creator),
+      creator: join6.creator,
       direction: "outgoing",
-      video: join5.media === "video",
+      video: join6.media === "video",
       devices: [],
-      status: join5.admitted ? "connected" : "ringing",
+      status: join6.admitted ? "connected" : "ringing",
       startedAt: Date.now(),
       groupSession: session,
-      members: /* @__PURE__ */ new Set([user(join5.creator), user(own)]),
+      members: /* @__PURE__ */ new Set([user(join6.creator), user(own)]),
       mediaOptions: pickMediaOptions(o),
-      ...join5.inWaitingRoom && { waiting: true },
+      ...join6.inWaitingRoom && { waiting: true },
       awaitsRelay: true
     };
-    this.#calls.set(join5.callId, state);
+    this.#calls.set(join6.callId, state);
     try {
-      if (join5.admitted) {
+      if (join6.admitted) {
         this.#startHeartbeat(state);
       } else this.#startWaitingHeartbeat(state);
     } catch (e) {
       try {
         receiver.sendNode(
           buildTerminate(
-            join5.callId,
-            `${join5.callId}@call`,
-            join5.creator,
+            join6.callId,
+            `${join6.callId}@call`,
+            join6.creator,
             receiver.nextId()
           )
         );
@@ -19929,7 +19942,7 @@ var Client = class {
     if (o.deleteAuth) {
       rmSync3(this.#credsPath, { force: true });
       rmSync3(this.#signalDir, { recursive: true, force: true });
-      rmSync3(join4(this.#signalDir, "..", "app-state"), { recursive: true, force: true });
+      rmSync3(join5(this.#signalDir, "..", "app-state"), { recursive: true, force: true });
     }
   }
   /** Close the connection and stop reconnecting. */
@@ -19938,6 +19951,7 @@ var Client = class {
     this.#teardown();
     this.#conn?.close(reason);
     this.logger.close(reason);
+    if (this.#guestTmp) rmSync3(this.#guestTmp, { recursive: true, force: true });
   }
   // ---- internals -----------------------------------------------------------------------------
   async #resolveVersion() {
@@ -20208,7 +20222,7 @@ var Client = class {
     await storage.storeSignedPreKey(creds.signedPreKey.keyId, creds.signedPreKey.record);
     this.#signalStorage = storage;
     const cipher = createSignalCipher(storage);
-    const lids = new LidMap(join4(this.#signalDir, "lid-map.json"));
+    const lids = new LidMap(join5(this.#signalDir, "lid-map.json"));
     if (creds.me?.lid) lids.set(creds.me.id, creds.me.lid);
     const receiver = new Receiver({
       creds,
@@ -20306,7 +20320,7 @@ var Client = class {
     });
     this.#receiver = receiver;
     this.#appState = new AppStateSync({
-      dir: join4(this.#signalDir, "..", "app-state"),
+      dir: join5(this.#signalDir, "..", "app-state"),
       request: (n) => receiver.request(n),
       logger: this.logger,
       onEvent: (e) => this.#onAppState(e),
@@ -20326,7 +20340,7 @@ var Client = class {
       cipher,
       receiver,
       logger: this.logger,
-      senderKeyMemoryPath: join4(this.#signalDir, "sender-key-memory.json"),
+      senderKeyMemoryPath: join5(this.#signalDir, "sender-key-memory.json"),
       tc: this.#tcTokens,
       onSent: (id, to, m) => {
         receiver.rememberOwn(id, to, m);
