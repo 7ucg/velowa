@@ -15,7 +15,12 @@ import {
 import { LidMap } from '../../src/client/lid-map.js'
 import { ProtocolLogger } from '../../src/logging/protocol-logger.js'
 import { encodeProto } from '../../src/client/proto.js'
-import { Receiver, buildAck, unpadRandomMax16 } from '../../src/client/receiver.js'
+import {
+	Receiver,
+	buildAck,
+	noteLidFromAttrs,
+	unpadRandomMax16,
+} from '../../src/client/receiver.js'
 import type { DecodedMessage } from '../../src/client/receiver.js'
 
 const pad = (b: Uint8Array) => {
@@ -396,6 +401,51 @@ describe('helpers', () => {
 			tag: 'ack',
 			attrs: { id: 'r', to: 'g@g.us', class: 'receipt', participant: 'p@lid', type: 'read' },
 		})
+	})
+
+	it('learns the PN from a LID-addressed stanza carrying a *_pn cross-reference', () => {
+		const lids = new LidMap()
+		noteLidFromAttrs(
+			{
+				from: '34111111111111@lid',
+				addressing_mode: 'lid',
+				sender_pn: '34600000000@s.whatsapp.net',
+			},
+			lids,
+		)
+		expect(lids.pnUser('34111111111111')).toBe('34600000000')
+	})
+
+	it('learns the LID from a legacy PN-addressed stanza carrying a *_lid cross-reference', () => {
+		const lids = new LidMap()
+		noteLidFromAttrs(
+			{ participant: '34600000000@s.whatsapp.net', participant_lid: '34111111111111@lid' },
+			lids,
+		)
+		expect(lids.lidUser('34600000000')).toBe('34111111111111')
+	})
+
+	it('prefers participant over from, and is a no-op without either', () => {
+		const lids = new LidMap()
+		noteLidFromAttrs(
+			{
+				from: 'g@g.us',
+				participant: '34111111111111@lid',
+				participant_pn: '34600000000@s.whatsapp.net',
+			},
+			lids,
+		)
+		expect(lids.pnUser('34111111111111')).toBe('34600000000')
+
+		const empty = new LidMap()
+		noteLidFromAttrs({ id: 'x' }, empty)
+		expect(empty.pnUser('34111111111111')).toBeUndefined()
+	})
+
+	it('is a no-op when no alt cross-reference attribute is present', () => {
+		const lids = new LidMap()
+		noteLidFromAttrs({ from: '34111111111111@lid', addressing_mode: 'lid' }, lids)
+		expect(lids.pnUser('34111111111111')).toBeUndefined()
 	})
 })
 

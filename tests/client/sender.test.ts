@@ -384,6 +384,31 @@ describe('Sender: LID addressing', () => {
 			device: 0,
 		})
 	})
+
+	it('retries by phone number when usync answers nothing for a known LID, and still addresses the LID', async () => {
+		const bobLid = '222222222222@lid'
+		const { sender, stanzas, lids } = await world({ emptyUsyncFor: [bobLid] })
+		// Learned earlier (a usync lookup, or an incoming stanza's participant_pn - see noteLidFromAttrs).
+		lids.set('4915611111111@s.whatsapp.net', bobLid)
+		const id = await sender.sendText(bobLid, 'hi')
+		expect(id).toMatch(/^3EB0[0-9A-F]{18}$/)
+		const st = stanzas[0]!
+		expect(st.attrs['to']).toBe(bobLid) // the envelope still addresses the JID the caller gave
+		const to = kids(kids(st, 'participants')[0]!, 'to')
+			.map((t) => t.attrs['jid'])
+			.sort()
+		// bob's devices: discovered under the fallback (phone number) form, despite the LID usync being empty.
+		// Our own device: re-addressed as LID, same as any other LID-addressed conversation (not a fallback thing).
+		expect(to).toEqual(
+			['111111111111@lid', '4915611111111:1@s.whatsapp.net', '4915611111111@s.whatsapp.net'].sort(),
+		)
+	})
+
+	it('still fails when usync answers nothing and no other form of the address is known', async () => {
+		const unknownLid = '333333333333@lid'
+		const { sender } = await world({ emptyUsyncFor: [unknownLid] })
+		await expect(sender.sendText(unknownLid, 'hi')).rejects.toThrow(/no devices found/)
+	})
 })
 
 describe('Sender: peer messages', () => {

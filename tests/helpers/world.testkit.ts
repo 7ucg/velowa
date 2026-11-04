@@ -62,7 +62,7 @@ export async function remoteDevice(jid: string, regId: number) {
 	return { jid, cipher: createSignalCipher(storage), userNode }
 }
 
-export async function world(opts: { ackError?: string } = {}) {
+export async function world(opts: { ackError?: string; emptyUsyncFor?: string[] } = {}) {
 	const creds = initAuthCreds()
 	creds.me = { id: '4915600000000:23@s.whatsapp.net', lid: '111111111111:23@lid' }
 	creds.account = new Uint8Array([7, 7, 7])
@@ -109,6 +109,8 @@ export async function world(opts: { ackError?: string } = {}) {
 					(u) => u.attrs['jid']!,
 				)
 				const users = requested.map((jid) => {
+					if (opts.emptyUsyncFor?.includes(jid))
+						return { tag: 'user', attrs: { jid }, content: [] } as BinaryNode
 					const mine = jid.startsWith('4915600000000')
 					const devs = mine
 						? [{ id: '0' }, { id: '23', 'key-index': '2' }]
@@ -141,11 +143,15 @@ export async function world(opts: { ackError?: string } = {}) {
 			}
 			if (ns === 'encrypt') {
 				const wanted = kids(kids(n, 'key')[0]!, 'user').map((u) => u.attrs['jid']!)
-				const meLidUser = '111111111111'
-				const toPn = (j: string) =>
-					j.endsWith('@lid') && j.startsWith(meLidUser)
-						? j.replace(meLidUser, '4915600000000').replace('@lid', '@s.whatsapp.net')
-						: j
+				// The real server always knows the LID<->PN pairing it issued, whichever form a prekey fetch
+				// names; `remotes` below is keyed by PN, so translate back using whatever this test told `lids`.
+				const toPn = (j: string) => {
+					if (!j.endsWith('@lid')) return j
+					const [lidUser, device] = j.replace('@lid', '').split(':')
+					const pnUser = lids.pnUser(lidUser!)
+					if (!pnUser) return j
+					return device ? `${pnUser}:${device}@s.whatsapp.net` : `${pnUser}@s.whatsapp.net`
+				}
 				const found = remotes
 					.filter((r) => wanted.map(toPn).includes(r.jid))
 					.map((r) => ({ ...r.userNode, attrs: { jid: wanted.find((w) => toPn(w) === r.jid)! } }))

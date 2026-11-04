@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- Fixed: a 1:1 message could fail with "no devices found for ...@lid" (reported: typing a bot command in the bot
+  number's own PN chat). `receiver.ts` never recorded the PN/LID cross-reference WhatsApp attaches to almost
+  every stanza (`participant_pn`/`sender_pn`/`peer_recipient_pn` on a LID-addressed one,
+  `participant_lid`/`sender_lid`/`peer_recipient_lid` on a legacy PN-addressed one), so a contact never seen
+  through a group or a PN `usync` lookup had no alternate address form to fall back to once a LID `usync` query
+  came back empty. `noteLidFromAttrs()` now learns the pairing from every incoming stanza, and `getDevices()`
+  retries device discovery under the other form (never changing the envelope's `to`) before giving up; it also
+  now logs a per-user `<error>` node from `usync` instead of silently treating it as "no devices".
 - New: volume of a call's outgoing audio. `client.setCallVolume(callId, gain)` (0 silent, 1 unchanged, 2 twice as loud, peaks are clipped) and `client.callVolume(callId)`; it works at once, also for audio that is already queued, and applies to files, the microphone and everything else the call sends. `MediaSession` gets `setVolume()` / `volume`, and `applyGain()` is the sample scaling.
 - New: pause a call's media. `client.pauseMedia(callId)` holds the queued audio (the call carries silence) and freezes the picture, `client.resumeMedia(callId)` goes on exactly where it stopped, `client.isMediaPaused(callId)` asks. `MediaSession` gets `pause()`, `resume()` and `paused`.
 - Fixed (serious): a call-link guest (`new Client({ guest })`) created without its own `authDir` wrote its `creds.json` into the default `auth/` folder, overwriting the credentials of a paired account kept there and unlinking it (the next login was answered with `<failure reason="401"/>`). A guest now gets a private temporary auth folder (removed on `close()`) unless `authDir` is given. If you ran a guest next to an account in the same working directory before this fix, link the account again.

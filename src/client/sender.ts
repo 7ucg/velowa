@@ -391,6 +391,13 @@ export class Sender {
 		const out: DeviceTarget[] = []
 		for (const user of list) {
 			const jid = user.attrs['jid'] ?? ''
+			const error = children(user, 'error')[0]
+			if (error) {
+				// The server refused this one user specifically (e.g. not-authorized) rather than answering with
+				// no devices: worth knowing when a send later fails with "no devices found" for the same jid.
+				this.d.logger.event('send.devices-error', { jid, code: error.attrs['code'] })
+				continue
+			}
 			const { user: u, server } = jidDecode(jid)
 			const lid = children(user, 'lid')[0]?.attrs['val']
 			if (lid && server !== 'lid') {
@@ -490,15 +497,39 @@ export class Sender {
 		const meUser = jidDecode(creds.me!.id).user
 		const ownBare = `${meUser}@${S_WHATSAPP_NET}`
 		const selfChat = jidDecode(to).user === meUser
-		const devices = await this.getDevices([...new Set([ownBare, to])])
 		const toUser = jidDecode(to).user
-		const mine = devices.filter(
-			(d) => d.user === meUser || d.user === (creds.me?.lid ? jidDecode(creds.me.lid).user : '#'),
-		)
-		const picked = devices.filter((d) => !mine.includes(d))
-		const others = picked.filter((d) =>
-			opts.devices === 'primary' || opts.devices === 'no-linked' ? d.device === 0 : true,
-		)
+		const mineOf = (ds: DeviceTarget[]) =>
+			ds.filter(
+				(d) => d.user === meUser || d.user === (creds.me?.lid ? jidDecode(creds.me.lid).user : '#'),
+			)
+		const othersOf = (ds: DeviceTarget[], mine: DeviceTarget[]) =>
+			ds
+				.filter((d) => !mine.includes(d))
+				.filter((d) =>
+					opts.devices === 'primary' || opts.devices === 'no-linked' ? d.device === 0 : true,
+				)
+		const devices = await this.getDevices([...new Set([ownBare, to])])
+		let mine = mineOf(devices)
+		let others = othersOf(devices, mine)
+		if (!others.length && !selfChat) {
+			// usync answered with nothing under this exact address form. If we already know this account's other
+			// form (a phone number <-> LID pairing learned from `noteLidFromAttrs` or an earlier usync lookup -
+			// see `LidMap`), it may simply not be reachable by the form `to` happens to be in; one retry under
+			// the other form is tried, for device discovery only, before giving up. `to` itself (what the rest
+			// of this function addresses the envelope, the tctoken and the reporting token to) is never changed.
+			const toJid = jidDecode(to)
+			const altServer = toJid.server === 'lid' ? S_WHATSAPP_NET : 'lid'
+			const altUser =
+				toJid.server === 'lid' ? this.d.lids.pnUser(toJid.user) : this.d.lids.lidUser(toJid.user)
+			if (altUser) {
+				const altJid = toJid.device
+					? `${altUser}:${toJid.device}@${altServer}`
+					: `${altUser}@${altServer}`
+				const retryDevices = await this.getDevices([ownBare, altJid])
+				mine = mineOf(retryDevices)
+				others = othersOf(retryDevices, mine)
+			}
+		}
 		if (!others.length && !selfChat) throw new Error(`no devices found for ${to} (user ${toUser})`)
 		const ownKept = opts.devices === 'recipient' || opts.devices === 'primary' ? [] : mine
 		await this.assertSessions([...ownKept, ...others].map((d) => d.jid))

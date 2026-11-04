@@ -84,6 +84,24 @@ type Loose = Record<string, any>
 const children = (n: BinaryNode, tag?: string): BinaryNode[] =>
 	Array.isArray(n.content) ? n.content.filter((c) => tag === undefined || c.tag === tag) : []
 
+/**
+ * Record the phone-number <-> LID pairing a stanza's own attributes name, if any: WhatsApp puts the acting
+ * address's other form on most `<message>` / `<notification>` / `<receipt>` stanzas as an attribute - whichever
+ * one it is not addressed by. A LID-addressed one (`addressing_mode="lid"`, or `participant`/`from` already end
+ * in `@lid`) carries `participant_pn` / `sender_pn` / `peer_recipient_pn`; a legacy PN-addressed one carries
+ * `participant_lid` / `sender_lid` / `peer_recipient_lid` instead. Exported standalone so it is testable without
+ * a live `Receiver`.
+ */
+export function noteLidFromAttrs(attrs: Record<string, string>, lids: LidMap): void {
+	const acting = attrs['participant'] ?? attrs['from']
+	if (!acting) return
+	const isLid = attrs['addressing_mode'] === 'lid' || acting.endsWith('@lid')
+	const alt = isLid
+		? (attrs['participant_pn'] ?? attrs['sender_pn'] ?? attrs['peer_recipient_pn'])
+		: (attrs['participant_lid'] ?? attrs['sender_lid'] ?? attrs['peer_recipient_lid'])
+	if (alt) lids.set(acting, alt)
+}
+
 const be = (n: number, len: number): Buffer => {
 	const b = Buffer.alloc(len)
 	b.writeUIntBE(n, 0, len)
@@ -355,6 +373,12 @@ export class Receiver {
 
 	async #process(node: BinaryNode): Promise<void> {
 		const meId = this.d.creds.me?.id
+		// Free: most message/notification/receipt stanzas carry the acting address's other form as an attribute
+		// (`participant_pn` etc. on a LID-addressed one, `participant_lid` etc. on a legacy PN-addressed one) -
+		// otherwise the only way this map ever grows is a usync lookup or a shared group's participant list, so a
+		// 1:1 chat that has never gone through either (new, or itself still PN-addressed) stays unresolvable and a
+		// later send to it by LID can find no devices at all. See `noteLidFromAttrs`.
+		noteLidFromAttrs(node.attrs, this.d.lids)
 		if (node.tag === 'notification') {
 			if (node.attrs['type'] === 'encrypt') {
 				const count = children(node, 'count')[0]
