@@ -743,6 +743,7 @@ new Client({
   //   platformType (PLATFORM_TYPES: CHROME, SAFARI, IOS_PHONE, ANDROID_PHONE, ...): read when pairing, re-link to change
   //   releaseChannel (RELEASE | BETA | ALPHA | DEBUG), platform (USER_AGENT_PLATFORMS), webSubPlatform: sent on every connect
   //   Browsers.ubuntu('Chrome') / macOS / windows / baileys give the [os, device] pair; DEVICE_PROFILES lists the presets.
+  //   historySync: 'all' (every HistorySyncConfig flag on, see HISTORY_SYNC_FLAGS) or { onDemandReady: true, ... }; read when pairing
   //   Only the default (windows-desktop, RELEASE) is checked live; wrong names throw in the constructor.
 })
 ```

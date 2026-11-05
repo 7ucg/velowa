@@ -170,4 +170,60 @@ export function checkDeviceConfig(c: Partial<ClientConfig>): void {
 	check('releaseChannel', c.releaseChannel, RELEASE_CHANNELS)
 	check('platform', c.platform, USER_AGENT_PLATFORMS)
 	check('webSubPlatform', c.webSubPlatform, WEB_SUB_PLATFORMS)
+	if (c.historySync && c.historySync !== 'all') {
+		for (const [k, v] of Object.entries(c.historySync)) {
+			if (!(HISTORY_SYNC_FLAGS as readonly string[]).includes(k))
+				throw new Error(
+					`config.historySync.${k} is not a flag (use one of: ${HISTORY_SYNC_FLAGS.join(', ')})`,
+				)
+			if (typeof v !== 'boolean') throw new Error(`config.historySync.${k} must be true or false`)
+		}
+	}
+}
+
+/** Every boolean of `DeviceProps.HistorySyncConfig`: what this linked device tells the phone it can take in the first sync. */
+export const HISTORY_SYNC_FLAGS = [
+	'inlineInitialPayloadInE2EeMsg',
+	'supportCallLogHistory',
+	'supportBotUserAgentChatHistory',
+	'supportCagReactionsAndPolls',
+	'supportBizHostedMsg',
+	'supportRecentSyncChunkMessageCountTuning',
+	'supportHostedGroupMsg',
+	'supportFbidBotChatHistory',
+	'supportAddOnHistorySyncMigration',
+	'supportMessageAssociation',
+	'supportGroupHistory',
+	'onDemandReady',
+	'supportGuestChat',
+	'completeOnDemandReady',
+	'supportManusHistory',
+	'supportHatchHistory',
+	'supportInlineContacts',
+	'supportNewsletter',
+	'supportUniversalReachChat',
+	'supportOmittedConversationMetadata',
+] as const
+export type HistorySyncFlag = (typeof HISTORY_SYNC_FLAGS)[number]
+
+/** The flags velowa sends by default (all others are left out). */
+export const DEFAULT_HISTORY_SYNC: Partial<Record<HistorySyncFlag, boolean>> = {
+	inlineInitialPayloadInE2EeMsg: true,
+	supportBotUserAgentChatHistory: true,
+	supportCagReactionsAndPolls: true,
+	supportBizHostedMsg: true,
+	supportRecentSyncChunkMessageCountTuning: true,
+	supportHostedGroupMsg: true,
+	supportFbidBotChatHistory: true,
+	supportMessageAssociation: true,
+	supportGroupHistory: true,
+	supportGuestChat: true,
+}
+
+/** `'all'` turns every flag on; an object sets single flags on top of the defaults. */
+export function historySyncFlags(
+	opt: ClientConfig['historySync'],
+): Partial<Record<HistorySyncFlag, boolean>> {
+	if (opt === 'all') return Object.fromEntries(HISTORY_SYNC_FLAGS.map((f) => [f, true]))
+	return { ...DEFAULT_HISTORY_SYNC, ...opt }
 }

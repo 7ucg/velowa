@@ -10,8 +10,10 @@ import {
   AppStateCollection,
   Browsers,
   Client,
+  DEFAULT_HISTORY_SYNC,
   DEVICE_PROFILES,
   FrameDecoder,
+  HISTORY_SYNC_FLAGS,
   MemorySignalStorage,
   NoiseTransport,
   NoiseXxHandshake,
@@ -68,7 +70,7 @@ import {
   urlButton,
   vcardFor,
   writeWav
-} from "./chunk-6IU6ZPMY.js";
+} from "./chunk-R7NHNZSZ.js";
 import {
   compressSession,
   listSessions,
@@ -346,9 +348,11 @@ export {
   AppStateCollection,
   Browsers,
   Client,
+  DEFAULT_HISTORY_SYNC,
   DEVICE_PROFILES,
   FrameDecoder,
   GroupCache,
+  HISTORY_SYNC_FLAGS,
   MemoryAuthStore,
   MemorySignalStorage,
   MemoryStore,

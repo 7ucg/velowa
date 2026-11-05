@@ -4,7 +4,11 @@ import protobuf from 'protobufjs'
 import { describe, expect, it } from 'vitest'
 import { initAuthCreds } from '../../src/auth/creds.js'
 import { newIdentityKeyPair, xeddsaSign } from '../../src/crypto/signal.js'
-import { checkDeviceConfig, deviceProfile } from '../../src/client/device-profile.js'
+import {
+	HISTORY_SYNC_FLAGS,
+	checkDeviceConfig,
+	deviceProfile,
+} from '../../src/client/device-profile.js'
 import {
 	DEFAULT_CONFIG,
 	guestPayload,
@@ -65,6 +69,28 @@ describe('client payloads', () => {
 		) as any
 		expect(app.userAgent.platform).toBe('MACOS')
 		expect(app.webInfo).toBeUndefined()
+	})
+
+	it('announces every history-sync flag with historySync: all, and only the defaults otherwise', () => {
+		const creds = initAuthCreds()
+		const flags = (historySync?: any) => {
+			const reg = T('ClientPayload').toObject(
+				T('ClientPayload').decode(
+					registrationPayload(creds, { ...DEFAULT_CONFIG, ...(historySync && { historySync }) }),
+				),
+				{ defaults: false },
+			) as any
+			return T('DeviceProps').toObject(T('DeviceProps').decode(reg.devicePairingData.deviceProps), {
+				defaults: false,
+			}).historySyncConfig as any
+		}
+		const all = flags('all')
+		for (const f of HISTORY_SYNC_FLAGS) expect(all[f], f).toBe(true)
+		expect(flags().onDemandReady).toBeUndefined()
+		expect(flags().supportGroupHistory).toBe(true)
+		expect(flags({ onDemandReady: true }).onDemandReady).toBe(true)
+		expect(flags({ supportGroupHistory: false }).supportGroupHistory).toBe(false)
+		expect(() => checkDeviceConfig({ historySync: { nope: true } as never })).toThrow(/not a flag/)
 	})
 
 	it('rejects names that are not WhatsApp enums', () => {

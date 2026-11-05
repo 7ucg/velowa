@@ -3606,6 +3606,53 @@ function checkDeviceConfig(c) {
   check("releaseChannel", c.releaseChannel, RELEASE_CHANNELS);
   check("platform", c.platform, USER_AGENT_PLATFORMS);
   check("webSubPlatform", c.webSubPlatform, WEB_SUB_PLATFORMS);
+  if (c.historySync && c.historySync !== "all") {
+    for (const [k, v] of Object.entries(c.historySync)) {
+      if (!HISTORY_SYNC_FLAGS.includes(k))
+        throw new Error(
+          `config.historySync.${k} is not a flag (use one of: ${HISTORY_SYNC_FLAGS.join(", ")})`
+        );
+      if (typeof v !== "boolean") throw new Error(`config.historySync.${k} must be true or false`);
+    }
+  }
+}
+var HISTORY_SYNC_FLAGS = [
+  "inlineInitialPayloadInE2EeMsg",
+  "supportCallLogHistory",
+  "supportBotUserAgentChatHistory",
+  "supportCagReactionsAndPolls",
+  "supportBizHostedMsg",
+  "supportRecentSyncChunkMessageCountTuning",
+  "supportHostedGroupMsg",
+  "supportFbidBotChatHistory",
+  "supportAddOnHistorySyncMigration",
+  "supportMessageAssociation",
+  "supportGroupHistory",
+  "onDemandReady",
+  "supportGuestChat",
+  "completeOnDemandReady",
+  "supportManusHistory",
+  "supportHatchHistory",
+  "supportInlineContacts",
+  "supportNewsletter",
+  "supportUniversalReachChat",
+  "supportOmittedConversationMetadata"
+];
+var DEFAULT_HISTORY_SYNC = {
+  inlineInitialPayloadInE2EeMsg: true,
+  supportBotUserAgentChatHistory: true,
+  supportCagReactionsAndPolls: true,
+  supportBizHostedMsg: true,
+  supportRecentSyncChunkMessageCountTuning: true,
+  supportHostedGroupMsg: true,
+  supportFbidBotChatHistory: true,
+  supportMessageAssociation: true,
+  supportGroupHistory: true,
+  supportGuestChat: true
+};
+function historySyncFlags(opt) {
+  if (opt === "all") return Object.fromEntries(HISTORY_SYNC_FLAGS.map((f) => [f, true]));
+  return { ...DEFAULT_HISTORY_SYNC, ...opt };
 }
 
 // src/jid.ts
@@ -12338,16 +12385,7 @@ function registrationPayload(creds, config) {
     historySyncConfig: {
       fullSyncDaysLimit: 30,
       storageQuotaMb: 10240,
-      inlineInitialPayloadInE2EeMsg: true,
-      supportBotUserAgentChatHistory: true,
-      supportCagReactionsAndPolls: true,
-      supportBizHostedMsg: true,
-      supportRecentSyncChunkMessageCountTuning: true,
-      supportHostedGroupMsg: true,
-      supportFbidBotChatHistory: true,
-      supportMessageAssociation: true,
-      supportGroupHistory: true,
-      supportGuestChat: true
+      ...historySyncFlags(config.historySync)
     },
     version: { primary: 10, secondary: 15, tertiary: 7 }
   });
@@ -20673,6 +20711,8 @@ export {
   Browsers,
   DEVICE_PROFILES,
   deviceProfile,
+  HISTORY_SYNC_FLAGS,
+  DEFAULT_HISTORY_SYNC,
   jidDecode,
   jidEncode,
   jidNormalizedUser,

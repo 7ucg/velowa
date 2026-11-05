@@ -41,9 +41,11 @@ __export(src_exports, {
   AppStateCollection: () => AppStateCollection,
   Browsers: () => Browsers,
   Client: () => Client,
+  DEFAULT_HISTORY_SYNC: () => DEFAULT_HISTORY_SYNC,
   DEVICE_PROFILES: () => DEVICE_PROFILES,
   FrameDecoder: () => FrameDecoder,
   GroupCache: () => GroupCache,
+  HISTORY_SYNC_FLAGS: () => HISTORY_SYNC_FLAGS,
   MemoryAuthStore: () => MemoryAuthStore,
   MemorySignalStorage: () => MemorySignalStorage,
   MemoryStore: () => MemoryStore,
@@ -4429,226 +4431,6 @@ function curlGet(url, headers) {
 // src/client/pairing.ts
 var import_node_crypto4 = require("crypto");
 
-// src/client/proto.ts
-var import_node_fs10 = require("fs");
-var import_node_url = require("url");
-var import_protobufjs = __toESM(require("protobufjs"), 1);
-function schemaPath() {
-  for (const rel of ["./proto/WAProto.proto", "../../proto/WAProto.proto"]) {
-    const path = (0, import_node_url.fileURLToPath)(new URL(rel, importMetaUrl));
-    if ((0, import_node_fs10.existsSync)(path)) return path;
-  }
-  throw new Error("WAProto.proto not found next to the library");
-}
-var root;
-function protoRoot() {
-  if (!root) {
-    const r = new import_protobufjs.default.Root();
-    r.loadSync(schemaPath());
-    r.resolveAll();
-    root = r;
-  }
-  return root;
-}
-var protoType = (name) => protoRoot().lookupType(`proto.${name}`);
-var encodeProto = (type, obj) => {
-  const t = protoType(type);
-  return t.encode(t.fromObject(obj)).finish();
-};
-
-// src/client/pairing.ts
-var DEFAULT_CONFIG = {
-  version: [2, 3e3, 1050701434],
-  browser: ["Windows", "Desktop"],
-  countryCode: "US"
-};
-var be2 = (n, len) => {
-  const b = Buffer.alloc(len);
-  b.writeUIntBE(n, 0, len);
-  return b;
-};
-function basePayload(config) {
-  return {
-    connectType: "WIFI_UNKNOWN",
-    connectReason: "USER_ACTIVATED",
-    userAgent: {
-      appVersion: {
-        primary: config.version[0],
-        secondary: config.version[1],
-        tertiary: config.version[2]
-      },
-      platform: config.platform ?? "WEB",
-      releaseChannel: config.releaseChannel ?? "RELEASE",
-      osVersion: "0.1",
-      device: "Desktop",
-      osBuildNumber: "0.1",
-      localeLanguageIso6391: "en",
-      mnc: "000",
-      mcc: "000",
-      localeCountryIso31661Alpha2: config.countryCode
-    },
-    ...(config.platform ?? "WEB") === "WEB" && {
-      webInfo: { webSubPlatform: config.webSubPlatform ?? "WEB_BROWSER" }
-    }
-  };
-}
-function registrationPayload(creds, config) {
-  const deviceProps = encodeProto("DeviceProps", {
-    os: config.browser[0],
-    platformType: config.platformType ?? "DESKTOP",
-    requireFullSync: false,
-    historySyncConfig: {
-      fullSyncDaysLimit: 30,
-      storageQuotaMb: 10240,
-      inlineInitialPayloadInE2EeMsg: true,
-      supportBotUserAgentChatHistory: true,
-      supportCagReactionsAndPolls: true,
-      supportBizHostedMsg: true,
-      supportRecentSyncChunkMessageCountTuning: true,
-      supportHostedGroupMsg: true,
-      supportFbidBotChatHistory: true,
-      supportMessageAssociation: true,
-      supportGroupHistory: true,
-      supportGuestChat: true
-    },
-    version: { primary: 10, secondary: 15, tertiary: 7 }
-  });
-  return encodeProto("ClientPayload", {
-    ...basePayload(config),
-    passive: false,
-    pull: false,
-    devicePairingData: {
-      buildHash: (0, import_node_crypto4.createHash)("md5").update(config.version.join(".")).digest(),
-      deviceProps,
-      eRegid: be2(creds.registrationId, 4),
-      eKeytype: Buffer.from([5]),
-      eIdent: creds.signedIdentityKey.publicKey,
-      eSkeyId: be2(creds.signedPreKey.keyId, 3),
-      eSkeyVal: creds.signedPreKey.publicKey,
-      eSkeySig: creds.signedPreKey.signature
-    }
-  });
-}
-function guestPayload(creds, config, lid) {
-  void creds;
-  const username = lid?.split("@")[0];
-  return encodeProto("ClientPayload", {
-    ...basePayload(config),
-    passive: false,
-    pull: false,
-    product: "WHATSAPP_LID",
-    accountType: "GUEST",
-    ...username && { username: Number(username) }
-  });
-}
-function loginPayload(creds, config) {
-  if (!creds.me) throw new Error("loginPayload needs a paired device");
-  const [userAndDevice] = creds.me.id.split("@");
-  const [user, device] = userAndDevice.split(":");
-  return encodeProto("ClientPayload", {
-    ...basePayload(config),
-    passive: true,
-    pull: true,
-    username: Number(user),
-    device: Number(device ?? 0),
-    lidDbMigrated: false
-  });
-}
-function qrString(ref, creds) {
-  return [
-    ref,
-    Buffer.from(creds.noiseKey.publicKey).toString("base64"),
-    Buffer.from(creds.signedIdentityKey.publicKey).toString("base64"),
-    creds.advSecretKey
-  ].join(",");
-}
-var ACCOUNT_SIG_PREFIX = Buffer.from([6, 0]);
-var DEVICE_SIG_PREFIX = Buffer.from([6, 1]);
-var HOSTED_ACCOUNT_SIG_PREFIX = Buffer.from([6, 5]);
-var child = (n, tag) => Array.isArray(n.content) ? n.content.find((c) => c.tag === tag) : void 0;
-function handlePairSuccess(stanza, creds) {
-  const success = child(stanza, "pair-success");
-  const identityNode = success && child(success, "device-identity");
-  const deviceNode = success && child(success, "device");
-  if (!success || !identityNode || !deviceNode || !(identityNode.content instanceof Uint8Array)) {
-    throw new Error("pair-success is missing device-identity or device");
-  }
-  const hmacType = protoType("ADVSignedDeviceIdentityHMAC");
-  const hm = hmacType.toObject(hmacType.decode(identityNode.content), {
-    bytes: Buffer,
-    enums: Number,
-    defaults: true
-  });
-  const hostedType = protoRoot().lookupEnum("proto.ADVEncryptionType").values["HOSTED"];
-  const prefix = hm.accountType === hostedType ? HOSTED_ACCOUNT_SIG_PREFIX : Buffer.alloc(0);
-  const expected = (0, import_node_crypto4.createHmac)("sha256", Buffer.from(creds.advSecretKey, "base64")).update(Buffer.concat([prefix, hm.details])).digest();
-  if (expected.length !== hm.hmac.length || !(0, import_node_crypto4.timingSafeEqual)(expected, hm.hmac)) {
-    throw new Error("Invalid account signature (HMAC)");
-  }
-  const accType = protoType("ADVSignedDeviceIdentity");
-  const account = accType.toObject(accType.decode(hm.details), {
-    bytes: Buffer,
-    defaults: true
-  });
-  const idType = protoType("ADVDeviceIdentity");
-  const deviceIdentity = idType.toObject(idType.decode(account.details), {
-    enums: Number,
-    defaults: true
-  });
-  const accountPrefix = deviceIdentity.deviceType === hostedType ? HOSTED_ACCOUNT_SIG_PREFIX : ACCOUNT_SIG_PREFIX;
-  const accountMsg = Buffer.concat([
-    accountPrefix,
-    account.details,
-    creds.signedIdentityKey.publicKey
-  ]);
-  if (!xeddsaVerify(account.accountSignatureKey, accountMsg, account.accountSignature)) {
-    throw new Error("Failed to verify account signature");
-  }
-  const deviceMsg = Buffer.concat([
-    DEVICE_SIG_PREFIX,
-    account.details,
-    creds.signedIdentityKey.publicKey,
-    account.accountSignatureKey
-  ]);
-  account.deviceSignature = Buffer.from(xeddsaSign(creds.signedIdentityKey.privateKey, deviceMsg));
-  const fullAccount = encodeProto("ADVSignedDeviceIdentity", {
-    details: account.details,
-    accountSignatureKey: account.accountSignatureKey,
-    accountSignature: account.accountSignature,
-    deviceSignature: account.deviceSignature
-  });
-  const encoded = encodeProto("ADVSignedDeviceIdentity", {
-    details: account.details,
-    accountSignature: account.accountSignature,
-    deviceSignature: account.deviceSignature
-  });
-  const reply = {
-    tag: "iq",
-    attrs: { to: "s.whatsapp.net", type: "result", id: stanza.attrs["id"] ?? "" },
-    content: [
-      {
-        tag: "pair-device-sign",
-        attrs: {},
-        content: [
-          {
-            tag: "device-identity",
-            attrs: { "key-index": String(deviceIdentity.keyIndex) },
-            content: encoded
-          }
-        ]
-      }
-    ]
-  };
-  const bizNode2 = child(success, "biz");
-  const platformNode = child(success, "platform");
-  const me = { id: deviceNode.attrs["jid"] ?? "" };
-  if (deviceNode.attrs["lid"]) me.lid = deviceNode.attrs["lid"];
-  if (bizNode2?.attrs["name"]) me.name = bizNode2.attrs["name"];
-  const update = { me, account: fullAccount };
-  if (platformNode?.attrs["name"]) update.platform = platformNode.attrs["name"];
-  return { reply, update };
-}
-
 // src/client/device-profile.ts
 var PLATFORM_TYPES = [
   "UNKNOWN",
@@ -4787,6 +4569,264 @@ function checkDeviceConfig(c) {
   check("releaseChannel", c.releaseChannel, RELEASE_CHANNELS);
   check("platform", c.platform, USER_AGENT_PLATFORMS);
   check("webSubPlatform", c.webSubPlatform, WEB_SUB_PLATFORMS);
+  if (c.historySync && c.historySync !== "all") {
+    for (const [k, v] of Object.entries(c.historySync)) {
+      if (!HISTORY_SYNC_FLAGS.includes(k))
+        throw new Error(
+          `config.historySync.${k} is not a flag (use one of: ${HISTORY_SYNC_FLAGS.join(", ")})`
+        );
+      if (typeof v !== "boolean") throw new Error(`config.historySync.${k} must be true or false`);
+    }
+  }
+}
+var HISTORY_SYNC_FLAGS = [
+  "inlineInitialPayloadInE2EeMsg",
+  "supportCallLogHistory",
+  "supportBotUserAgentChatHistory",
+  "supportCagReactionsAndPolls",
+  "supportBizHostedMsg",
+  "supportRecentSyncChunkMessageCountTuning",
+  "supportHostedGroupMsg",
+  "supportFbidBotChatHistory",
+  "supportAddOnHistorySyncMigration",
+  "supportMessageAssociation",
+  "supportGroupHistory",
+  "onDemandReady",
+  "supportGuestChat",
+  "completeOnDemandReady",
+  "supportManusHistory",
+  "supportHatchHistory",
+  "supportInlineContacts",
+  "supportNewsletter",
+  "supportUniversalReachChat",
+  "supportOmittedConversationMetadata"
+];
+var DEFAULT_HISTORY_SYNC = {
+  inlineInitialPayloadInE2EeMsg: true,
+  supportBotUserAgentChatHistory: true,
+  supportCagReactionsAndPolls: true,
+  supportBizHostedMsg: true,
+  supportRecentSyncChunkMessageCountTuning: true,
+  supportHostedGroupMsg: true,
+  supportFbidBotChatHistory: true,
+  supportMessageAssociation: true,
+  supportGroupHistory: true,
+  supportGuestChat: true
+};
+function historySyncFlags(opt) {
+  if (opt === "all") return Object.fromEntries(HISTORY_SYNC_FLAGS.map((f) => [f, true]));
+  return { ...DEFAULT_HISTORY_SYNC, ...opt };
+}
+
+// src/client/proto.ts
+var import_node_fs10 = require("fs");
+var import_node_url = require("url");
+var import_protobufjs = __toESM(require("protobufjs"), 1);
+function schemaPath() {
+  for (const rel of ["./proto/WAProto.proto", "../../proto/WAProto.proto"]) {
+    const path = (0, import_node_url.fileURLToPath)(new URL(rel, importMetaUrl));
+    if ((0, import_node_fs10.existsSync)(path)) return path;
+  }
+  throw new Error("WAProto.proto not found next to the library");
+}
+var root;
+function protoRoot() {
+  if (!root) {
+    const r = new import_protobufjs.default.Root();
+    r.loadSync(schemaPath());
+    r.resolveAll();
+    root = r;
+  }
+  return root;
+}
+var protoType = (name) => protoRoot().lookupType(`proto.${name}`);
+var encodeProto = (type, obj) => {
+  const t = protoType(type);
+  return t.encode(t.fromObject(obj)).finish();
+};
+
+// src/client/pairing.ts
+var DEFAULT_CONFIG = {
+  version: [2, 3e3, 1050701434],
+  browser: ["Windows", "Desktop"],
+  countryCode: "US"
+};
+var be2 = (n, len) => {
+  const b = Buffer.alloc(len);
+  b.writeUIntBE(n, 0, len);
+  return b;
+};
+function basePayload(config) {
+  return {
+    connectType: "WIFI_UNKNOWN",
+    connectReason: "USER_ACTIVATED",
+    userAgent: {
+      appVersion: {
+        primary: config.version[0],
+        secondary: config.version[1],
+        tertiary: config.version[2]
+      },
+      platform: config.platform ?? "WEB",
+      releaseChannel: config.releaseChannel ?? "RELEASE",
+      osVersion: "0.1",
+      device: "Desktop",
+      osBuildNumber: "0.1",
+      localeLanguageIso6391: "en",
+      mnc: "000",
+      mcc: "000",
+      localeCountryIso31661Alpha2: config.countryCode
+    },
+    ...(config.platform ?? "WEB") === "WEB" && {
+      webInfo: { webSubPlatform: config.webSubPlatform ?? "WEB_BROWSER" }
+    }
+  };
+}
+function registrationPayload(creds, config) {
+  const deviceProps = encodeProto("DeviceProps", {
+    os: config.browser[0],
+    platformType: config.platformType ?? "DESKTOP",
+    requireFullSync: false,
+    historySyncConfig: {
+      fullSyncDaysLimit: 30,
+      storageQuotaMb: 10240,
+      ...historySyncFlags(config.historySync)
+    },
+    version: { primary: 10, secondary: 15, tertiary: 7 }
+  });
+  return encodeProto("ClientPayload", {
+    ...basePayload(config),
+    passive: false,
+    pull: false,
+    devicePairingData: {
+      buildHash: (0, import_node_crypto4.createHash)("md5").update(config.version.join(".")).digest(),
+      deviceProps,
+      eRegid: be2(creds.registrationId, 4),
+      eKeytype: Buffer.from([5]),
+      eIdent: creds.signedIdentityKey.publicKey,
+      eSkeyId: be2(creds.signedPreKey.keyId, 3),
+      eSkeyVal: creds.signedPreKey.publicKey,
+      eSkeySig: creds.signedPreKey.signature
+    }
+  });
+}
+function guestPayload(creds, config, lid) {
+  void creds;
+  const username = lid?.split("@")[0];
+  return encodeProto("ClientPayload", {
+    ...basePayload(config),
+    passive: false,
+    pull: false,
+    product: "WHATSAPP_LID",
+    accountType: "GUEST",
+    ...username && { username: Number(username) }
+  });
+}
+function loginPayload(creds, config) {
+  if (!creds.me) throw new Error("loginPayload needs a paired device");
+  const [userAndDevice] = creds.me.id.split("@");
+  const [user, device] = userAndDevice.split(":");
+  return encodeProto("ClientPayload", {
+    ...basePayload(config),
+    passive: true,
+    pull: true,
+    username: Number(user),
+    device: Number(device ?? 0),
+    lidDbMigrated: false
+  });
+}
+function qrString(ref, creds) {
+  return [
+    ref,
+    Buffer.from(creds.noiseKey.publicKey).toString("base64"),
+    Buffer.from(creds.signedIdentityKey.publicKey).toString("base64"),
+    creds.advSecretKey
+  ].join(",");
+}
+var ACCOUNT_SIG_PREFIX = Buffer.from([6, 0]);
+var DEVICE_SIG_PREFIX = Buffer.from([6, 1]);
+var HOSTED_ACCOUNT_SIG_PREFIX = Buffer.from([6, 5]);
+var child = (n, tag) => Array.isArray(n.content) ? n.content.find((c) => c.tag === tag) : void 0;
+function handlePairSuccess(stanza, creds) {
+  const success = child(stanza, "pair-success");
+  const identityNode = success && child(success, "device-identity");
+  const deviceNode = success && child(success, "device");
+  if (!success || !identityNode || !deviceNode || !(identityNode.content instanceof Uint8Array)) {
+    throw new Error("pair-success is missing device-identity or device");
+  }
+  const hmacType = protoType("ADVSignedDeviceIdentityHMAC");
+  const hm = hmacType.toObject(hmacType.decode(identityNode.content), {
+    bytes: Buffer,
+    enums: Number,
+    defaults: true
+  });
+  const hostedType = protoRoot().lookupEnum("proto.ADVEncryptionType").values["HOSTED"];
+  const prefix = hm.accountType === hostedType ? HOSTED_ACCOUNT_SIG_PREFIX : Buffer.alloc(0);
+  const expected = (0, import_node_crypto4.createHmac)("sha256", Buffer.from(creds.advSecretKey, "base64")).update(Buffer.concat([prefix, hm.details])).digest();
+  if (expected.length !== hm.hmac.length || !(0, import_node_crypto4.timingSafeEqual)(expected, hm.hmac)) {
+    throw new Error("Invalid account signature (HMAC)");
+  }
+  const accType = protoType("ADVSignedDeviceIdentity");
+  const account = accType.toObject(accType.decode(hm.details), {
+    bytes: Buffer,
+    defaults: true
+  });
+  const idType = protoType("ADVDeviceIdentity");
+  const deviceIdentity = idType.toObject(idType.decode(account.details), {
+    enums: Number,
+    defaults: true
+  });
+  const accountPrefix = deviceIdentity.deviceType === hostedType ? HOSTED_ACCOUNT_SIG_PREFIX : ACCOUNT_SIG_PREFIX;
+  const accountMsg = Buffer.concat([
+    accountPrefix,
+    account.details,
+    creds.signedIdentityKey.publicKey
+  ]);
+  if (!xeddsaVerify(account.accountSignatureKey, accountMsg, account.accountSignature)) {
+    throw new Error("Failed to verify account signature");
+  }
+  const deviceMsg = Buffer.concat([
+    DEVICE_SIG_PREFIX,
+    account.details,
+    creds.signedIdentityKey.publicKey,
+    account.accountSignatureKey
+  ]);
+  account.deviceSignature = Buffer.from(xeddsaSign(creds.signedIdentityKey.privateKey, deviceMsg));
+  const fullAccount = encodeProto("ADVSignedDeviceIdentity", {
+    details: account.details,
+    accountSignatureKey: account.accountSignatureKey,
+    accountSignature: account.accountSignature,
+    deviceSignature: account.deviceSignature
+  });
+  const encoded = encodeProto("ADVSignedDeviceIdentity", {
+    details: account.details,
+    accountSignature: account.accountSignature,
+    deviceSignature: account.deviceSignature
+  });
+  const reply = {
+    tag: "iq",
+    attrs: { to: "s.whatsapp.net", type: "result", id: stanza.attrs["id"] ?? "" },
+    content: [
+      {
+        tag: "pair-device-sign",
+        attrs: {},
+        content: [
+          {
+            tag: "device-identity",
+            attrs: { "key-index": String(deviceIdentity.keyIndex) },
+            content: encoded
+          }
+        ]
+      }
+    ]
+  };
+  const bizNode2 = child(success, "biz");
+  const platformNode = child(success, "platform");
+  const me = { id: deviceNode.attrs["jid"] ?? "" };
+  if (deviceNode.attrs["lid"]) me.lid = deviceNode.attrs["lid"];
+  if (bizNode2?.attrs["name"]) me.name = bizNode2.attrs["name"];
+  const update = { me, account: fullAccount };
+  if (platformNode?.attrs["name"]) update.platform = platformNode.attrs["name"];
+  return { reply, update };
 }
 
 // src/jid.ts
@@ -21198,9 +21238,11 @@ var MemoryStore = class {
   AppStateCollection,
   Browsers,
   Client,
+  DEFAULT_HISTORY_SYNC,
   DEVICE_PROFILES,
   FrameDecoder,
   GroupCache,
+  HISTORY_SYNC_FLAGS,
   MemoryAuthStore,
   MemorySignalStorage,
   MemoryStore,

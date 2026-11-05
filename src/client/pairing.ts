@@ -4,7 +4,9 @@ import type { AuthCreds } from '../auth/creds.js'
 import type { BinaryNode } from '../codec/index.js'
 import { xeddsaSign, xeddsaVerify } from '../crypto/signal.js'
 
+import { historySyncFlags } from './device-profile.js'
 import type {
+	HistorySyncFlag,
 	PlatformType,
 	ReleaseChannel,
 	UserAgentPlatform,
@@ -26,6 +28,11 @@ export interface ClientConfig {
 	platform?: UserAgentPlatform
 	/** Web sub-platform, only sent while `platform` is `WEB` (default `WEB_BROWSER`). */
 	webSubPlatform?: WebSubPlatform
+	/**
+	 * Which history-sync features this device announces when pairing (`HISTORY_SYNC_FLAGS`): `'all'` sets every flag, an object
+	 * changes single flags on top of the defaults. Read when pairing; untested beyond the defaults.
+	 */
+	historySync?: 'all' | Partial<Record<HistorySyncFlag, boolean>>
 }
 
 export const DEFAULT_CONFIG: ClientConfig = {
@@ -75,17 +82,9 @@ export function registrationPayload(creds: AuthCreds, config: ClientConfig): Uin
 		historySyncConfig: {
 			fullSyncDaysLimit: 30,
 			storageQuotaMb: 10240,
-			inlineInitialPayloadInE2EeMsg: true,
-			supportBotUserAgentChatHistory: true,
-			supportCagReactionsAndPolls: true,
-			supportBizHostedMsg: true,
-			supportRecentSyncChunkMessageCountTuning: true,
-			supportHostedGroupMsg: true,
-			supportFbidBotChatHistory: true,
-			supportMessageAssociation: true,
-			supportGroupHistory: true,
-			supportGuestChat: true,
+			...historySyncFlags(config.historySync),
 		},
+
 		version: { primary: 10, secondary: 15, tertiary: 7 },
 	})
 	return encode('ClientPayload', {

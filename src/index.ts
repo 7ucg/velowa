@@ -135,6 +135,8 @@ export type { RoomOptions, RoomAdmit, RoomPerson, RoomEvents } from './client/fe
 export {
 	Browsers,
 	DEVICE_PROFILES,
+	DEFAULT_HISTORY_SYNC,
+	HISTORY_SYNC_FLAGS,
 	PLATFORM_TYPES,
 	RELEASE_CHANNELS,
 	USER_AGENT_PLATFORMS,
@@ -142,6 +144,7 @@ export {
 	deviceProfile,
 } from './client/device-profile.js'
 export type {
+	HistorySyncFlag,
 	PlatformType,
 	ReleaseChannel,
 	UserAgentPlatform,
