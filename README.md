@@ -182,6 +182,43 @@ from `123456789ABCDEFGHJKLMNPQRSTVWXYZ`, case-insensitive; an invalid one throws
 `open` (ready to send and receive), `close` (finished: the client does not retry). velowa reconnects by itself
 after a dropped connection (`autoReconnect`, on by default), so you do not write a reconnect loop.
 
+### Choose the device you link as
+
+By default velowa links as a Windows desktop on the normal release channel. You can pick another identity:
+
+```ts
+import { Client, deviceProfile, Browsers, DEVICE_PROFILES, PLATFORM_TYPES } from 'velowa'
+
+// a ready-made profile (see Object.keys(DEVICE_PROFILES)): browser name and device type together
+const asIphone = new Client({
+  authDir: 'auth-ios',
+  config: { ...deviceProfile('ios-phone'), releaseChannel: 'BETA' },
+})
+
+// or set the parts yourself
+const asSafari = new Client({
+  authDir: 'auth-safari',
+  config: {
+    browser: Browsers.macOS('Safari'), // [os, device] shown under "Linked devices"
+    platformType: 'SAFARI', // one of PLATFORM_TYPES
+    historySync: 'all', // announce every history-sync flag (see HISTORY_SYNC_FLAGS)
+  },
+})
+```
+
+| Option | Values | When it is read |
+| --- | --- | --- |
+| `platformType` | the 31 `PLATFORM_TYPES`: `CHROME`, `FIREFOX`, `SAFARI`, `EDGE`, `DESKTOP`, `UWP`, `IPAD`, `IOS_PHONE`, `ANDROID_PHONE`, `ANDROID_TABLET`, `WEAR_OS`, ... | when you **link**: the phone stores it |
+| `browser` | `[os, device]`, or `Browsers.ubuntu('Chrome')`, `.macOS(..)`, `.windows(..)`, `.appropriate(..)`, `.baileys(..)` | when you **link** |
+| `historySync` | `'all'` (every flag on) or `{ onDemandReady: true, ... }` on top of the defaults | when you **link** |
+| `releaseChannel` | `RELEASE` (default), `BETA`, `ALPHA`, `DEBUG` | on **every connect** |
+| `platform`, `webSubPlatform` | `USER_AGENT_PLATFORMS` (default `WEB`), `WEB_SUB_PLATFORMS` (default `WEB_BROWSER`) | on every connect |
+
+**A linked device cannot change its type.** To become another device, use a new `authDir` (a new session) and link
+again; the old `authDir` stays as it is and keeps working. Only the default (`windows-desktop`, `RELEASE`) is checked
+against a live account: the other profiles use the values WhatsApp's own clients send, and the phone may list or treat
+such a device differently. A wrong name throws in the constructor with the list of valid values.
+
 ## A first bot in 20 lines
 
 ```ts
@@ -644,6 +681,7 @@ await client.answerWaitingRoom(gc.callId, userLid, true) // creator: admit (fals
 await client.enableCamera(call.callId, { videoFile: 'clip.mp4' }) // ask to turn video on
 await client.disableCamera(call.callId)
 await client.raiseHand(gc.callId, true) // group calls
+await client.setMuteState(gc.callId, false) // tell a group call our microphone is unmuted (others' state: `muteState` on the `call` event)
 await client.sendReaction(gc.callId, '👍') // group calls
 ```
 
@@ -722,6 +760,7 @@ They need the phone to have shared the app-state keys once: `await client.waitFo
 | `call` | calls and everything inside a call (`offer`, `accept`, `terminate`, `group_update`, `video`, `user_action`, …) |
 | `chat.update`, `contact.update` | a chat was muted / archived / pinned / read on another device; a saved name changed |
 | `channel.status` | a channel status or a reaction / edit / revoke of one |
+| `message.unavailable` | `{ key, reason, kind?, timestamp?, pushName? }`: a message with no content for this device, e.g. a **view-once** photo (`reason: 'view_once'`); only the phone can open it, nothing can be asked for again |
 | `history` | a chunk of chat history the phone sent after linking |
 | `app-state`, `notification` | raw app-state changes and any other server notification |
 | `qr`, `pairing-code`, `paired`, `open`, `close` | the individual connection events (the `connection` event carries the same) |
