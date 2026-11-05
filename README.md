@@ -204,12 +204,22 @@ const asSafari = new Client({
     historySync: 'all', // announce every history-sync flag (see HISTORY_SYNC_FLAGS)
   },
 })
+
+// Browsers only sets the name shown in the list; the type comes from platformType
+const asAndroid = new Client({
+  authDir: 'auth-android',
+  config: { browser: Browsers.android(), platformType: 'ANDROID_PHONE' },
+})
+const asIphoneByHand = new Client({
+  authDir: 'auth-iphone',
+  config: { browser: Browsers.iOS(), platformType: 'IOS_PHONE' },
+})
 ```
 
 | Option | Values | When it is read |
 | --- | --- | --- |
 | `platformType` | the 31 `PLATFORM_TYPES`: `CHROME`, `FIREFOX`, `SAFARI`, `EDGE`, `DESKTOP`, `UWP`, `IPAD`, `IOS_PHONE`, `ANDROID_PHONE`, `ANDROID_TABLET`, `WEAR_OS`, ... | when you **link**: the phone stores it |
-| `browser` | `[os, device]`, or `Browsers.ubuntu('Chrome')`, `.macOS(..)`, `.windows(..)`, `.appropriate(..)`, `.baileys(..)` | when you **link** |
+| `browser` | `[os, device]`, or `Browsers.ubuntu('Chrome')`, `.macOS(..)`, `.windows(..)`, `.appropriate(..)`, `.android()` (`['Android', 'Phone']`), `.iOS()` (`['iOS', 'iPhone']`), `.baileys(..)` | when you **link** |
 | `historySync` | `'all'` (every flag on) or `{ onDemandReady: true, ... }` on top of the defaults | when you **link** |
 | `releaseChannel` | `RELEASE` (default), `BETA`, `ALPHA`, `DEBUG` | on **every connect** |
 | `platform`, `webSubPlatform` | `USER_AGENT_PLATFORMS` (default `WEB`), `WEB_SUB_PLATFORMS` (default `WEB_BROWSER`) | on every connect |

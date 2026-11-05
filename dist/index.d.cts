@@ -843,6 +843,8 @@ declare const Browsers: {
     macOS: (browser: string) => [string, string];
     windows: (browser: string) => [string, string];
     appropriate: (browser: string) => [string, string];
+    android: (device?: string) => [string, string];
+    iOS: (device?: string) => [string, string];
     baileys: (browser: string) => [string, string];
     velowa: (browser: string) => [string, string];
 };

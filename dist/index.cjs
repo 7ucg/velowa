@@ -4526,6 +4526,8 @@ var Browsers = {
     { darwin: "Mac OS", win32: "Windows", linux: "Ubuntu" }[process.platform] ?? "Ubuntu",
     browser
   ],
+  android: (device = "Phone") => ["Android", device],
+  iOS: (device = "iPhone") => ["iOS", device],
   baileys: (browser) => ["Baileys", browser],
   velowa: (browser) => ["velowa", browser]
 };

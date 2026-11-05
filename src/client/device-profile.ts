@@ -111,6 +111,8 @@ export const Browsers = {
 		{ darwin: 'Mac OS', win32: 'Windows', linux: 'Ubuntu' }[process.platform as string] ?? 'Ubuntu',
 		browser,
 	],
+	android: (device = 'Phone'): [string, string] => ['Android', device],
+	iOS: (device = 'iPhone'): [string, string] => ['iOS', device],
 	baileys: (browser: string): [string, string] => ['Baileys', browser],
 	velowa: (browser: string): [string, string] => ['velowa', browser],
 }
