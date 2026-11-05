@@ -2522,6 +2522,14 @@ type ClientEvents = {
     'message.undecryptable': {
         key: MessageKey;
     };
+    /** A message with no content for this device, e.g. a view-once photo (only the phone can open those). */
+    'message.unavailable': {
+        key: MessageKey;
+        reason: string;
+        kind?: string;
+        timestamp?: number;
+        pushName?: string;
+    };
     /** A message the phone sent again after `requestPlaceholderResend` (the key, the content and the time). */
     'message.resent': {
         key: MessageKey;

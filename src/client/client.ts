@@ -242,6 +242,14 @@ export type ClientEvents = {
 	history: HistoryChunk
 	/** A message could not be decrypted and the sender's retries ran out (before any automatic request to the phone). */
 	'message.undecryptable': { key: MessageKey }
+	/** A message with no content for this device, e.g. a view-once photo (only the phone can open those). */
+	'message.unavailable': {
+		key: MessageKey
+		reason: string
+		kind?: string
+		timestamp?: number
+		pushName?: string
+	}
 	/** A message the phone sent again after `requestPlaceholderResend` (the key, the content and the time). */
 	'message.resent': { key: MessageKey; message: Record<string, unknown>; timestamp?: number }
 	/** A group changed (members, subject, settings). */
@@ -2982,6 +2990,20 @@ export class Client {
 					void this.#sender
 						?.handleRetryReceipt(node)
 						.catch((e) => this.logger.event('retry.error', e))
+			},
+			onUnavailable: (m) => {
+				this.#events.emit('message.unavailable', {
+					key: {
+						remoteJid: m.from,
+						id: m.id,
+						fromMe: false,
+						...(m.participant && { participant: m.participant }),
+					},
+					reason: m.reason,
+					...(m.kind && { kind: m.kind }),
+					...(m.timestamp && { timestamp: m.timestamp }),
+					...(m.pushName && { pushName: m.pushName }),
+				})
 			},
 			onUndecryptable: (key) => {
 				this.#events.emit('message.undecryptable', { key })

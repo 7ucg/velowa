@@ -45,6 +45,21 @@ export interface ReceiverDeps {
 		fromMe: false
 		participant?: string
 	}): void
+	/**
+	 * A message arrived with no content for this device: a view-once photo or video (`<unavailable type="view_once"/>`)
+	 * is only ever shown on the phone, so there is nothing to decrypt and nothing to ask for again.
+	 */
+	onUnavailable?(m: {
+		id: string
+		from: string
+		participant?: string
+		timestamp?: number
+		pushName?: string
+		/** The stanza's `<unavailable type>`, e.g. `view_once`. */
+		reason: string
+		/** The stanza's own `type` (`media`, `text`, ...). */
+		kind?: string
+	}): void
 	/** The phone answered a request for a message we could not read (a "placeholder"): the message, as WebMessageInfo bytes. */
 	onResentMessage?(webMessageInfo: Uint8Array): void
 	/** The phone announced a history chunk (`historySyncNotification`). */
@@ -458,6 +473,19 @@ export class Receiver {
 			}
 		}
 
+		const unavailable = children(node, 'unavailable')[0]
+		if (unavailable && ordered.length === 0 && id && from) {
+			const ts = Number(node.attrs['t'])
+			this.d.onUnavailable?.({
+				id,
+				from,
+				...(participant && { participant }),
+				...(ts && { timestamp: ts }),
+				...(node.attrs['notify'] && { pushName: node.attrs['notify'] }),
+				reason: (unavailable.attrs['type'] ?? 'unknown').slice(0, 32),
+				...(node.attrs['type'] && { kind: node.attrs['type'] }),
+			})
+		}
 		if (failures.length > 0 && decrypted === 0 && retryable > 0) await this.#sendRetry(node)
 		else if (decrypted > 0 && node.attrs['type'] !== 'peer_msg' && !from.endsWith('@newsletter')) {
 			const attrs: Record<string, string> = { id, to: from }

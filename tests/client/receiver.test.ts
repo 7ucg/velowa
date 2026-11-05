@@ -44,6 +44,7 @@ async function setup() {
 	const sent: BinaryNode[] = []
 	const messages: DecodedMessage[] = []
 	const undecryptable: { remoteJid: string; id: string; participant?: string }[] = []
+	const unavailable: { id: string; from: string; reason: string; kind?: string }[] = []
 	const receiver = new Receiver({
 		creds,
 		saveCreds() {},
@@ -54,6 +55,7 @@ async function setup() {
 		send: (n) => sent.push(n),
 		onMessage: (m) => messages.push(m),
 		onUndecryptable: (k) => undecryptable.push(k),
+		onUnavailable: (u) => unavailable.push(u),
 	})
 	// Alice: an independent device that builds a session to us from our bundle.
 	const aliceId = newIdentityKeyPair()
@@ -69,7 +71,7 @@ async function setup() {
 		signedPreKeySignature: creds.signedPreKey.signature,
 		identityKey: creds.signedIdentityKey.publicKey,
 	})
-	return { creds, storage, receiver, sent, messages, undecryptable, alice, preId: pre!.id }
+	return { creds, storage, receiver, sent, messages, undecryptable, unavailable, alice, preId: pre!.id }
 }
 
 const text = (conversation: string, extra: object = {}) =>
@@ -187,6 +189,22 @@ describe('Receiver: failures', () => {
 })
 
 describe('Receiver: giving up', () => {
+	it('reports a view-once message the phone keeps to itself, and acks it without a retry', async () => {
+		const { receiver, sent, messages, unavailable } = await setup()
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: '2557@lid', id: 'VO1', type: 'media', t: '1700000002', notify: 'Rami' },
+			content: [{ tag: 'unavailable', attrs: { type: 'view_once' } }],
+		})
+		await receiver.idle()
+		expect(messages).toHaveLength(0)
+		expect(unavailable).toEqual([
+			{ id: 'VO1', from: '2557@lid', timestamp: 1700000002, pushName: 'Rami', reason: 'view_once', kind: 'media' },
+		])
+		expect(sent.some((n) => n.tag === 'ack')).toBe(true)
+		expect(sent.some((n) => n.attrs['type'] === 'retry')).toBe(false)
+	})
+
 	it('reports a message once the sender retries ran out, so it can be asked for from the phone', async () => {
 		const { receiver, undecryptable } = await setup()
 		const stanza: BinaryNode = {

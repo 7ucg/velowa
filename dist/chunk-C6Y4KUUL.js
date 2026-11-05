@@ -12672,6 +12672,13 @@ var UPLOAD_PREKEY_COUNT = 30;
 var MAX_RETRIES = 5;
 var REQUEST_TIMEOUT_MS = 2e4;
 var children = (n, tag) => Array.isArray(n.content) ? n.content.filter((c) => tag === void 0 || c.tag === tag) : [];
+function noteLidFromAttrs(attrs, lids) {
+  const acting = attrs["participant"] ?? attrs["from"];
+  if (!acting) return;
+  const isLid = attrs["addressing_mode"] === "lid" || acting.endsWith("@lid");
+  const alt = isLid ? attrs["participant_pn"] ?? attrs["sender_pn"] ?? attrs["peer_recipient_pn"] : attrs["participant_lid"] ?? attrs["sender_lid"] ?? attrs["peer_recipient_lid"];
+  if (alt) lids.set(acting, alt);
+}
 var be3 = (n, len) => {
   const b = Buffer.alloc(len);
   b.writeUIntBE(n, 0, len);
@@ -12911,6 +12918,7 @@ var Receiver = class {
   // ---- incoming stanzas -----------------------------------------------------------------------
   async #process(node) {
     const meId = this.d.creds.me?.id;
+    noteLidFromAttrs(node.attrs, this.d.lids);
     if (node.tag === "notification") {
       if (node.attrs["type"] === "encrypt") {
         const count = children(node, "count")[0];
@@ -12977,6 +12985,19 @@ var Receiver = class {
         failures.push(`${type}: ${error.message}`);
         logger.event("message.decrypt-failed", { id, from, participant, type, error });
       }
+    }
+    const unavailable = children(node, "unavailable")[0];
+    if (unavailable && ordered.length === 0 && id && from) {
+      const ts = Number(node.attrs["t"]);
+      this.d.onUnavailable?.({
+        id,
+        from,
+        ...participant && { participant },
+        ...ts && { timestamp: ts },
+        ...node.attrs["notify"] && { pushName: node.attrs["notify"] },
+        reason: (unavailable.attrs["type"] ?? "unknown").slice(0, 32),
+        ...node.attrs["type"] && { kind: node.attrs["type"] }
+      });
     }
     if (failures.length > 0 && decrypted === 0 && retryable > 0) await this.#sendRetry(node);
     else if (decrypted > 0 && node.attrs["type"] !== "peer_msg" && !from.endsWith("@newsletter")) {
@@ -13573,6 +13594,11 @@ var Sender = class {
     const out = [];
     for (const user of list) {
       const jid = user.attrs["jid"] ?? "";
+      const error = children2(user, "error")[0];
+      if (error) {
+        this.d.logger.event("send.devices-error", { jid, code: error.attrs["code"] });
+        continue;
+      }
       const { user: u, server: server2 } = jidDecode(jid);
       const lid = children2(user, "lid")[0]?.attrs["val"];
       if (lid && server2 !== "lid") {
@@ -13658,15 +13684,27 @@ var Sender = class {
     const meUser = jidDecode(creds.me.id).user;
     const ownBare = `${meUser}@${S_WHATSAPP_NET2}`;
     const selfChat = jidDecode(to).user === meUser;
-    const devices = await this.getDevices([.../* @__PURE__ */ new Set([ownBare, to])]);
     const toUser = jidDecode(to).user;
-    const mine = devices.filter(
+    const mineOf = (ds) => ds.filter(
       (d) => d.user === meUser || d.user === (creds.me?.lid ? jidDecode(creds.me.lid).user : "#")
     );
-    const picked = devices.filter((d) => !mine.includes(d));
-    const others = picked.filter(
+    const othersOf = (ds, mine2) => ds.filter((d) => !mine2.includes(d)).filter(
       (d) => opts.devices === "primary" || opts.devices === "no-linked" ? d.device === 0 : true
     );
+    const devices = await this.getDevices([.../* @__PURE__ */ new Set([ownBare, to])]);
+    let mine = mineOf(devices);
+    let others = othersOf(devices, mine);
+    if (!others.length && !selfChat) {
+      const toJid = jidDecode(to);
+      const altServer = toJid.server === "lid" ? S_WHATSAPP_NET2 : "lid";
+      const altUser = toJid.server === "lid" ? this.d.lids.pnUser(toJid.user) : this.d.lids.lidUser(toJid.user);
+      if (altUser) {
+        const altJid = toJid.device ? `${altUser}:${toJid.device}@${altServer}` : `${altUser}@${altServer}`;
+        const retryDevices = await this.getDevices([ownBare, altJid]);
+        mine = mineOf(retryDevices);
+        others = othersOf(retryDevices, mine);
+      }
+    }
     if (!others.length && !selfChat) throw new Error(`no devices found for ${to} (user ${toUser})`);
     const ownKept = opts.devices === "recipient" || opts.devices === "primary" ? [] : mine;
     await this.assertSessions([...ownKept, ...others].map((d) => d.jid));
@@ -20339,6 +20377,20 @@ var Client = class {
         if (node.attrs["from"]) this.#events.emit("receipt", parseReceipt(node));
         if (node.attrs["type"] === "retry" && node.attrs["from"])
           void this.#sender?.handleRetryReceipt(node).catch((e) => this.logger.event("retry.error", e));
+      },
+      onUnavailable: (m) => {
+        this.#events.emit("message.unavailable", {
+          key: {
+            remoteJid: m.from,
+            id: m.id,
+            fromMe: false,
+            ...m.participant && { participant: m.participant }
+          },
+          reason: m.reason,
+          ...m.kind && { kind: m.kind },
+          ...m.timestamp && { timestamp: m.timestamp },
+          ...m.pushName && { pushName: m.pushName }
+        });
       },
       onUndecryptable: (key) => {
         this.#events.emit("message.undecryptable", { key });
