@@ -822,12 +822,54 @@ interface BrowserFingerprint {
     userAgent: string;
 }
 
+/** `DeviceProps.PlatformType`: what "Linked devices" shows the phone as (chosen when the device is paired). */
+declare const PLATFORM_TYPES: readonly ["UNKNOWN", "CHROME", "FIREFOX", "IE", "OPERA", "SAFARI", "EDGE", "DESKTOP", "IPAD", "ANDROID_TABLET", "OHANA", "ALOHA", "CATALINA", "TCL_TV", "IOS_PHONE", "IOS_CATALYST", "ANDROID_PHONE", "ANDROID_AMBIGUOUS", "WEAR_OS", "AR_WRIST", "AR_DEVICE", "UWP", "VR", "CLOUD_API", "SMARTGLASSES", "WAIL", "WASS", "BUSINESS_BACK_OFFICE", "WAIL_WAI", "WAIL_ALEXA", "AUTOMOTIVE"];
+type PlatformType = (typeof PLATFORM_TYPES)[number];
+/** `ClientPayload.UserAgent.ReleaseChannel`: which WhatsApp release track the client says it is on. */
+declare const RELEASE_CHANNELS: readonly ["RELEASE", "BETA", "ALPHA", "DEBUG"];
+type ReleaseChannel = (typeof RELEASE_CHANNELS)[number];
+/** `ClientPayload.UserAgent.Platform`: the app family sent when connecting. */
+declare const USER_AGENT_PLATFORMS: readonly ["ANDROID", "IOS", "WINDOWS_PHONE", "BLACKBERRY", "BLACKBERRYX", "S40", "S60", "PYTHON_CLIENT", "TIZEN", "ENTERPRISE", "SMB_ANDROID", "KAIOS", "SMB_IOS", "WINDOWS", "WEB", "PORTAL", "GREEN_ANDROID", "GREEN_IPHONE", "BLUE_ANDROID", "BLUE_IPHONE", "FBLITE_ANDROID", "MLITE_ANDROID", "IGLITE_ANDROID", "PAGE", "MACOS", "OCULUS_MSG", "OCULUS_CALL", "MILAN", "CAPI", "WEAROS", "ARDEVICE", "VRDEVICE", "BLUE_WEB", "IPAD", "TEST", "SMART_GLASSES", "BLUE_VR", "AR_WRIST", "WAIL", "WORK_ANDROID", "WORK_IOS", "AUTOMOTIVE"];
+type UserAgentPlatform = (typeof USER_AGENT_PLATFORMS)[number];
+/** `ClientPayload.WebInfo.WebSubPlatform` (only sent while the platform is `WEB`). */
+declare const WEB_SUB_PLATFORMS: readonly ["WEB_BROWSER", "APP_STORE", "WIN_STORE", "DARWIN", "WIN32", "WIN_HYBRID"];
+type WebSubPlatform = (typeof WEB_SUB_PLATFORMS)[number];
+/**
+ * Browser names as Baileys offers them (`Browsers.ubuntu('Chrome')`, `Browsers.macOS('Safari')`, ...), as the
+ * `[os, device]` pair of `config.browser`.
+ */
+declare const Browsers: {
+    ubuntu: (browser: string) => [string, string];
+    macOS: (browser: string) => [string, string];
+    windows: (browser: string) => [string, string];
+    appropriate: (browser: string) => [string, string];
+    baileys: (browser: string) => [string, string];
+    velowa: (browser: string) => [string, string];
+};
+type Profile = Pick<ClientConfig, 'browser' | 'platformType'> & Partial<Pick<ClientConfig, 'platform' | 'webSubPlatform'>>;
+/**
+ * Ready-made device identities (`config: deviceProfile('safari-mac')`). Only `windows-desktop` (the default) is
+ * checked against a live account; the rest are the values WhatsApp's own clients use, so the phone may list or
+ * treat the linked device differently. The device type is read when pairing: re-link to change it.
+ */
+declare const DEVICE_PROFILES: Record<string, Profile>;
+/** The config part of a named profile; throws with the valid names on a typo. */
+declare function deviceProfile(name: string): Pick<ClientConfig, 'browser' | 'platformType'> & Partial<ClientConfig>;
+
 interface ClientConfig {
     /** WhatsApp Web client revision, e.g. [2, 3000, 1050701434]. */
     version: [number, number, number];
     /** [os, device-type] shown under "Linked devices". */
     browser: [string, string];
     countryCode: string;
+    /** `DeviceProps.PlatformType` shown under "Linked devices" (default `DESKTOP`); read when pairing. See `PLATFORM_TYPES`. */
+    platformType?: PlatformType;
+    /** Release track sent when connecting (default `RELEASE`); `BETA`, `ALPHA` and `DEBUG` are the other tracks. */
+    releaseChannel?: ReleaseChannel;
+    /** App family sent when connecting (default `WEB`). See `USER_AGENT_PLATFORMS`. */
+    platform?: UserAgentPlatform;
+    /** Web sub-platform, only sent while `platform` is `WEB` (default `WEB_BROWSER`). */
+    webSubPlatform?: WebSubPlatform;
 }
 
 interface GuestRegOptions {
@@ -3199,4 +3241,4 @@ declare class MemoryStore {
     }[];
 }
 
-export { ANTIBAN_DEFAULTS, type AbProps, AntiBan, type AntiBanConfig, AntiBanError, AppStateCollection, type AppStateKeyLookup, type AppStateMac, type AppStateMutation, type AppStateResult, type AuthStore, type BinaryNode, type BotDirectory, type BotEntry, type BotSection, type BroadcastQuota, type ButtonReply, type ButtonsOptions, type CallFileOptions, Client, type ClientEvents, type ClientOptions, type ConnectionUpdate, type DecryptedMessage, type EncryptedMessage, type EventOptions, type EventResponseType, FrameDecoder, GroupCache, type GroupInfo, type InteractiveOptions, type LinkPreview, type LinkPreviewOptions, type ListOptions, type ListSection, type Listener, type LocalAudioOptions, type MediaFileOptions, type MediaRetryResult, type MediaSource, MemoryAuthStore, MemorySignalStorage, MemoryStore, type Message, type MessageContent, type MessageKey, type NativeButton, NoiseTransport, NoiseXxHandshake, type PaymentRequestInput, type PreKeyBundleInput, type ProductInput, ProtocolLogger, type ProtocolLoggerOptions, type Quoted, type QuotedMessage, REPORT_FLOWS, type ReportOptions, ReportStore, type ReportedMessage, type RetentionOptions, type RichResponseOptions, Room, type RoomAdmit, type RoomEvents, type RoomOptions, type RoomPerson, type SendContentOptions, type SessionInfo, SignalCipher, type SignalStorage, type StickerInput, type TemplateOptions, type TextOptions, TypedEmitter, type Unsubscribe, type VideoFileOptions, WAM_EVENTS, WAM_GLOBALS, type WamEvent, type WamValue, areJidsSameUser, buildReport, callButton, compressSession, connHeader, copyButton, createSignalCipher, decodeAudioFile, decodeNode, decodeVideoFile, encodeFrame, encodeNode, encodeWam, fetchLinkPreview, findUrl, getContentType, isGroupAdmin, isJidBroadcast, isJidGroup, isJidNewsletter, isJidStatusBroadcast, isJidUser, isLidUser, isMe, jidDecode, jidEncode, jidNormalizedUser, linkPreviewMessage, listSessions, messageText, migrateFlatSessions, newAppStateCollection, newIdentityKeyPair, newPreKeys, newSignedPreKey, normalizeMessageContent, parseButtonReply, pollOptionHash, pruneSessions, quickReply, restoreAppStateCollection, richResponse, serialize, singleSelect, splitAnnexB, startXxHandshake, tokenizeCode, urlButton, vcardFor, writeWav };
+export { ANTIBAN_DEFAULTS, type AbProps, AntiBan, type AntiBanConfig, AntiBanError, AppStateCollection, type AppStateKeyLookup, type AppStateMac, type AppStateMutation, type AppStateResult, type AuthStore, type BinaryNode, type BotDirectory, type BotEntry, type BotSection, type BroadcastQuota, Browsers, type ButtonReply, type ButtonsOptions, type CallFileOptions, Client, type ClientEvents, type ClientOptions, type ConnectionUpdate, DEVICE_PROFILES, type DecryptedMessage, type EncryptedMessage, type EventOptions, type EventResponseType, FrameDecoder, GroupCache, type GroupInfo, type InteractiveOptions, type LinkPreview, type LinkPreviewOptions, type ListOptions, type ListSection, type Listener, type LocalAudioOptions, type MediaFileOptions, type MediaRetryResult, type MediaSource, MemoryAuthStore, MemorySignalStorage, MemoryStore, type Message, type MessageContent, type MessageKey, type NativeButton, NoiseTransport, NoiseXxHandshake, PLATFORM_TYPES, type PaymentRequestInput, type PlatformType, type PreKeyBundleInput, type ProductInput, ProtocolLogger, type ProtocolLoggerOptions, type Quoted, type QuotedMessage, RELEASE_CHANNELS, REPORT_FLOWS, type ReleaseChannel, type ReportOptions, ReportStore, type ReportedMessage, type RetentionOptions, type RichResponseOptions, Room, type RoomAdmit, type RoomEvents, type RoomOptions, type RoomPerson, type SendContentOptions, type SessionInfo, SignalCipher, type SignalStorage, type StickerInput, type TemplateOptions, type TextOptions, TypedEmitter, USER_AGENT_PLATFORMS, type Unsubscribe, type UserAgentPlatform, type VideoFileOptions, WAM_EVENTS, WAM_GLOBALS, WEB_SUB_PLATFORMS, type WamEvent, type WamValue, type WebSubPlatform, areJidsSameUser, buildReport, callButton, compressSession, connHeader, copyButton, createSignalCipher, decodeAudioFile, decodeNode, decodeVideoFile, deviceProfile, encodeFrame, encodeNode, encodeWam, fetchLinkPreview, findUrl, getContentType, isGroupAdmin, isJidBroadcast, isJidGroup, isJidNewsletter, isJidStatusBroadcast, isJidUser, isLidUser, isMe, jidDecode, jidEncode, jidNormalizedUser, linkPreviewMessage, listSessions, messageText, migrateFlatSessions, newAppStateCollection, newIdentityKeyPair, newPreKeys, newSignedPreKey, normalizeMessageContent, parseButtonReply, pollOptionHash, pruneSessions, quickReply, restoreAppStateCollection, richResponse, serialize, singleSelect, splitAnnexB, startXxHandshake, tokenizeCode, urlButton, vcardFor, writeWav };

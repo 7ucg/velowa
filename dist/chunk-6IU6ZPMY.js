@@ -3468,6 +3468,146 @@ function escapeXml(value) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, (c) => `&#x${c.charCodeAt(0).toString(16)};`).replace(/\n/g, "&#xa;");
 }
 
+// src/client/device-profile.ts
+var PLATFORM_TYPES = [
+  "UNKNOWN",
+  "CHROME",
+  "FIREFOX",
+  "IE",
+  "OPERA",
+  "SAFARI",
+  "EDGE",
+  "DESKTOP",
+  "IPAD",
+  "ANDROID_TABLET",
+  "OHANA",
+  "ALOHA",
+  "CATALINA",
+  "TCL_TV",
+  "IOS_PHONE",
+  "IOS_CATALYST",
+  "ANDROID_PHONE",
+  "ANDROID_AMBIGUOUS",
+  "WEAR_OS",
+  "AR_WRIST",
+  "AR_DEVICE",
+  "UWP",
+  "VR",
+  "CLOUD_API",
+  "SMARTGLASSES",
+  "WAIL",
+  "WASS",
+  "BUSINESS_BACK_OFFICE",
+  "WAIL_WAI",
+  "WAIL_ALEXA",
+  "AUTOMOTIVE"
+];
+var RELEASE_CHANNELS = ["RELEASE", "BETA", "ALPHA", "DEBUG"];
+var USER_AGENT_PLATFORMS = [
+  "ANDROID",
+  "IOS",
+  "WINDOWS_PHONE",
+  "BLACKBERRY",
+  "BLACKBERRYX",
+  "S40",
+  "S60",
+  "PYTHON_CLIENT",
+  "TIZEN",
+  "ENTERPRISE",
+  "SMB_ANDROID",
+  "KAIOS",
+  "SMB_IOS",
+  "WINDOWS",
+  "WEB",
+  "PORTAL",
+  "GREEN_ANDROID",
+  "GREEN_IPHONE",
+  "BLUE_ANDROID",
+  "BLUE_IPHONE",
+  "FBLITE_ANDROID",
+  "MLITE_ANDROID",
+  "IGLITE_ANDROID",
+  "PAGE",
+  "MACOS",
+  "OCULUS_MSG",
+  "OCULUS_CALL",
+  "MILAN",
+  "CAPI",
+  "WEAROS",
+  "ARDEVICE",
+  "VRDEVICE",
+  "BLUE_WEB",
+  "IPAD",
+  "TEST",
+  "SMART_GLASSES",
+  "BLUE_VR",
+  "AR_WRIST",
+  "WAIL",
+  "WORK_ANDROID",
+  "WORK_IOS",
+  "AUTOMOTIVE"
+];
+var WEB_SUB_PLATFORMS = [
+  "WEB_BROWSER",
+  "APP_STORE",
+  "WIN_STORE",
+  "DARWIN",
+  "WIN32",
+  "WIN_HYBRID"
+];
+var Browsers = {
+  ubuntu: (browser) => ["Ubuntu", browser],
+  macOS: (browser) => ["Mac OS", browser],
+  windows: (browser) => ["Windows", browser],
+  appropriate: (browser) => [
+    { darwin: "Mac OS", win32: "Windows", linux: "Ubuntu" }[process.platform] ?? "Ubuntu",
+    browser
+  ],
+  baileys: (browser) => ["Baileys", browser],
+  velowa: (browser) => ["velowa", browser]
+};
+var DEVICE_PROFILES = {
+  "windows-desktop": { browser: ["Windows", "Desktop"], platformType: "DESKTOP" },
+  "mac-desktop": { browser: ["Mac OS", "Desktop"], platformType: "DESKTOP" },
+  "chrome-windows": { browser: ["Windows", "Chrome"], platformType: "CHROME" },
+  "chrome-linux": { browser: ["Ubuntu", "Chrome"], platformType: "CHROME" },
+  "chrome-mac": { browser: ["Mac OS", "Chrome"], platformType: "CHROME" },
+  "firefox-windows": { browser: ["Windows", "Firefox"], platformType: "FIREFOX" },
+  "firefox-linux": { browser: ["Ubuntu", "Firefox"], platformType: "FIREFOX" },
+  "safari-mac": { browser: ["Mac OS", "Safari"], platformType: "SAFARI" },
+  "edge-windows": { browser: ["Windows", "Edge"], platformType: "EDGE" },
+  "opera-windows": { browser: ["Windows", "Opera"], platformType: "OPERA" },
+  "uwp-windows": { browser: ["Windows", "Desktop"], platformType: "UWP" },
+  "catalina-mac": { browser: ["Mac OS", "Desktop"], platformType: "CATALINA" },
+  "android-phone": { browser: ["Android", "Phone"], platformType: "ANDROID_PHONE" },
+  "android-tablet": { browser: ["Android", "Tablet"], platformType: "ANDROID_TABLET" },
+  "ios-phone": { browser: ["iOS", "iPhone"], platformType: "IOS_PHONE" },
+  ipad: { browser: ["iOS", "iPad"], platformType: "IPAD" },
+  "wear-os": { browser: ["Wear OS", "Watch"], platformType: "WEAR_OS" },
+  "tcl-tv": { browser: ["TCL", "TV"], platformType: "TCL_TV" },
+  "smart-glasses": { browser: ["Glasses", "Smart"], platformType: "SMARTGLASSES" },
+  vr: { browser: ["VR", "Headset"], platformType: "VR" },
+  automotive: { browser: ["Car", "Automotive"], platformType: "AUTOMOTIVE" }
+};
+function deviceProfile(name) {
+  const p = DEVICE_PROFILES[name];
+  if (!p)
+    throw new Error(
+      `unknown device profile "${name}" (use one of: ${Object.keys(DEVICE_PROFILES).join(", ")})`
+    );
+  return { ...p, browser: [...p.browser] };
+}
+var check = (what, value, list) => {
+  if (value !== void 0 && !list.includes(value))
+    throw new Error(`config.${what} "${value}" is not valid (use one of: ${list.join(", ")})`);
+};
+function checkDeviceConfig(c) {
+  check("platformType", c.platformType, PLATFORM_TYPES);
+  check("releaseChannel", c.releaseChannel, RELEASE_CHANNELS);
+  check("platform", c.platform, USER_AGENT_PLATFORMS);
+  check("webSubPlatform", c.webSubPlatform, WEB_SUB_PLATFORMS);
+}
+
 // src/jid.ts
 var DOMAIN_TYPE = {
   "s.whatsapp.net": 0,
@@ -12175,8 +12315,8 @@ function basePayload(config) {
         secondary: config.version[1],
         tertiary: config.version[2]
       },
-      platform: "WEB",
-      releaseChannel: "RELEASE",
+      platform: config.platform ?? "WEB",
+      releaseChannel: config.releaseChannel ?? "RELEASE",
       osVersion: "0.1",
       device: "Desktop",
       osBuildNumber: "0.1",
@@ -12185,13 +12325,15 @@ function basePayload(config) {
       mcc: "000",
       localeCountryIso31661Alpha2: config.countryCode
     },
-    webInfo: { webSubPlatform: "WEB_BROWSER" }
+    ...(config.platform ?? "WEB") === "WEB" && {
+      webInfo: { webSubPlatform: config.webSubPlatform ?? "WEB_BROWSER" }
+    }
   };
 }
 function registrationPayload(creds, config) {
   const deviceProps = encodeProto("DeviceProps", {
     os: config.browser[0],
-    platformType: "DESKTOP",
+    platformType: config.platformType ?? "DESKTOP",
     requireFullSync: false,
     historySyncConfig: {
       fullSyncDaysLimit: 30,
@@ -18177,6 +18319,7 @@ var Client = class {
     this.logger = options.logger ?? new ProtocolLogger({ label: "client" });
     this.#creds = this.#isGuest ? initAuthCreds() : loadAuthCreds(this.#credsPath) ?? initAuthCreds();
     saveAuthCreds(this.#credsPath, this.#creds);
+    checkDeviceConfig(options.config ?? {});
     this.#config = { ...DEFAULT_CONFIG, ...options.config };
     if (options.antiban) this.antiban = new AntiBan(options.antiban === true ? {} : options.antiban);
   }
@@ -20523,6 +20666,13 @@ export {
   decodeAudioFile,
   decodeVideoFile,
   ProtocolLogger,
+  PLATFORM_TYPES,
+  RELEASE_CHANNELS,
+  USER_AGENT_PLATFORMS,
+  WEB_SUB_PLATFORMS,
+  Browsers,
+  DEVICE_PROFILES,
+  deviceProfile,
   jidDecode,
   jidEncode,
   jidNormalizedUser,

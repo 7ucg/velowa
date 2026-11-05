@@ -4,6 +4,12 @@ import type { AuthCreds } from '../auth/creds.js'
 import type { BinaryNode } from '../codec/index.js'
 import { xeddsaSign, xeddsaVerify } from '../crypto/signal.js'
 
+import type {
+	PlatformType,
+	ReleaseChannel,
+	UserAgentPlatform,
+	WebSubPlatform,
+} from './device-profile.js'
 import { encodeProto as encode, protoRoot as proto, protoType as T } from './proto.js'
 
 export interface ClientConfig {
@@ -12,6 +18,14 @@ export interface ClientConfig {
 	/** [os, device-type] shown under "Linked devices". */
 	browser: [string, string]
 	countryCode: string
+	/** `DeviceProps.PlatformType` shown under "Linked devices" (default `DESKTOP`); read when pairing. See `PLATFORM_TYPES`. */
+	platformType?: PlatformType
+	/** Release track sent when connecting (default `RELEASE`); `BETA`, `ALPHA` and `DEBUG` are the other tracks. */
+	releaseChannel?: ReleaseChannel
+	/** App family sent when connecting (default `WEB`). See `USER_AGENT_PLATFORMS`. */
+	platform?: UserAgentPlatform
+	/** Web sub-platform, only sent while `platform` is `WEB` (default `WEB_BROWSER`). */
+	webSubPlatform?: WebSubPlatform
 }
 
 export const DEFAULT_CONFIG: ClientConfig = {
@@ -36,8 +50,8 @@ function basePayload(config: ClientConfig) {
 				secondary: config.version[1],
 				tertiary: config.version[2],
 			},
-			platform: 'WEB',
-			releaseChannel: 'RELEASE',
+			platform: config.platform ?? 'WEB',
+			releaseChannel: config.releaseChannel ?? 'RELEASE',
 			osVersion: '0.1',
 			device: 'Desktop',
 			osBuildNumber: '0.1',
@@ -46,7 +60,9 @@ function basePayload(config: ClientConfig) {
 			mcc: '000',
 			localeCountryIso31661Alpha2: config.countryCode,
 		},
-		webInfo: { webSubPlatform: 'WEB_BROWSER' },
+		...((config.platform ?? 'WEB') === 'WEB' && {
+			webInfo: { webSubPlatform: config.webSubPlatform ?? 'WEB_BROWSER' },
+		}),
 	}
 }
 
@@ -54,7 +70,7 @@ function basePayload(config: ClientConfig) {
 export function registrationPayload(creds: AuthCreds, config: ClientConfig): Uint8Array {
 	const deviceProps = encode('DeviceProps', {
 		os: config.browser[0],
-		platformType: 'DESKTOP',
+		platformType: config.platformType ?? 'DESKTOP',
 		requireFullSync: false,
 		historySyncConfig: {
 			fullSyncDaysLimit: 30,

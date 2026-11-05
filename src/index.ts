@@ -132,3 +132,18 @@ export { MemoryStore } from './client/store.js'
 export type { AbProps } from './client/features/account/server.js'
 export { Room } from './client/features/call/room.js'
 export type { RoomOptions, RoomAdmit, RoomPerson, RoomEvents } from './client/features/call/room.js'
+export {
+	Browsers,
+	DEVICE_PROFILES,
+	PLATFORM_TYPES,
+	RELEASE_CHANNELS,
+	USER_AGENT_PLATFORMS,
+	WEB_SUB_PLATFORMS,
+	deviceProfile,
+} from './client/device-profile.js'
+export type {
+	PlatformType,
+	ReleaseChannel,
+	UserAgentPlatform,
+	WebSubPlatform,
+} from './client/device-profile.js'

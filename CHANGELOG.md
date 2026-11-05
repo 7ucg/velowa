@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Added: choose the device identity. `config.platformType` (all 31 `DeviceProps.PlatformType` names), `config.releaseChannel` (`RELEASE` / `BETA` / `ALPHA` / `DEBUG`), `config.platform` and `config.webSubPlatform`; `deviceProfile(name)` with 21 presets (`DEVICE_PROFILES`, e.g. `safari-mac`, `ios-phone`), Baileys-style `Browsers.*`. Names are checked in the constructor. The device type is read when pairing; the release channel goes out on every connect. Only the default is checked on a live account.
+- Added: `message.unavailable` for messages with no content for this device (view-once photos and videos stay on the phone); `setMuteState` and `muteState` on `call` events.
 - Fixed: a 1:1 message could fail with "no devices found for ...@lid" (reported: typing a bot command in the bot
   number's own PN chat). `receiver.ts` never recorded the PN/LID cross-reference WhatsApp attaches to almost
   every stanza (`participant_pn`/`sender_pn`/`peer_recipient_pn` on a LID-addressed one,

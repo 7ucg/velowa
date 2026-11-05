@@ -739,6 +739,11 @@ new Client({
   customPairingCode: 'ABCD2345', // your own code instead of a random one (needs pairWithPhoneNumber)
   antiban: true, // or your own limits, see below
   config: { /* override the WhatsApp Web version / browser identity */ },
+  // Device identity, e.g. config: { ...deviceProfile('ios-phone'), releaseChannel: 'BETA' }
+  //   platformType (PLATFORM_TYPES: CHROME, SAFARI, IOS_PHONE, ANDROID_PHONE, ...): read when pairing, re-link to change
+  //   releaseChannel (RELEASE | BETA | ALPHA | DEBUG), platform (USER_AGENT_PLATFORMS), webSubPlatform: sent on every connect
+  //   Browsers.ubuntu('Chrome') / macOS / windows / baileys give the [os, device] pair; DEVICE_PROFILES lists the presets.
+  //   Only the default (windows-desktop, RELEASE) is checked live; wrong names throw in the constructor.
 })
 ```
 

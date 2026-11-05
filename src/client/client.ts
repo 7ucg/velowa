@@ -37,6 +37,7 @@ import {
 	registrationPayload,
 } from './pairing.js'
 import type { ClientConfig } from './pairing.js'
+import { checkDeviceConfig } from './device-profile.js'
 import { Receiver } from './receiver.js'
 import type { DecodedMessage } from './receiver.js'
 import { AntiBan } from './antiban.js'
@@ -337,6 +338,7 @@ export class Client {
 			? initAuthCreds()
 			: (loadAuthCreds(this.#credsPath) ?? initAuthCreds())
 		saveAuthCreds(this.#credsPath, this.#creds)
+		checkDeviceConfig(options.config ?? {})
 		this.#config = { ...DEFAULT_CONFIG, ...options.config }
 		if (options.antiban) this.antiban = new AntiBan(options.antiban === true ? {} : options.antiban)
 	}

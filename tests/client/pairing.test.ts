@@ -4,6 +4,7 @@ import protobuf from 'protobufjs'
 import { describe, expect, it } from 'vitest'
 import { initAuthCreds } from '../../src/auth/creds.js'
 import { newIdentityKeyPair, xeddsaSign } from '../../src/crypto/signal.js'
+import { checkDeviceConfig, deviceProfile } from '../../src/client/device-profile.js'
 import {
 	DEFAULT_CONFIG,
 	guestPayload,
@@ -31,6 +32,48 @@ describe('client payloads', () => {
 		expect(decoded.devicePairingData.eSkeySig).toEqual(Buffer.from(creds.signedPreKey.signature))
 		expect(decoded.devicePairingData.eRegid.readUInt32BE(0)).toBe(creds.registrationId)
 		expect(decoded.userAgent.appVersion.tertiary).toBe(DEFAULT_CONFIG.version[2])
+	})
+
+	it('sends the chosen release channel, platform and device type', () => {
+		const creds = { ...initAuthCreds(), me: { id: '4915112345678:12@s.whatsapp.net' } }
+		const cfg = {
+			...DEFAULT_CONFIG,
+			...deviceProfile('ios-phone'),
+			releaseChannel: 'BETA' as const,
+		}
+		const opts = { enums: String, defaults: false }
+		const login = T('ClientPayload').toObject(
+			T('ClientPayload').decode(loginPayload(creds, cfg)),
+			opts,
+		) as any
+		expect(login.userAgent.releaseChannel).toBe('BETA')
+		expect(login.userAgent.platform).toBe('WEB')
+		expect(login.webInfo.webSubPlatform).toBe('WEB_BROWSER')
+		const reg = T('ClientPayload').toObject(
+			T('ClientPayload').decode(registrationPayload(creds, cfg)),
+			opts,
+		) as any
+		const props = T('DeviceProps').toObject(
+			T('DeviceProps').decode(reg.devicePairingData.deviceProps),
+			opts,
+		) as any
+		expect(props.platformType).toBe('IOS_PHONE')
+		expect(props.os).toBe('iOS')
+		const app = T('ClientPayload').toObject(
+			T('ClientPayload').decode(loginPayload(creds, { ...cfg, platform: 'MACOS' })),
+			opts,
+		) as any
+		expect(app.userAgent.platform).toBe('MACOS')
+		expect(app.webInfo).toBeUndefined()
+	})
+
+	it('rejects names that are not WhatsApp enums', () => {
+		expect(() => checkDeviceConfig({ releaseChannel: 'NIGHTLY' as never })).toThrow(/RELEASE, BETA/)
+		expect(() => checkDeviceConfig({ platformType: 'TOASTER' as never })).toThrow(/platformType/)
+		expect(() => deviceProfile('nope')).toThrow(/ios-phone/)
+		expect(() =>
+			checkDeviceConfig({ platformType: 'SAFARI', releaseChannel: 'ALPHA' }),
+		).not.toThrow()
 	})
 
 	it('encodes a login payload from the paired id', () => {
