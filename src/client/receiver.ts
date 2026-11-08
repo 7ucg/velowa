@@ -428,14 +428,20 @@ export class Receiver {
 		}
 		if (decoded.device !== 0) return
 		const { creds, storage, lids, logger } = this.d
-		const isMe =
-			(creds.me && jidDecode(creds.me.id).user === decoded.user) ||
-			(creds.me?.lid && jidDecode(creds.me.lid).user === decoded.user)
-		if (isMe) return
 		const pnUser = decoded.server === 'lid' ? lids.pnUser(decoded.user) : decoded.user
 		const lidUser = decoded.server === 'lid' ? decoded.user : lids.lidUser(decoded.user)
-		for (const user of new Set([pnUser, lidUser].filter((u): u is string => !!u)))
-			await storage.removeSession(user, 0)
+		const targets = new Set([decoded.user, pnUser, lidUser].filter((u): u is string => !!u))
+		// Check every resolved target, not just the stanza's own address: the PN/LID pairing a target was
+		// resolved through comes from `noteLidFromAttrs`, which trusts the server's own cross-reference
+		// attributes but is not itself authenticated against this specific notification, so a forged or
+		// stale pairing must never be able to make this delete our own session instead of a peer's.
+		const isMe = [...targets].some(
+			(u) =>
+				(creds.me && jidDecode(creds.me.id).user === u) ||
+				(creds.me?.lid && jidDecode(creds.me.lid).user === u),
+		)
+		if (isMe) return
+		for (const user of targets) await storage.removeSession(user, 0)
 		logger.event('identity.changed', { from })
 	}
 

@@ -561,6 +561,31 @@ describe('Receiver: identity change', () => {
 		await withLids.idle()
 		expect(await storage.loadSession('222222222222', 0)).toBeUndefined()
 	})
+
+	it('refuses to delete our own session via a poisoned LID pairing for the stanza address', async () => {
+		const { storage, creds } = await setup()
+		const lids = new LidMap()
+		// A forged/stale pairing (e.g. from `noteLidFromAttrs` on an untrusted stanza) claims evil@lid's PN
+		// is our own number - the notification's own address ("evil") is not ours, only the resolved target is.
+		lids.set('evil@lid', `${creds.me!.id.split(':')[0]}@s.whatsapp.net`)
+		const withLids = new Receiver({
+			creds,
+			saveCreds() {},
+			lids,
+			storage,
+			cipher: createSignalCipher(storage),
+			logger: new ProtocolLogger({ enabled: false }),
+			send: () => {},
+		})
+		await storage.storeSession(creds.me!.id.split(':')[0]!, 0, Buffer.from([1]))
+		withLids.handle({
+			tag: 'notification',
+			attrs: { from: 'evil@lid', type: 'encrypt', id: 'IC3' },
+			content: [{ tag: 'identity', attrs: {}, content: [] }],
+		})
+		await withLids.idle()
+		expect(await storage.loadSession(creds.me!.id.split(':')[0]!, 0)).toBeDefined()
+	})
 })
 
 describe('Receiver: app-state key shares', () => {

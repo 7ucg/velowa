@@ -299,15 +299,17 @@ export class Sender {
 			logger.event('retry.rejected', { id, target, reason: 'not an original recipient' })
 			return false
 		}
-		if (!this.#resendAllowed(cached.to)) {
-			logger.event('retry.throttled', { id, target, chat: cached.to })
-			return false
-		}
 		const retry = children(receipt, 'retry')[0]
 		const claimed = Number(retry?.attrs['count'] ?? 1)
 		const resendKey = `${id}|${target}`
 		const done = this.#resends.get(resendKey) ?? 0
 		if (!(claimed >= 1) || done >= MAX_RESEND_COUNT) return false
+		// Checked last, right before the resend it gates, so a receipt that was going to be rejected on its
+		// own terms anyway (an exhausted per-message count, say) never spends a token it had no chance of using.
+		if (!this.#resendAllowed(cached.to)) {
+			logger.event('retry.throttled', { id, target, chat: cached.to })
+			return false
+		}
 		this.#resends.set(resendKey, done + 1)
 		if (this.#resends.size > SENT_CACHE_SIZE * 4)
 			this.#resends.delete(this.#resends.keys().next().value!)
