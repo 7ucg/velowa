@@ -251,12 +251,14 @@ export function decryptPollVote(
 
 /**
  * Many `Message` fields (`spoilerMessage`, `statusAddYours`, `groupMentionedMessage`,
- * `lottieStickerMessage`, `audioStickerMessage`, `botInvokeMessage`, `botTaskMessage`,
- * `botGroupParticipantMessage`, `botPlatformRegistrationSuccessMessage`, `questionReplyMessage`,
- * `newsletterScheduledMessage`, `newsletterAdminProfileMessage`, `newsletterAdminProfileStatusMessage`,
- * `statusMentionMessage`, ...) share one shape on the wire - `FutureProofMessage { message: Message }` - a
- * forward-compatible envelope so older clients ignore the feature instead of choking on it. There is
- * nothing feature-specific to build for any of them beyond this wrap; `field` is the outer field name.
+ * `groupStatusMentionMessage`, `lottieStickerMessage`, `audioStickerMessage`, `botInvokeMessage`,
+ * `botTaskMessage`, `botGroupParticipantMessage`, `botPlatformRegistrationSuccessMessage`,
+ * `questionReplyMessage`, `newsletterScheduledMessage`, `newsletterAdminProfileMessage`,
+ * `newsletterAdminProfileStatusMessage`, `statusMentionMessage`, `acp2SettingMessage`,
+ * `associatedChildMessage`, `eventCoverImage`, `limitSharingMessage`, ...) share one shape on the wire -
+ * `FutureProofMessage { message: Message }` - a forward-compatible envelope so older clients ignore the
+ * feature instead of choking on it. There is nothing feature-specific to build for any of them beyond this
+ * wrap; `field` is the outer field name.
  */
 export const futureProofMessage = (
 	field: string,
