@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Added: `statusLinkPreviewMetadata`, `statusQuotedMessage`, `statusStickerInteraction`,
+  `statusNotification` (status/story interaction) and `messageHistoryNotice` (a text-only group-history
+  notice - `MessageHistoryBundle`, the variant carrying an actual media attachment, needs the upload
+  pipeline and is not covered).
 - Fixed (security): `#secretEncrypted` derived a MESSAGE_EDIT/EVENT_EDIT/POLL_EDIT envelope's "original
   sender" from `targetMessageKey.participant`/`fromMe` - attacker-controlled metadata on the *incoming*
   stanza, written in whichever frame the sender chose. A message, event or poll can only be edited by its

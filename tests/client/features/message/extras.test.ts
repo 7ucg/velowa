@@ -10,6 +10,7 @@ import {
 	futureProofMessage,
 	invoice,
 	location,
+	messageHistoryNotice,
 	musicMessage,
 	musicParts,
 	newsletterAdminInvite,
@@ -30,7 +31,11 @@ import {
 	requestPaymentMessage,
 	splitPaymentMessage,
 	splitPaymentUpdateMessage,
+	statusLinkPreviewMetadata,
+	statusNotification,
 	statusQuestionAnswer,
+	statusQuotedMessage,
+	statusStickerInteraction,
 	vcardFor,
 	viewOnce,
 } from '../../../../src/client/features/message/extras.js'
@@ -225,5 +230,26 @@ describe('proto message builders', () => {
 		validates(paymentInviteMessage({ serviceType: 'UPI' }))
 		validates(declinePaymentRequestMessage(key))
 		validates(cancelPaymentRequestMessage(key))
+	})
+
+	it('builds status-interaction messages and a text-only group-history notice', () => {
+		validates(statusLinkPreviewMetadata('IMMERSIVE'))
+		const quoted = statusQuotedMessage({ text: 'q', originalStatusId: key })
+		expect(quoted['statusQuotedMessage']).toMatchObject({ type: 'QUESTION_ANSWER', text: 'q' })
+		validates(quoted)
+		const sticker = statusStickerInteraction(key, 'STICKER1')
+		expect(sticker['statusStickerInteractionMessage']).toMatchObject({
+			stickerKey: 'STICKER1',
+			type: 'REACTION',
+		})
+		validates(sticker)
+		const notif = statusNotification({ originalMessageKey: key, type: 'STATUS_ADD_YOURS' })
+		expect(notif['statusNotificationMessage']).toMatchObject({ type: 'STATUS_ADD_YOURS' })
+		validates(notif)
+		const notice = messageHistoryNotice({ historyReceivers: ['a@s.whatsapp.net'], messageCount: 5 })
+		expect(notice['messageHistoryNotice']).toMatchObject({
+			messageHistoryMetadata: { historyReceivers: ['a@s.whatsapp.net'], messageCount: 5 },
+		})
+		validates(notice)
 	})
 })

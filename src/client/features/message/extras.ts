@@ -555,3 +555,80 @@ export const declinePaymentRequestMessage = (key: MessageKey): Record<string, un
 export const cancelPaymentRequestMessage = (key: MessageKey): Record<string, unknown> => ({
 	cancelPaymentRequestMessage: { key: wireKey(key) },
 })
+
+// ---- status/story interaction ---------------------------------------------------------------
+
+/** How a status's link preview renders. */
+export const statusLinkPreviewMetadata = (
+	style: 'AUTO' | 'COMPACT' | 'FULL' | 'IMMERSIVE',
+): Record<string, unknown> => ({ statusLinkPreviewMetadata: { style } })
+
+/** Quote another status (e.g. its question-answer sticker) into a new one. */
+export const statusQuotedMessage = (o: {
+	text?: string
+	thumbnail?: Uint8Array
+	originalStatusId?: MessageKey
+}): Record<string, unknown> => ({
+	statusQuotedMessage: {
+		type: 'QUESTION_ANSWER',
+		...(o.text && { text: o.text }),
+		...(o.thumbnail && { thumbnail: o.thumbnail }),
+		...(o.originalStatusId && { originalStatusId: wireKey(o.originalStatusId) }),
+	},
+})
+
+/** React to a status with a sticker. */
+export const statusStickerInteraction = (
+	key: MessageKey,
+	stickerKey: string,
+): Record<string, unknown> => ({
+	statusStickerInteractionMessage: { key: wireKey(key), stickerKey, type: 'REACTION' },
+})
+
+/** A status add-yours/reshare/question-answer-reshare/group-status-reply notification. */
+export const statusNotification = (o: {
+	responseMessageKey?: MessageKey
+	originalMessageKey?: MessageKey
+	type:
+		| 'STATUS_ADD_YOURS'
+		| 'STATUS_RESHARE'
+		| 'STATUS_QUESTION_ANSWER_RESHARE'
+		| 'STATUS_GROUP_STATUS_REPLY'
+}): Record<string, unknown> => ({
+	statusNotificationMessage: {
+		...(o.responseMessageKey && { responseMessageKey: wireKey(o.responseMessageKey) }),
+		...(o.originalMessageKey && { originalMessageKey: wireKey(o.originalMessageKey) }),
+		type: o.type,
+	},
+})
+
+// ---- group history (text only - a bundle with media needs an uploaded attachment, see `media.ts`) ------
+
+/** Notice that a group's message history (or a bot's shared chat history) was bundled for a new member. */
+export function messageHistoryNotice(o: {
+	contextInfo?: Record<string, unknown>
+	historyReceivers?: string[]
+	nonHistoryReceivers?: string[]
+	oldestMessageTimestampInWindow?: number
+	oldestMessageTimestampInBundle?: number
+	messageCount?: number
+	includesChatTheme?: boolean
+}): Record<string, unknown> {
+	return {
+		messageHistoryNotice: {
+			...(o.contextInfo && { contextInfo: o.contextInfo }),
+			messageHistoryMetadata: {
+				...(o.historyReceivers && { historyReceivers: o.historyReceivers }),
+				...(o.nonHistoryReceivers && { nonHistoryReceivers: o.nonHistoryReceivers }),
+				...(o.oldestMessageTimestampInWindow !== undefined && {
+					oldestMessageTimestampInWindow: o.oldestMessageTimestampInWindow,
+				}),
+				...(o.oldestMessageTimestampInBundle !== undefined && {
+					oldestMessageTimestampInBundle: o.oldestMessageTimestampInBundle,
+				}),
+				...(o.messageCount !== undefined && { messageCount: o.messageCount }),
+				...(o.includesChatTheme !== undefined && { includesChatTheme: o.includesChatTheme }),
+			},
+		},
+	}
+}
