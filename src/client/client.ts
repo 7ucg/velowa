@@ -84,9 +84,25 @@ import { loadHistory } from './features/chat/history.js'
 import type { HistoryChunk } from './features/chat/history.js'
 import { mexFor, type MexFn } from './features/mex.js'
 import { fetchLinkPreview, linkPreviewMessage } from './features/message/link-preview.js'
-import { Newsletters, parseChannelStatus } from './features/channel/newsletters.js'
-import type { ChannelStatusEvent } from './features/channel/newsletters.js'
+import {
+	Newsletters,
+	parseChannelStatus,
+	parseNewsletterLiveUpdate,
+} from './features/channel/newsletters.js'
+import type { ChannelStatusEvent, NewsletterLiveUpdate } from './features/channel/newsletters.js'
 import { Usernames } from './features/contact/username.js'
+import {
+	parseContactsNotification,
+	parseDisappearingModeNotification,
+	parsePictureNotification,
+	parseStatusNotification,
+} from './features/contact/notifications.js'
+import type {
+	AboutUpdate,
+	ContactChange,
+	DisappearingModeChanged,
+	PictureUpdate,
+} from './features/contact/notifications.js'
 import { Account, removeDeviceNode } from './features/account/account.js'
 import {
 	decodeMediaRetryNode,
@@ -282,6 +298,18 @@ export type ClientEvents = {
 	'group.update': GroupNotification
 	/** Any server notification, parsed or not (account_sync, devices, picture, ...). */
 	notification: { type: string; node: BinaryNode }
+	/** A contact's security code changed (they reinstalled WhatsApp or linked a new primary device). */
+	'identity.changed': { jid: string }
+	/** A contact's profile photo changed, or was removed. */
+	'contact.picture': PictureUpdate
+	/** A contact's About/status text changed. */
+	'contact.about': AboutUpdate
+	/** A contact changed their default disappearing-messages timer. */
+	'contact.disappearing-mode': DisappearingModeChanged
+	/** A contact's profile changed, their phone number changed, or the server asks for a full re-sync. */
+	'contact.change': ContactChange
+	/** Live counters (forwards, reactions, poll votes) for recent channel posts. */
+	'newsletter.live-update': NewsletterLiveUpdate
 }
 
 /**
@@ -3270,7 +3298,36 @@ export class Client {
 						.filter(Boolean)
 					void this.#appState?.sync(names)
 				}
+				if (type === 'picture') {
+					const p = parsePictureNotification(node)
+					if (p) this.#events.emit('contact.picture', p)
+				}
+				if (type === 'status') {
+					const s = parseStatusNotification(node)
+					if (s) this.#events.emit('contact.about', s)
+				}
+				if (type === 'disappearing_mode') {
+					const d = parseDisappearingModeNotification(node)
+					if (d) this.#events.emit('contact.disappearing-mode', d)
+				}
+				if (type === 'contacts') {
+					const c = parseContactsNotification(node)
+					if (c) {
+						// Mirrors WA Web's WAWebDBCreateLidPnMappings: a number change with both LID forms known
+						// pairs up the old and new identities, not just the new one.
+						if (c.action === 'number-changed' && c.oldLid && c.newLid) {
+							lids.set(c.oldJid, c.oldLid)
+							lids.set(c.newJid, c.newLid)
+						}
+						this.#events.emit('contact.change', c)
+					}
+				}
+				if (type === 'newsletter') {
+					const n = parseNewsletterLiveUpdate(node)
+					if (n) this.#events.emit('newsletter.live-update', n)
+				}
 			},
+			onIdentityChange: (jid) => this.#events.emit('identity.changed', { jid }),
 		})
 		this.#receiver = receiver
 		this.#appState = new AppStateSync({

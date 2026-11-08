@@ -132,6 +132,9 @@ export interface ReceiverDeps {
 	}): void
 	/** Sync keys shared by the primary phone (`appStateSyncKeyShare`). */
 	onAppStateKeys?(keys: { keyId: Uint8Array; keyData: Uint8Array }[]): void
+	/** A contact's identity key changed (reinstalled WhatsApp, new device, ...): their security code is now
+	 * different. Fired after the stale session was already dropped; never for our own account. */
+	onIdentityChange?(jid: string): void
 }
 
 export interface DecodedMessage {
@@ -531,6 +534,7 @@ export class Receiver {
 		if (isMe) return
 		for (const user of targets) await storage.removeSession(user, 0)
 		logger.event('identity.changed', { from })
+		this.d.onIdentityChange?.(from)
 	}
 
 	// ---- incoming stanzas -----------------------------------------------------------------------

@@ -660,6 +660,52 @@ describe('Receiver: identity change', () => {
 		await withLids.idle()
 		expect(await storage.loadSession(creds.me!.id.split(':')[0]!, 0)).toBeDefined()
 	})
+
+	it("fires onIdentityChange for a peer's changed identity, so the app can show a security-code notice", async () => {
+		const { storage, creds } = await setup()
+		const lids = new LidMap()
+		const changed: string[] = []
+		const withCallback = new Receiver({
+			creds,
+			saveCreds() {},
+			lids,
+			storage,
+			cipher: createSignalCipher(storage),
+			logger: new ProtocolLogger({ enabled: false }),
+			send: () => {},
+			onIdentityChange: (jid) => changed.push(jid),
+		})
+		withCallback.handle({
+			tag: 'notification',
+			attrs: { from: 'mallory@s.whatsapp.net', type: 'encrypt', id: 'IC4' },
+			content: [{ tag: 'identity', attrs: {}, content: [] }],
+		})
+		await withCallback.idle()
+		expect(changed).toEqual(['mallory@s.whatsapp.net'])
+	})
+
+	it('never fires onIdentityChange for our own account', async () => {
+		const { storage, creds } = await setup()
+		const lids = new LidMap()
+		const changed: string[] = []
+		const withCallback = new Receiver({
+			creds,
+			saveCreds() {},
+			lids,
+			storage,
+			cipher: createSignalCipher(storage),
+			logger: new ProtocolLogger({ enabled: false }),
+			send: () => {},
+			onIdentityChange: (jid) => changed.push(jid),
+		})
+		withCallback.handle({
+			tag: 'notification',
+			attrs: { from: creds.me!.id, type: 'encrypt', id: 'IC5' },
+			content: [{ tag: 'identity', attrs: {}, content: [] }],
+		})
+		await withCallback.idle()
+		expect(changed).toEqual([])
+	})
 })
 
 describe('Receiver: app-state key shares', () => {

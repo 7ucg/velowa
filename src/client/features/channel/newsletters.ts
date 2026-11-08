@@ -646,3 +646,60 @@ export function parseChannelStatus(
 		}),
 	}
 }
+
+export interface NewsletterLiveUpdateMessage {
+	serverId: number
+	forwardsCount?: number
+	reactions?: { code: string; count: number }[]
+	/** Hex SHA-256 of the voted option's text, matching `pollOptionHash` elsewhere in this client. */
+	votes?: { optionHash: string; count: number }[]
+}
+
+export interface NewsletterLiveUpdate {
+	newsletter: string
+	messages: NewsletterLiveUpdateMessage[]
+}
+
+/**
+ * `<notification type="newsletter">`: live counters for recent channel posts (forwards, reactions, poll
+ * votes), in the same shape as the message-history IQ. The first update after subscribing is a snapshot of
+ * recent messages; later ones carry only the messages that changed - one missing from an update has not
+ * changed, not dropped to zero.
+ */
+export function parseNewsletterLiveUpdate(node: BinaryNode): NewsletterLiveUpdate | undefined {
+	const newsletter = node.attrs['from']
+	if (!newsletter) return undefined
+	const liveUpdates = childOf(node, 'live_updates')
+	const messagesNode = liveUpdates && childOf(liveUpdates, 'messages')
+	const msgNodes = Array.isArray(messagesNode?.content)
+		? messagesNode.content.filter((c) => c.tag === 'message')
+		: []
+	const messages = msgNodes
+		.map((m): NewsletterLiveUpdateMessage | undefined => {
+			const serverId = Number(m.attrs['server_id'])
+			if (!serverId) return undefined
+			const reactions = childOf(m, 'reactions')
+			const votes = childOf(m, 'votes')
+			const forwards = childOf(m, 'forwards_count')
+			return {
+				serverId,
+				...(forwards?.attrs['count'] && { forwardsCount: Number(forwards.attrs['count']) }),
+				...(Array.isArray(reactions?.content) && {
+					reactions: reactions.content
+						.filter((r) => r.tag === 'reaction' && r.attrs['code'])
+						.map((r) => ({ code: r.attrs['code']!, count: Number(r.attrs['count'] ?? 0) })),
+				}),
+				...(Array.isArray(votes?.content) && {
+					votes: votes.content
+						.filter((v) => v.tag === 'vote' && v.content instanceof Uint8Array && v.attrs['count'])
+						.map((v) => ({
+							optionHash: Buffer.from(v.content as Uint8Array).toString('hex'),
+							count: Number(v.attrs['count']),
+						})),
+				}),
+			}
+		})
+		.filter((m): m is NewsletterLiveUpdateMessage => !!m)
+	if (!messages.length) return undefined
+	return { newsletter, messages }
+}

@@ -6,6 +6,7 @@ import {
 	Newsletters,
 	parseChannelStatus,
 	parseNewsletter,
+	parseNewsletterLiveUpdate,
 } from '../../../../src/client/features/channel/newsletters.js'
 
 const mexReply = (obj: unknown): BinaryNode => ({
@@ -212,6 +213,65 @@ describe('channel status', () => {
 		})
 		expect(
 			parseChannelStatus({ tag: 'status', attrs: { from: 'x@g.us', id: 'C' } }, decode),
+		).toBeUndefined()
+	})
+})
+
+describe('newsletter live updates', () => {
+	it('parses forwards, reactions and poll votes for each changed message', () => {
+		const voteHash = Buffer.alloc(32, 7)
+		const result = parseNewsletterLiveUpdate({
+			tag: 'notification',
+			attrs: { type: 'newsletter', from: '1@newsletter' },
+			content: [
+				{
+					tag: 'live_updates',
+					attrs: {},
+					content: [
+						{
+							tag: 'messages',
+							attrs: {},
+							content: [
+								{
+									tag: 'message',
+									attrs: { server_id: '42' },
+									content: [
+										{ tag: 'forwards_count', attrs: { count: '12' } },
+										{
+											tag: 'reactions',
+											attrs: {},
+											content: [{ tag: 'reaction', attrs: { code: '👍', count: '3' } }],
+										},
+										{
+											tag: 'votes',
+											attrs: {},
+											content: [{ tag: 'vote', attrs: { count: '7' }, content: voteHash }],
+										},
+									],
+								},
+							],
+						},
+					],
+				},
+			],
+		})
+		expect(result).toEqual({
+			newsletter: '1@newsletter',
+			messages: [
+				{
+					serverId: 42,
+					forwardsCount: 12,
+					reactions: [{ code: '👍', count: 3 }],
+					votes: [{ optionHash: voteHash.toString('hex'), count: 7 }],
+				},
+			],
+		})
+	})
+
+	it('is undefined without from, without live_updates, or with no messages', () => {
+		expect(parseNewsletterLiveUpdate({ tag: 'notification', attrs: {} })).toBeUndefined()
+		expect(
+			parseNewsletterLiveUpdate({ tag: 'notification', attrs: { from: '1@newsletter' } }),
 		).toBeUndefined()
 	})
 })

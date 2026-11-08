@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- Added: six events for server notifications that previously only reached the generic `notification`
+  passthrough (parseable, but unparsed) - `identity.changed` (a contact's security code changed; the
+  session-clearing logic already existed, it just never told the app), `contact.picture`, `contact.about`,
+  `contact.disappearing-mode`, `contact.change` (profile update / phone-number change, now also feeding the
+  LID/PN mapping when both forms are known / full-resync request), and `newsletter.live-update` (live
+  forwards/reactions/poll-vote counters for recent channel posts).
 - Added: `keepInChat` (exempt a disappearing message from auto-delete), `pollResultSnapshot` (final tallies
   once a poll closes, V3 variant included), `stickerSyncRemove` and `conditionalReveal` (the wire envelope
   behind "schedule a message" - `encPayload`/`encIv` decrypt with a one-time reveal key delivered
