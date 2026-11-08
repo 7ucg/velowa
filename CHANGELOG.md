@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- Fixed: the keepalive ping was a flat 30s `setInterval` sending a fire-and-forget `w:p` IQ with no response
+  correlation, no timeout and no failure tracking - a half-open socket (our own sends still succeed, nothing
+  ever comes back) was invisible to it and never triggered a reconnect; it would just sit there. Replaced
+  with a randomized 15-30s tick (so many clients reconnecting after an outage don't all ping in lockstep)
+  that skips the ping entirely when other real traffic already arrived recently, otherwise sends it through
+  `receiver.request()` (its own 20s answer deadline) and reconnects after 3 consecutive unanswered pings
+  instead of waiting for TCP to eventually notice. Also refreshes the server-clock-offset estimate from
+  each successful ping's own timestamp, instead of only ever reading it once at login.
 - Fixed: a dropped WebSocket that never answers past the upgrade (opens, then nothing) hung the connection
   forever - the `ws` constructor's own `handshakeTimeout` only covers the WebSocket upgrade itself, not the
   Noise handshake that follows it. Added a 20s timeout on ServerHello, closing the socket (not just marking

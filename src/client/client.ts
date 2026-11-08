@@ -346,6 +346,16 @@ export interface GroupSummary {
 	participants: unknown
 }
 
+// Keepalive: randomized so many clients reconnecting after an outage don't all ping in lockstep.
+const KEEP_ALIVE_INTERVAL_MIN_MS = 15_000
+const KEEP_ALIVE_INTERVAL_MAX_MS = 30_000
+/** A ping is skipped (not a failure) when real data already arrived more recently than this. */
+const KEEP_ALIVE_SKIP_IF_RECENT_MS = KEEP_ALIVE_INTERVAL_MIN_MS
+/** Consecutive unanswered pings before giving up on this connection and reconnecting - covers a half-open
+ * socket (sends still succeed, nothing ever comes back) that a single timeout alone can't distinguish from
+ * one slow round trip. */
+const KEEPALIVE_MAX_CONSECUTIVE_FAILURES = 3
+
 export class Client {
 	readonly logger: ProtocolLogger
 	readonly #events = new TypedEmitter<ClientEvents>()
@@ -366,6 +376,11 @@ export class Client {
 	#sender: Sender | undefined
 	#qrTimer: NodeJS.Timeout | undefined
 	#keepAlive: NodeJS.Timeout | undefined
+	/** Last time ANY node arrived on the current connection - a dead/half-open socket (sends still work,
+	 * nothing ever comes back) shows up as this going stale while pings keep timing out. */
+	#lastDataReceived = 0
+	/** Consecutive keepalive pings with no answer; reset on any successful one or on other inbound data. */
+	#keepAliveFailures = 0
 	#stopped = false
 	/** Set when the server ended the session for good (see `classifyServerFailure`): no reconnect, reported on close. */
 	#terminal: ServerFailure | undefined
@@ -2894,7 +2909,7 @@ export class Client {
 	#teardown(): void {
 		this.#www.invalidate()
 		clearTimeout(this.#qrTimer)
-		clearInterval(this.#keepAlive)
+		clearTimeout(this.#keepAlive)
 		this.#receiver = undefined
 		this.#sender = undefined
 		this.#appState = undefined
@@ -3023,7 +3038,54 @@ export class Client {
 			void loggedFetch(this.logger, 'https://web.whatsapp.com/status.json').catch(() => {})
 	}
 
+	/**
+	 * Keeps the connection alive and detects a half-open socket (sends still succeed, nothing ever comes
+	 * back) that a bare ack/receipt flow would never otherwise notice. Ticks every 15-30s, randomized so
+	 * many clients reconnecting after an outage don't all ping in lockstep:
+	 * - Real data (any inbound node) more recent than 15s ago stands in for a ping; skipped, not a failure.
+	 * - Otherwise sends a `w:p` ping and waits for its own 20s answer deadline (`receiver.request`'s own
+	 *   timeout). Three consecutive unanswered pings force a reconnect instead of waiting for TCP to
+	 *   notice the socket is actually dead, which can take far longer than a chat client should tolerate.
+	 */
+	#scheduleKeepAlive(conn: Connection, receiver: Receiver): void {
+		const interval =
+			KEEP_ALIVE_INTERVAL_MIN_MS +
+			Math.random() * (KEEP_ALIVE_INTERVAL_MAX_MS - KEEP_ALIVE_INTERVAL_MIN_MS)
+		this.#keepAlive = setTimeout(() => {
+			if (conn.state !== 'open') return
+			if (Date.now() - this.#lastDataReceived < KEEP_ALIVE_SKIP_IF_RECENT_MS) {
+				this.#keepAliveFailures = 0
+				this.#scheduleKeepAlive(conn, receiver)
+				return
+			}
+			let gaveUp = false
+			void receiver
+				.request({ tag: 'iq', attrs: { to: 's.whatsapp.net', type: 'get', xmlns: 'w:p' } })
+				.then((res) => {
+					this.#keepAliveFailures = 0
+					const t = Number(res.attrs['t'])
+					if (t > 1_000_000_000) this.#serverOffsetMs = t * 1000 - Date.now()
+				})
+				.catch((e) => {
+					this.#keepAliveFailures++
+					this.logger.event('keepalive.failed', {
+						consecutiveFailures: this.#keepAliveFailures,
+						error: e,
+					})
+					if (this.#keepAliveFailures >= KEEPALIVE_MAX_CONSECUTIVE_FAILURES) {
+						gaveUp = true
+						this.logger.event('keepalive.dead-socket', {})
+						conn.close('keepalive-dead-socket')
+					}
+				})
+				.finally(() => {
+					if (!gaveUp && conn.state === 'open') this.#scheduleKeepAlive(conn, receiver)
+				})
+		}, interval)
+	}
+
 	#handle(conn: Connection, node: BinaryNode): void {
+		this.#lastDataReceived = Date.now()
 		const failure = classifyServerFailure(node)
 		if (failure) {
 			// The server will refuse every retry: stop here and say why, instead of reconnecting in a loop.
@@ -3480,13 +3542,9 @@ export class Client {
 		// exactly what autoReconnect already recovers from for the connection itself); re-send them all.
 		for (const jid of this.#presenceSubscriptions)
 			receiver.sendNode(msg.presenceSubscribe(jid, receiver.nextId()))
-		this.#keepAlive = setInterval(() => {
-			if (conn.state === 'open')
-				conn.send({
-					tag: 'iq',
-					attrs: { id: receiver.nextId(), to: 's.whatsapp.net', type: 'get', xmlns: 'w:p' },
-				})
-		}, 30_000)
+		this.#lastDataReceived = Date.now()
+		this.#keepAliveFailures = 0
+		this.#scheduleKeepAlive(conn, receiver)
 		this.#isOpen = true
 		this.#connectedAt = Date.now()
 		this.#events.emit('open', { id: creds.me?.id ?? '' })
