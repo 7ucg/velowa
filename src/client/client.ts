@@ -319,6 +319,8 @@ export class Client {
 	/** A guest's private auth folder, removed again on `close()`. */
 	#guestTmp: string | undefined
 	#isOpen = false
+	/** JIDs `subscribePresence` was called for: the server forgets presence subscriptions across a reconnect, so these are re-sent once the connection is back up. */
+	readonly #presenceSubscriptions = new Set<string>()
 	#mediaConn: media.MediaConn | undefined
 	#appState: AppStateSync | undefined
 	#pairing: { phone: string; code: string; helloId?: string; finishId?: string } | undefined
@@ -1161,6 +1163,12 @@ export class Client {
 		)
 	getCollections = (jid?: string, limit = 51) =>
 		business.getCollections(this.#q, jid ?? this.#creds.me?.id.replace(/:\d+@/, '@') ?? '', limit)
+	/**
+	 * Read a placed order's line items and totals. `jid`/`orderId`/`token` come from the `orderMessage` the
+	 * customer's "Review and pay" tap sent (`.sellerJid`/`.orderId`/`.token`).
+	 */
+	getOrder = (jid: string, orderId: string, token: string) =>
+		business.getOrder(this.mex, jid, orderId, token)
 
 	/** Buttons / list message (native flow). Build buttons with `quickReply`, `urlButton`, `singleSelect`, ... from the package. */
 	async sendInteractive(to: string, o: interactiveMsg.InteractiveOptions): Promise<string> {
@@ -2584,10 +2592,18 @@ export class Client {
 		saveAuthCreds(this.#credsPath, this.#creds)
 	}
 
-	/** Get presence updates for a contact. */
+	/** Get presence updates for a contact. Re-sent automatically after a reconnect (the server forgets it otherwise). */
 	async subscribePresence(jid: string): Promise<void> {
 		const { receiver } = await this.#live()
+		this.#presenceSubscriptions.add(jid)
 		receiver.sendNode(msg.presenceSubscribe(jid, receiver.nextId()))
+	}
+
+	/** Stop getting presence updates for a contact subscribed to with `subscribePresence`. */
+	async unsubscribePresence(jid: string): Promise<void> {
+		const { receiver } = await this.#live()
+		this.#presenceSubscriptions.delete(jid)
+		receiver.sendNode(msg.presenceUnsubscribe(jid, receiver.nextId()))
 	}
 
 	/**
@@ -3119,6 +3135,10 @@ export class Client {
 		} catch (error) {
 			this.logger.event('login.setup-failed', error)
 		}
+		// The server forgets presence subscriptions across a reconnect (a network blip, a server bounce -
+		// exactly what autoReconnect already recovers from for the connection itself); re-send them all.
+		for (const jid of this.#presenceSubscriptions)
+			receiver.sendNode(msg.presenceSubscribe(jid, receiver.nextId()))
 		this.#keepAlive = setInterval(() => {
 			if (conn.state === 'open')
 				conn.send({

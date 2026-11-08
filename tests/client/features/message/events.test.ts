@@ -27,6 +27,31 @@ describe('incoming receipts and presence', () => {
 		).toEqual({ chat: 'g@g.us', participant: 'p@lid', ids: ['M1', 'M2', 'M3'], type: 'read' })
 	})
 
+	it('downgrades a delivery receipt carrying a LID feature-incapable error to "sent"', () => {
+		expect(
+			parseReceipt({
+				tag: 'receipt',
+				attrs: { from: 'a@lid', id: 'M1' },
+				content: [{ tag: 'error', attrs: { reason: 'lid', type: 'feature-incapable' } }],
+			}).type,
+		).toBe('sent')
+		// A different error, or on a non-delivery receipt, must not be downgraded.
+		expect(
+			parseReceipt({
+				tag: 'receipt',
+				attrs: { from: 'a@lid', id: 'M1' },
+				content: [{ tag: 'error', attrs: { reason: 'lid', type: 'other' } }],
+			}).type,
+		).toBe('delivery')
+		expect(
+			parseReceipt({
+				tag: 'receipt',
+				attrs: { from: 'a@lid', id: 'M1', type: 'retry' },
+				content: [{ tag: 'error', attrs: { reason: 'lid', type: 'feature-incapable' } }],
+			}).type,
+		).toBe('retry')
+	})
+
 	it('parses online/offline and typing', () => {
 		expect(
 			parsePresence({

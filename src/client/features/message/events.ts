@@ -24,11 +24,21 @@ export function parseReceipt(node: BinaryNode): ReceiptEvent {
 	const ids = [node.attrs['id'] ?? '']
 	for (const list of kids(node, 'list'))
 		for (const item of kids(list, 'item')) if (item.attrs['id']) ids.push(item.attrs['id'])
+	const type = node.attrs['type'] ?? 'delivery'
+	const error = kids(node, 'error')[0]
+	// A delivery receipt carrying this error means the LID peer couldn't take the message at all - it was
+	// only ever sent, never delivered, no matter what the <receipt> tag itself claims.
+	const downgraded =
+		type === 'delivery' &&
+		error?.attrs['reason'] === 'lid' &&
+		error.attrs['type'] === 'feature-incapable'
+			? 'sent'
+			: type
 	return {
 		chat: node.attrs['from'] ?? '',
 		...(node.attrs['participant'] && { participant: node.attrs['participant'] }),
 		ids: ids.filter(Boolean),
-		type: node.attrs['type'] ?? 'delivery',
+		type: downgraded,
 		...(digits(node.attrs['t']) !== undefined && { timestamp: digits(node.attrs['t'])! }),
 	}
 }

@@ -6,6 +6,8 @@ import {
 	edit,
 	forward,
 	presence,
+	presenceSubscribe,
+	presenceUnsubscribe,
 	reaction,
 	revoke,
 	textMessage,
@@ -101,6 +103,14 @@ describe('message builders', () => {
 		])
 		expect(chatState(ME, BOB, 'paused').content).toEqual([{ tag: 'paused', attrs: {} }])
 		expect(presence('Alex@x', 'available').attrs).toEqual({ name: 'Alexx', type: 'available' })
+		expect(presenceSubscribe(BOB, 'P1')).toEqual({
+			tag: 'presence',
+			attrs: { to: BOB, id: 'P1', type: 'subscribe' },
+		})
+		expect(presenceUnsubscribe(BOB, 'P2')).toEqual({
+			tag: 'presence',
+			attrs: { to: BOB, id: 'P2', type: 'unsubscribe' },
+		})
 	})
 })
 

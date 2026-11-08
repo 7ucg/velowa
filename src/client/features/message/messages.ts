@@ -204,6 +204,11 @@ export function presenceSubscribe(jid: string, id: string): BinaryNode {
 	return { tag: 'presence', attrs: { to: jid, id, type: 'subscribe' } }
 }
 
+/** Stop being told when `jid` goes online/offline. */
+export function presenceUnsubscribe(jid: string, id: string): BinaryNode {
+	return { tag: 'presence', attrs: { to: jid, id, type: 'unsubscribe' } }
+}
+
 /** Mark a received message as forwarded (shows the "Forwarded" label; `score` > 4 shows "Forwarded many times"). */
 export function forward(message: Record<string, unknown>, score = 1): Record<string, unknown> {
 	const field = Object.keys(message).find((k) => k !== 'messageContextInfo')

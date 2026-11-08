@@ -1,6 +1,7 @@
 // velowa (https://github.com/7ucg/velowa) (c) 2026 Baron. Copying any part of this file, however small, requires credit: see LICENSE.
 import type { BinaryNode } from '../../../codec/index.js'
 import type { RequestFn } from '../group/groups.js'
+import type { MexFn } from '../mex.js'
 
 const kids = (n: BinaryNode | undefined, tag?: string): BinaryNode[] =>
 	n && Array.isArray(n.content) ? n.content.filter((c) => tag === undefined || c.tag === tag) : []
@@ -231,4 +232,108 @@ export async function getCollections(
 		...(childText(c, 'name') !== undefined && { name: childText(c, 'name')! }),
 		products: kids(c, 'product').map(parseProduct),
 	}))
+}
+
+// ---- orders -----------------------------------------------------------------------------------
+
+export interface OrderProduct {
+	id?: string
+	name?: string
+	/** Amount in thousandths of the currency unit (as WhatsApp sends it), and its ISO 4217 code. */
+	price?: { amount1000: number; currency: string }
+	quantity?: number
+	imageUrls: string[]
+	/** The variant the customer chose (size, colour, ...); empty for a product with no variants. */
+	variantProperties: { name?: string; value?: string }[]
+}
+
+export interface Order {
+	products: OrderProduct[]
+	priceDetails?: {
+		subtotal?: { amount1000: number; currency: string }
+		total?: { amount1000: number; currency: string }
+	}
+	/** Unix seconds, as sent. */
+	creationTimestamp?: number
+}
+
+const amount = (
+	value: unknown,
+	currency: string | undefined,
+): { amount1000: number; currency: string } | undefined => {
+	const n =
+		typeof value === 'number'
+			? value
+			: typeof value === 'string' && value !== ''
+				? Number(value)
+				: NaN
+	return Number.isFinite(n) && currency ? { amount1000: n, currency } : undefined
+}
+
+/**
+ * Read a placed order's line items and totals. `orderId` and `token` come from the `orderMessage` the
+ * customer's "Review and pay" tap sent (`OrderMessage.orderId`/`.token`); the token is a per-order
+ * capability, so an order cannot be read without that message. `jid` is the business it was placed with
+ * (`OrderMessage.sellerJid`).
+ */
+export async function getOrder(
+	mex: MexFn,
+	jid: string,
+	orderId: string,
+	token: string,
+): Promise<Order> {
+	const data = await mex<{
+		order?: {
+			creation_time_stamp?: string
+			price_details?: { currency?: string; subtotal_amount?: unknown; total_amount?: unknown }
+			products?: {
+				id?: string
+				name?: string
+				currency?: string
+				price?: unknown
+				quantity?: string
+				media?: { images?: { id?: string; request_image_url?: string }[] }
+				variant_info?: { variant_properties?: { name?: string; value?: string }[] }
+			}[]
+		}
+	}>(
+		'26593811266898374',
+		{
+			request: {
+				order: {
+					id: orderId,
+					jid,
+					token: { sensitive_string_value: token },
+					image_dimensions: { width: 100, height: 100 },
+				},
+			},
+		},
+		'xwa_checkout_get_order_info',
+	)
+	const order = data.order
+	if (!order) throw new Error('order query returned no order')
+	const details = order.price_details
+	return {
+		products: (order.products ?? []).map((p) => ({
+			...(p.id !== undefined && { id: p.id }),
+			...(p.name !== undefined && { name: p.name }),
+			...(amount(p.price, p.currency) && { price: amount(p.price, p.currency) }),
+			...(p.quantity !== undefined && !Number.isNaN(+p.quantity) && { quantity: +p.quantity }),
+			imageUrls: (p.media?.images ?? []).map((i) => i.request_image_url ?? '').filter(Boolean),
+			variantProperties: p.variant_info?.variant_properties ?? [],
+		})),
+		...(details && {
+			priceDetails: {
+				...(amount(details.subtotal_amount, details.currency) && {
+					subtotal: amount(details.subtotal_amount, details.currency),
+				}),
+				...(amount(details.total_amount, details.currency) && {
+					total: amount(details.total_amount, details.currency),
+				}),
+			},
+		}),
+		...(order.creation_time_stamp !== undefined && {
+			creationTimestamp: Number(order.creation_time_stamp),
+		}),
+	}
 }

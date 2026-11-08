@@ -1,6 +1,16 @@
 # Changelog
 
 ## Unreleased
+- Fixed: `subscribePresence`'d contacts went silent (no more `presence`/`chatstate` events, no error) after any
+  reconnect - the server forgets presence subscriptions across one. Every subscription is now re-sent once the
+  connection is back up; `unsubscribePresence(jid)` stops it (and is itself remembered, so an unsubscribe right
+  before a drop stays unsubscribed after the reconnect).
+- Added: `client.getOrder(jid, orderId, token)` - a placed order's line items, prices and totals, read from the
+  `OrderMessage` a customer's "Review and pay" tap sends (`.sellerJid`/`.orderId`/`.token`). Was previously
+  unreadable: velowa already had full catalog/collection read+write but nothing for an order once placed.
+- Fixed: a `<receipt type="delivery">` carrying `<error reason="lid" type="feature-incapable"/>` (the LID peer
+  never actually received the message) was reported as an ordinary delivery. `parseReceipt` now downgrades it
+  to `type: 'sent'`, matching WA Web.
 - Added (safety): a per-chat token bucket (burst 20, refill 10/min) on resends done for `<receipt type="retry">`,
   on top of the existing per-message/per-device cap. WhatsApp's anti-abuse penalizes the *aggregate* resend
   rate to one chat, not any single device's depth: during a mass PN<->LID migration, hundreds of devices can

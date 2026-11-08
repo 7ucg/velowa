@@ -4,6 +4,7 @@ import {
 	getBusinessProfile,
 	getCatalog,
 	getCollections,
+	getOrder,
 	updateBusinessProfile,
 } from '../../../../src/client/features/contact/business.js'
 
@@ -190,5 +191,70 @@ describe('business', () => {
 		expect(cols).toEqual([
 			{ id: 'C1', name: 'Backwaren', products: [expect.objectContaining({ id: 'P1' })] },
 		])
+	})
+
+	it('reads an order’s products and totals, and asks the right query/variables', async () => {
+		const calls: { queryId: string; variables: unknown; dataPath?: string }[] = []
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double, shape checked below
+		const mex = async (queryId: string, variables: unknown, dataPath?: string): Promise<any> => {
+			calls.push({ queryId, variables, dataPath })
+			return {
+				order: {
+					creation_time_stamp: '1700000000',
+					price_details: { currency: 'EUR', subtotal_amount: '12500', total_amount: '13500' },
+					products: [
+						{
+							id: 'P1',
+							name: 'Brot',
+							currency: 'EUR',
+							price: '2500',
+							quantity: '5',
+							media: { images: [{ id: 'I1', request_image_url: 'https://x/1.jpg' }] },
+							variant_info: { variant_properties: [{ name: 'Size', value: 'Large' }] },
+						},
+					],
+				},
+			}
+		}
+		const order = await getOrder(mex, 'b@s.whatsapp.net', 'O1', 'tok123')
+		expect(calls).toEqual([
+			{
+				queryId: '26593811266898374',
+				variables: {
+					request: {
+						order: {
+							id: 'O1',
+							jid: 'b@s.whatsapp.net',
+							token: { sensitive_string_value: 'tok123' },
+							image_dimensions: { width: 100, height: 100 },
+						},
+					},
+				},
+				dataPath: 'xwa_checkout_get_order_info',
+			},
+		])
+		expect(order).toEqual({
+			products: [
+				{
+					id: 'P1',
+					name: 'Brot',
+					price: { amount1000: 2500, currency: 'EUR' },
+					quantity: 5,
+					imageUrls: ['https://x/1.jpg'],
+					variantProperties: [{ name: 'Size', value: 'Large' }],
+				},
+			],
+			priceDetails: {
+				subtotal: { amount1000: 12500, currency: 'EUR' },
+				total: { amount1000: 13500, currency: 'EUR' },
+			},
+			creationTimestamp: 1700000000,
+		})
+	})
+
+	it('throws when the order query comes back without an order', async () => {
+		await expect(getOrder(async () => ({}), 'b@s.whatsapp.net', 'O1', 'tok')).rejects.toThrow(
+			/no order/,
+		)
 	})
 })
