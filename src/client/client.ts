@@ -104,6 +104,8 @@ import type {
 	DisappearingModeChanged,
 	PictureUpdate,
 } from './features/contact/notifications.js'
+import { detectFakeChat, SentMessageIds } from './features/contact/fake-chat.js'
+import type { FakeChatDetected } from './features/contact/fake-chat.js'
 import { Account, removeDeviceNode } from './features/account/account.js'
 import {
 	decodeMediaRetryNode,
@@ -311,6 +313,9 @@ export type ClientEvents = {
 	'contact.change': ContactChange
 	/** Live counters (forwards, reactions, poll votes) for recent channel posts. */
 	'newsletter.live-update': NewsletterLiveUpdate
+	/** A delivery/read/played receipt named a message id we never sent - a known scam technique: a
+	 * fabricated tick staged to make a conversation look more credible than it is. */
+	'fake-chat': FakeChatDetected
 }
 
 /**
@@ -343,6 +348,7 @@ export class Client {
 	readonly #credsPath: string
 	readonly #signalDir: string
 	readonly #tcTokens: TcTokens
+	readonly #sentIds: SentMessageIds
 	readonly #autoRecover: boolean
 	#recoverTimes: number[] = []
 	#signalStorage: FileSignalStorage | undefined
@@ -393,6 +399,7 @@ export class Client {
 		this.#signalDir = join(dir, 'signal')
 		this.#autoRecover = options.autoRecover !== false
 		this.#tcTokens = new TcTokens(join(dir, 'signal', 'tctokens.json'))
+		this.#sentIds = new SentMessageIds(join(dir, 'signal', 'sent-ids.json'))
 		this.logger = options.logger ?? new ProtocolLogger({ label: 'client' })
 		// A guest identity is throwaway and scoped to one call link: never reuse a saved one.
 		this.#creds = this.#isGuest
@@ -3233,7 +3240,22 @@ export class Client {
 			},
 			onReceipt: (node) => {
 				// Receipts are keyed by (chat, id): a bare id is not unique across chats.
-				if (node.attrs['from']) this.#events.emit('receipt', parseReceipt(node))
+				if (node.attrs['from']) {
+					const r = parseReceipt(node)
+					this.#events.emit('receipt', r)
+					const fake = detectFakeChat(r, this.#sentIds, (jid) => {
+						try {
+							const u = jidDecode(jid).user
+							return (
+								(!!creds.me && jidDecode(creds.me.id).user === u) ||
+								(!!creds.me?.lid && jidDecode(creds.me.lid).user === u)
+							)
+						} catch {
+							return false
+						}
+					})
+					if (fake) this.#events.emit('fake-chat', fake)
+				}
 				if (node.attrs['type'] === 'retry' && node.attrs['from'])
 					void this.#sender
 						?.handleRetryReceipt(node)
@@ -3375,6 +3397,7 @@ export class Client {
 			tc: this.#tcTokens,
 			onSent: (id, to, m) => {
 				receiver.rememberOwn(id, to, m)
+				this.#sentIds.add(id)
 				this.#reports.add({
 					id,
 					t: Math.floor(Date.now() / 1000),

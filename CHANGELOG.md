@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- Added: `fake-chat` event - a delivery/read/played receipt naming a message id we never sent is a known
+  scam technique (a fabricated tick staged, often alongside forged history, to make a conversation look
+  more credible than it is). Sent message ids are now kept in a small persisted store (`SentMessageIds`,
+  `features/contact/fake-chat.ts`) specifically so a receipt for an id sent in an earlier run isn't
+  mistaken for a forged one right after every reconnect, when an in-memory-only cache would still be cold.
+  Group receipts (no single sender to blame) and our own account's are never flagged.
 - Fixed (security): a `contacts` `modify` notification's LID/PN mapping was applied unconditionally,
   letting the least-authoritative source of a mapping overwrite one already trusted from a more reliable
   one (e.g. a live usync lookup). Mirrors wacore's own learning policy for this exact notification source:
