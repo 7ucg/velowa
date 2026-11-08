@@ -135,6 +135,13 @@ export interface ReceiverDeps {
 	/** A contact's identity key changed (reinstalled WhatsApp, new device, ...): their security code is now
 	 * different. Fired after the stale session was already dropped; never for our own account. */
 	onIdentityChange?(jid: string): void
+	/**
+	 * An incoming message decrypted to a `deviceSentMessage` envelope: not something a peer sent us, but our
+	 * own primary phone (or another linked device) fanning a message *it* sent out to its own other devices,
+	 * exactly like `Sender`'s own `dsm` does when this device sends. The stanza's id is the same id the
+	 * actual recipient will send receipts against.
+	 */
+	onOwnDeviceSent?(id: string): void
 }
 
 export interface DecodedMessage {
@@ -605,6 +612,11 @@ export class Receiver {
 				const msg = await this.#decodeAndApply(node, plain, author, id, from, type === 'msmsg')
 				decrypted++
 				logger.event('message.decrypted', { id, from, participant, type, message: msg.json })
+				// Only our own account may fan one of its own sends out to its other devices this way; a peer
+				// has no legitimate reason to send us a deviceSentMessage, so this never trusts the content
+				// shape alone.
+				if (id && msg.json['deviceSentMessage'] && this.#isOwnAccount(author))
+					this.d.onOwnDeviceSent?.(id)
 				const decoded: DecodedMessage = { id, from, message: msg.json }
 				if (participant) decoded.participant = participant
 				const ts = Number(node.attrs['t'])

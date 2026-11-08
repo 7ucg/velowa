@@ -134,6 +134,76 @@ describe('Receiver: 1:1 messages', () => {
 		await receiver.idle()
 		expect(messages.map((m) => m.message['conversation'])).toEqual(['one', 'two'])
 	})
+
+	it('fires onOwnDeviceSent for a deviceSentMessage from our own account, so its id joins the fake-chat store', async () => {
+		const { storage, creds, alice } = await setup()
+		const lids = new LidMap()
+		const sentIds: string[] = []
+		const withCallback = new Receiver({
+			creds,
+			saveCreds() {},
+			lids,
+			storage,
+			cipher: createSignalCipher(storage),
+			logger: new ProtocolLogger({ enabled: false }),
+			send: () => {},
+			onOwnDeviceSent: (id) => sentIds.push(id),
+		})
+		const enc = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					deviceSentMessage: {
+						destinationJid: 'carol@s.whatsapp.net',
+						message: { conversation: 'hi carol' },
+					},
+				}),
+			),
+		)
+		withCallback.handle({
+			tag: 'message',
+			attrs: { from: creds.me!.id, id: 'FANOUT1', type: 'text' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
+		})
+		await withCallback.idle()
+		expect(sentIds).toEqual(['FANOUT1'])
+	})
+
+	it('never fires onOwnDeviceSent for a deviceSentMessage claimed by anyone but our own account', async () => {
+		const { storage, creds, alice } = await setup()
+		const lids = new LidMap()
+		const sentIds: string[] = []
+		const withCallback = new Receiver({
+			creds,
+			saveCreds() {},
+			lids,
+			storage,
+			cipher: createSignalCipher(storage),
+			logger: new ProtocolLogger({ enabled: false }),
+			send: () => {},
+			onOwnDeviceSent: (id) => sentIds.push(id),
+		})
+		const enc = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					deviceSentMessage: {
+						destinationJid: 'carol@s.whatsapp.net',
+						message: { conversation: 'hi carol' },
+					},
+				}),
+			),
+		)
+		withCallback.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: 'FANOUT2', type: 'text' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
+		})
+		await withCallback.idle()
+		expect(sentIds).toEqual([])
+	})
 })
 
 describe('Receiver: group messages', () => {

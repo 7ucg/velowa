@@ -3368,6 +3368,9 @@ export class Client {
 				}
 			},
 			onIdentityChange: (jid) => this.#events.emit('identity.changed', { jid }),
+			// The primary phone (or another linked device) sent this one, not us specifically - still our
+			// own account's send, so its id belongs in the same store `fake-chat` checks receipts against.
+			onOwnDeviceSent: (id) => this.#sentIds.add(id),
 		})
 		this.#receiver = receiver
 		this.#appState = new AppStateSync({

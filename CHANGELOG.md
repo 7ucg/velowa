@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- Fixed: the `fake-chat` store (`SentMessageIds`) only ever recorded ids this device itself sent through
+  `Sender` - a message the primary phone (or another linked device) sent directly would never show up in
+  it, so a real receipt for it would be misread as a forged one. An incoming message that decrypts to a
+  `deviceSentMessage` envelope - our own account fanning a send of its own out to its other devices, exactly
+  like `Sender`'s own `dsm` does when this device sends - now feeds the same store via a new
+  `Receiver.onOwnDeviceSent` hook. Gated on the envelope's sender actually being our own account: a peer has
+  no legitimate reason to send one, so the content shape alone is never trusted.
 - Added: `fake-chat` event - a delivery/read/played receipt naming a message id we never sent is a known
   scam technique (a fabricated tick staged, often alongside forged history, to make a conversation look
   more credible than it is). Sent message ids are now kept in a small persisted store (`SentMessageIds`,
