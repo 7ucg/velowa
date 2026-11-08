@@ -3323,8 +3323,11 @@ export class Client {
 						if (c.action === 'number-changed' && c.oldLid && c.newLid) {
 							const agrees = (pnJid: string, lidJid: string): boolean => {
 								try {
-									const cur = lids.lidUser(jidDecode(pnJid).user)
-									return !cur || cur === jidDecode(lidJid).user
+									const pn = jidDecode(pnJid).user
+									const lid = jidDecode(lidJid).user
+									const curLid = lids.lidUser(pn)
+									const curPn = lids.pnUser(lid)
+									return (!curLid || curLid === lid) && (!curPn || curPn === pn)
 								} catch {
 									return false
 								}
