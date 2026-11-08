@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Fixed: group sends never carried a `phash` (the participant-hash the server uses to tell a sender its
+  device list went stale), and the one helper that computed something hash-shaped (`participantHash`) hashed
+  the raw JIDs instead of WA Web's own `user.0:device@server` form (the `.0` agent slot is always literal)
+  and truncated the wrong way - dead code nobody called. Now computed over every recipient device plus our
+  own sending device and attached to every group message (not a status post, which never carries one).
 - Fixed (security): `getDevices()` trusted a non-primary device's bare `key-index` attribute at face value.
   The server also sends a signed `<key-index-list>` (`ADVSignedKeyIndexList`) naming which indexes the account
   actually considers valid; once `assertSessions` has verified a user's primary device at least once this

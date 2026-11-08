@@ -51,10 +51,21 @@ export function generateMessageId(meId: string): string {
 	return '3EB0' + createHash('sha256').update(data).digest('hex').toUpperCase().slice(0, 18)
 }
 
-/** Participant hash the server uses to detect a stale device list: `2:` + 6 base64 chars of sha256(sorted jids). */
+/**
+ * Participant hash the server uses to detect a stale device list on a group send: `2:` + the 8 base64
+ * chars of the first 6 raw SHA-256 bytes over every device rendered as `user.0:device@server` (the agent
+ * position is always the literal `0`, never the JID's real agent field - that is WA Web's own spelling and
+ * the server recomputes it the same way), sorted and concatenated with no separator.
+ */
 export function participantHash(jids: string[]): string {
-	const sorted = [...jids].sort()
-	return '2:' + createHash('sha256').update(sorted.join('')).digest('base64').slice(0, 6)
+	const rendered = jids
+		.map((jid) => {
+			const { user, device, server } = jidDecode(jid)
+			return `${user}.0:${device}@${server}`
+		})
+		.sort()
+	const digest = createHash('sha256').update(rendered.join('')).digest()
+	return '2:' + digest.subarray(0, 6).toString('base64')
 }
 
 /** Extras for one outgoing message. */
@@ -811,13 +822,19 @@ export class Sender {
 				attrs: { status_setting: opts.statusPrivacy ?? 'contacts', session_scope: 'status' },
 			})
 		content.push(...(opts.extraNodes ?? []))
+		// Every group send (distribution or not) carries a phash over its recipient devices plus our own
+		// sending device, so the server can tell us our device list went stale; a status send never does
+		// (confirmed from captured traffic - WA Web's own phashV2 call is skipped there too).
+		const phash = isStatus
+			? undefined
+			: participantHash([...new Set([...devices.map((d) => d.jid), senderId])])
 		return {
 			tag: 'message',
 			attrs: {
 				id,
 				to: group,
 				type: messageType(message),
-				...(isStatus ? {} : { addressing_mode: addressingMode }),
+				...(isStatus ? {} : { addressing_mode: addressingMode, phash: phash! }),
 				...opts.stanzaAttrs,
 			},
 			content,

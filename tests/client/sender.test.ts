@@ -117,6 +117,9 @@ describe('Sender: groups', () => {
 		expect(s1!.attrs['addressing_mode']).toBe('pn')
 		expect(kids(s1!, 'participants')).toHaveLength(1)
 		expect(kids(s2!, 'participants')).toHaveLength(0)
+		// phash covers the recipient devices plus our own sending device, so it is stable across both sends.
+		expect(s1!.attrs['phash']).toMatch(/^2:.{8}$/)
+		expect(s2!.attrs['phash']).toBe(s1!.attrs['phash'])
 		// bob installs the distribution from the pkmsg, then decrypts both skmsgs
 		const to = kids(kids(s1!, 'participants')[0]!, 'to').find((p) => p.attrs['jid'] === bob0.jid)!
 		const enc = kids(to, 'enc')[0]!
@@ -376,6 +379,7 @@ describe('Sender: group stanza details and statuses', () => {
 		const st = stanzas[0]!
 		expect(st.attrs['to']).toBe('status@broadcast')
 		expect(st.attrs['addressing_mode']).toBeUndefined()
+		expect(st.attrs['phash']).toBeUndefined() // a status send never carries one, per captured WA Web traffic
 		expect(kids(st, 'meta')[0]!.attrs).toEqual({
 			status_setting: 'allowlist',
 			session_scope: 'status',
@@ -609,6 +613,6 @@ describe('helpers', () => {
 	it('builds message ids and participant hashes', () => {
 		expect(generateMessageId('4915600000000:23@s.whatsapp.net')).toMatch(/^3EB0[0-9A-F]{18}$/)
 		expect(participantHash(['b@x', 'a@x'])).toBe(participantHash(['a@x', 'b@x']))
-		expect(participantHash(['a@x'])).toMatch(/^2:.{6}$/)
+		expect(participantHash(['a@x'])).toMatch(/^2:.{8}$/)
 	})
 })
