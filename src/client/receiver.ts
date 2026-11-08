@@ -221,14 +221,17 @@ export function unpadRandomMax16(data: Uint8Array): Uint8Array {
 
 /** `<ack>` for a received message / receipt / notification (WA Web's sendAck). */
 export function buildAck(node: BinaryNode, meId?: string): BinaryNode {
-	const attrs: Record<string, string> = {
-		id: node.attrs['id'] ?? '',
-		to: node.attrs['from'] ?? '',
-		class: node.tag,
-	}
-	if (node.attrs['participant']) attrs['participant'] = node.attrs['participant']
+	const from = node.attrs['from'] ?? ''
+	const participant = node.attrs['participant']
+	// WA Web's own ack for <notification type="encrypt"> (prekey-low-count, digest-key, identity-change)
+	// never carries a type, even though the notification itself has one - echoing it is a shape only this
+	// client would send. A <receipt> whose participant duplicates its own from is likewise never repeated.
+	const isEncryptNotification = node.tag === 'notification' && node.attrs['type'] === 'encrypt'
+	const omitParticipant = node.tag === 'receipt' && participant === from
+	const attrs: Record<string, string> = { id: node.attrs['id'] ?? '', to: from, class: node.tag }
+	if (participant && !omitParticipant) attrs['participant'] = participant
 	if (node.attrs['recipient']) attrs['recipient'] = node.attrs['recipient']
-	if (node.attrs['type']) attrs['type'] = node.attrs['type']
+	if (node.attrs['type'] && !isEncryptNotification) attrs['type'] = node.attrs['type']
 	if (node.tag === 'message' && meId) attrs['from'] = meId
 	return { tag: 'ack', attrs }
 }

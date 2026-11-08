@@ -583,6 +583,37 @@ describe('helpers', () => {
 		})
 	})
 
+	it('never echoes type on a <notification type="encrypt"> ack, even though every other type is echoed', () => {
+		const ack = buildAck({
+			tag: 'notification',
+			attrs: { id: 'n1', from: 'a@s.whatsapp.net', type: 'encrypt' },
+		})
+		expect(ack).toEqual({
+			tag: 'ack',
+			attrs: { id: 'n1', to: 'a@s.whatsapp.net', class: 'notification' },
+		})
+		// a different notification type still gets its type echoed
+		expect(
+			buildAck({
+				tag: 'notification',
+				attrs: { id: 'n2', from: 'a@s.whatsapp.net', type: 'picture' },
+			}),
+		).toMatchObject({ attrs: { type: 'picture' } })
+	})
+
+	it('omits participant on a receipt ack when it only duplicates from, but keeps it otherwise', () => {
+		const same = buildAck({
+			tag: 'receipt',
+			attrs: { id: 'r1', from: 'a@s.whatsapp.net', participant: 'a@s.whatsapp.net' },
+		})
+		expect(same.attrs['participant']).toBeUndefined()
+		const different = buildAck({
+			tag: 'receipt',
+			attrs: { id: 'r2', from: 'g@g.us', participant: 'p@lid' },
+		})
+		expect(different.attrs['participant']).toBe('p@lid')
+	})
+
 	it('learns the PN from a LID-addressed stanza carrying a *_pn cross-reference', () => {
 		const lids = new LidMap()
 		noteLidFromAttrs(

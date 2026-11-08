@@ -1,6 +1,20 @@
 # Changelog
 
 ## Unreleased
+- Fixed: a dropped WebSocket that never answers past the upgrade (opens, then nothing) hung the connection
+  forever - the `ws` constructor's own `handshakeTimeout` only covers the WebSocket upgrade itself, not the
+  Noise handshake that follows it. Added a 20s timeout on ServerHello, closing the socket (not just marking
+  internal state) if it never arrives.
+- Fixed: `classifyServerFailure`'s `<stream:error>` branch didn't recognise `409` (another session replaced
+  this one) or `516` (a second, less common logged-out code) - both fell through as non-terminal, so the
+  client kept reconnecting against a session the server will keep refusing either way. Added
+  `streamErrorReconnectHint()` for two more `<stream:error>` codes that change reconnect *behavior* without
+  being terminal: `515` ("restart required") now reconnects immediately with no backoff wait, and `429`
+  (rate limited) adds an extra backoff penalty on top of the normal increment.
+- Fixed: `buildAck` always echoed the incoming stanza's `type` and `participant` attributes - but WA Web's
+  own ack for `<notification type="encrypt">` never carries a `type` at all, and a `<receipt>` ack never
+  repeats a `participant` that only duplicates its own `from`. Echoing either anyway is a stanza shape only
+  this client would send.
 - Added: `client.simulateIncomingMessage(from, content)` - injects a message into this client's own
   `message` event exactly as if it had really arrived, entirely local, no network traffic. Ported from a
   known WhatsApp mod feature ("Fake real-time chat"/"Modify Chat"): type something yourself and have your
