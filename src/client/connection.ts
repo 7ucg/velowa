@@ -16,6 +16,10 @@ import type { ProtocolLogger } from '../logging/protocol-logger.js'
 
 export const WA_WS_URL = 'wss://web.whatsapp.com/ws/chat'
 export const WA_ORIGIN = 'https://web.whatsapp.com'
+/** How long to wait for ServerHello after the WebSocket itself is open and ClientHello is sent. The `ws`
+ * constructor's own `handshakeTimeout` only covers the WebSocket upgrade, not the Noise handshake that
+ * follows it - without this, a server that opens the socket but never answers hangs the connection forever. */
+const NOISE_HANDSHAKE_RESPONSE_TIMEOUT_MS = 20_000
 const USER_AGENT =
 	'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
@@ -64,6 +68,7 @@ export class Connection {
 	#transport: NoiseTransport | undefined
 	readonly #decoder: FrameDecoder
 	#firstFrameSent = false
+	#handshakeTimer: NodeJS.Timeout | undefined
 
 	constructor(
 		private readonly logger: ProtocolLogger,
@@ -73,6 +78,9 @@ export class Connection {
 		private readonly url = WA_WS_URL,
 		/** Overrides the default `User-Agent` — guest mode sends the same one its `guest_reg` call used. */
 		private readonly userAgent = USER_AGENT,
+		/** How long to wait for ServerHello once the WebSocket is open - a test-only override; real
+		 * connections keep the default. */
+		private readonly handshakeTimeoutMs = NOISE_HANDSHAKE_RESPONSE_TIMEOUT_MS,
 	) {
 		ensureWasm()
 		this.#decoder = new FrameDecoder()
@@ -118,6 +126,13 @@ export class Connection {
 				this.logger.event('noise.client-hello', { length: hello.length })
 				this.#sendRaw(encodeFrame(hello, connHeader()), 'client-hello (with conn header)')
 				this.#firstFrameSent = true
+				this.#handshakeTimer = setTimeout(() => {
+					this.logger.event('noise.handshake-timeout', { ms: this.handshakeTimeoutMs })
+					// Actually closes the socket (not just this object's own state) - the timeout fires
+					// without the server ever sending a close frame, unlike every other #finish call site,
+					// all of which react to the socket already being gone.
+					this.close('handshake-timeout')
+				}, this.handshakeTimeoutMs)
 			} catch (error) {
 				this.logger.event('noise.error', error)
 				this.#finish('handshake-start-failed', undefined, error)
@@ -139,6 +154,7 @@ export class Connection {
 
 	#onFrame(frame: Uint8Array): void {
 		if (this.#state === 'handshake') {
+			clearTimeout(this.#handshakeTimer)
 			const hs = this.#hs!
 			const finish = hs.readServerHelloAndBuildClientFinish(frame)
 			this.logger.event('noise.server-hello-verified', { clientFinishLength: finish.length })
@@ -179,6 +195,7 @@ export class Connection {
 
 	#finish(reason: string, code?: number, error?: unknown): void {
 		if (this.#state === 'closed') return
+		clearTimeout(this.#handshakeTimer)
 		this.#state = 'closed'
 		this.logger.event('connection.closed', {
 			reason,
