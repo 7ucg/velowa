@@ -632,3 +632,63 @@ export function messageHistoryNotice(o: {
 		},
 	}
 }
+
+// ---- misc ------------------------------------------------------------------------------------
+
+/** Exempt (or stop exempting) a disappearing message from its chat's auto-delete timer. */
+export const keepInChat = (key: MessageKey, keep: boolean): Record<string, unknown> => ({
+	keepInChatMessage: {
+		key: wireKey(key),
+		keepType: keep ? 'KEEP_FOR_ALL' : 'UNDO_KEEP_FOR_ALL',
+		timestampMs: Date.now(),
+	},
+})
+
+/** Final tallies once a poll closes. `pollType` matters for a quiz's correct-answer display. */
+export function pollResultSnapshot(o: {
+	name: string
+	votes: { optionName: string; voteCount: number }[]
+	pollType?: 'POLL' | 'QUIZ'
+	v3?: boolean
+}): Record<string, unknown> {
+	const field = o.v3 ? 'pollResultSnapshotMessageV3' : 'pollResultSnapshotMessage'
+	return {
+		[field]: {
+			name: o.name,
+			pollVotes: o.votes.map((v) => ({ optionName: v.optionName, optionVoteCount: v.voteCount })),
+			...(o.pollType && { pollType: o.pollType }),
+		},
+	}
+}
+
+/** Ask the sticker-pack sync service to drop these file hashes. */
+export const stickerSyncRemove = (
+	filehash: string[],
+	rmrSource?: string,
+): Record<string, unknown> => ({
+	stickerSyncRmrMessage: {
+		filehash,
+		...(rmrSource && { rmrSource }),
+		requestTimestamp: Math.floor(Date.now() / 1000),
+	},
+})
+
+/**
+ * Build/parse a `conditionalRevealMessage` envelope (wire shape only). This is the mechanism behind
+ * "schedule a message": `encPayload`/`encIv` decrypt with a one-time `revealKey` delivered separately
+ * (`ScheduledMessageMetadata.revealKey`/`revealKeyId` on the *scheduled* `WebMessageInfo` once it syncs,
+ * or `SecretEncType.MESSAGE_SCHEDULE` - neither is implemented here), not the parent's `messageSecret`
+ * used everywhere else in this file.
+ */
+export const conditionalReveal = (
+	encPayload: Uint8Array,
+	encIv: Uint8Array,
+	revealKeyId: string,
+): Record<string, unknown> => ({
+	conditionalRevealMessage: {
+		encPayload,
+		encIv,
+		conditionalRevealMessageType: 'SCHEDULED_MESSAGE',
+		revealKeyId,
+	},
+})

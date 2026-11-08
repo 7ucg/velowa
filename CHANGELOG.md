@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- Added: `keepInChat` (exempt a disappearing message from auto-delete), `pollResultSnapshot` (final tallies
+  once a poll closes, V3 variant included), `stickerSyncRemove` and `conditionalReveal` (the wire envelope
+  behind "schedule a message" - `encPayload`/`encIv` decrypt with a one-time reveal key delivered
+  separately, not implemented here, same wire-shape-only scope as the payment messages). Rounds out the
+  proto audit; the rest (business-template `highlyStructuredMessage`, superseded by `templateMessage`;
+  `vpcRequestMessage`, an unclear Meta-AI-platform handshake; duplicate-shape fields like
+  `instantImageMessage`/`fastRatchetKeySenderKeyDistributionMessage`; and `pollCreationMessageV4`/`V6`,
+  version markers for the same structure `poll()` already builds) is intentionally left alone.
 - Fixed (security): the previous fix for the spoofable `secretEncryptedMessage` edit (binding the editor to
   itself) was still incomplete - it let anyone who merely knows a message's secret (every recipient does, by
   design) self-attribute a forged edit of a message that was never theirs, since both HKDF roles equalled

@@ -4,11 +4,13 @@ import {
 	bCall,
 	callLogMessage,
 	cancelPaymentRequestMessage,
+	conditionalReveal,
 	contactCard,
 	declinePaymentRequestMessage,
 	eventInvite,
 	futureProofMessage,
 	invoice,
+	keepInChat,
 	location,
 	messageHistoryNotice,
 	musicMessage,
@@ -19,6 +21,7 @@ import {
 	paymentReminderMessage,
 	poll,
 	pollAddOption,
+	pollResultSnapshot,
 	product,
 	question,
 	questionResponse,
@@ -36,6 +39,7 @@ import {
 	statusQuestionAnswer,
 	statusQuotedMessage,
 	statusStickerInteraction,
+	stickerSyncRemove,
 	vcardFor,
 	viewOnce,
 } from '../../../../src/client/features/message/extras.js'
@@ -251,5 +255,38 @@ describe('proto message builders', () => {
 			messageHistoryMetadata: { historyReceivers: ['a@s.whatsapp.net'], messageCount: 5 },
 		})
 		validates(notice)
+	})
+
+	it('builds keepInChat, pollResultSnapshot(V3), stickerSyncRemove and conditionalReveal', () => {
+		const keep = keepInChat(key, true)
+		expect(keep['keepInChatMessage']).toMatchObject({ keepType: 'KEEP_FOR_ALL' })
+		validates(keep)
+		validates(keepInChat(key, false))
+		const snap = pollResultSnapshot({
+			name: 'Pizza?',
+			votes: [{ optionName: 'Ja', voteCount: 3 }],
+			pollType: 'POLL',
+		})
+		expect(snap['pollResultSnapshotMessage']).toMatchObject({
+			name: 'Pizza?',
+			pollVotes: [{ optionName: 'Ja', optionVoteCount: 3 }],
+		})
+		validates(snap)
+		const snapV3 = pollResultSnapshot({
+			name: 'Pizza?',
+			votes: [{ optionName: 'Ja', voteCount: 3 }],
+			v3: true,
+		})
+		expect(snapV3['pollResultSnapshotMessageV3']).toBeDefined()
+		validates(snapV3)
+		const sync = stickerSyncRemove(['hash1', 'hash2'], 'user_request')
+		expect(sync['stickerSyncRmrMessage']).toMatchObject({ filehash: ['hash1', 'hash2'] })
+		validates(sync)
+		const reveal = conditionalReveal(new Uint8Array([1, 2, 3]), new Uint8Array(12), 'R1')
+		expect(reveal['conditionalRevealMessage']).toMatchObject({
+			conditionalRevealMessageType: 'SCHEDULED_MESSAGE',
+			revealKeyId: 'R1',
+		})
+		validates(reveal)
 	})
 })
