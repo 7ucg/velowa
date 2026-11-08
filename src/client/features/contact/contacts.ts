@@ -23,6 +23,8 @@ export interface UsyncUser {
 	/** ... or by username (`9oged`, without the @), with the owner's PIN if they set one. */
 	username?: string
 	pin?: string
+	/** The AI bot's persona id (from the bot directory, `BotEntry.personaId`), for `botProfileProtocol`. */
+	personaId?: string
 }
 
 export interface UsyncProtocol {
@@ -50,6 +52,15 @@ export const lidProtocol: UsyncProtocol = { name: 'lid', query: { tag: 'lid', at
 export const disappearingProtocol: UsyncProtocol = {
 	name: 'disappearing_mode',
 	query: { tag: 'disappearing_mode', attrs: {} },
+}
+export const botProfileProtocol: UsyncProtocol = {
+	name: 'bot',
+	query: { tag: 'bot', attrs: {}, content: [{ tag: 'profile', attrs: { v: '1' } }] },
+	user: (u) => ({
+		tag: 'bot',
+		attrs: {},
+		content: [{ tag: 'profile', attrs: { persona_id: u.personaId ?? '' } }],
+	}),
 }
 
 export interface UsyncEntry {

@@ -125,7 +125,17 @@ export { serialize, isMe, GroupCache, isGroupAdmin } from './bot/index.js'
 export type { Message, QuotedMessage, GroupInfo } from './bot/index.js'
 export type { EventOptions, EventResponseType } from './client/features/message/event-message.js'
 export type { StickerInput } from './client/features/message/sticker-pack.js'
-export type { BotDirectory, BotEntry, BotSection } from './client/features/contact/bots.js'
+export {
+	addStickerMetadata,
+	getStickerMetadata,
+} from './client/features/message/sticker-metadata.js'
+export type { StickerMetadata } from './client/features/message/sticker-metadata.js'
+export type {
+	BotDirectory,
+	BotEntry,
+	BotSection,
+	BotProfile,
+} from './client/features/contact/bots.js'
 export type { SecurityCodeVersion } from './client/features/account/security-code.js'
 export type { Order, OrderProduct } from './client/features/contact/business.js'
 export type { MediaRetryResult } from './client/features/message/media-retry.js'

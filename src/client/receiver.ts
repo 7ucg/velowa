@@ -381,6 +381,41 @@ export class Receiver {
 		if (count < MIN_PREKEY_COUNT) await this.uploadPreKeys(UPLOAD_PREKEY_COUNT)
 	}
 
+	/**
+	 * Ask the server for its own record of our uploaded key bundle (`<iq xmlns="encrypt"><digest/></iq>`,
+	 * `WAWebHandleDigestKey`): a 404 means it has none at all (the record was lost server-side, or never
+	 * made it through), so the bundle is re-uploaded. Any other outcome - a mismatched registration id, a
+	 * malformed response, a transient server error - is only logged: WA Web itself never re-uploads for
+	 * those, trusting the ordinary low-prekey-count path (`ensurePreKeys`) to refresh things eventually.
+	 */
+	async validateDigestKey(): Promise<void> {
+		let res: BinaryNode
+		try {
+			res = await this.request({
+				tag: 'iq',
+				attrs: { xmlns: 'encrypt', type: 'get', to: S_WHATSAPP_NET },
+				content: [{ tag: 'digest', attrs: {} }],
+			})
+		} catch (e) {
+			if (/"code":"404"/.test((e as Error).message)) {
+				this.d.logger.event('prekeys.digest-missing', {})
+				await this.uploadPreKeys(UPLOAD_PREKEY_COUNT)
+			} else {
+				this.d.logger.event('prekeys.digest-check-failed', e)
+			}
+			return
+		}
+		const digest = children(res, 'digest')[0]
+		const regBytes = digest && children(digest, 'registration')[0]?.content
+		const regId =
+			regBytes instanceof Uint8Array ? regBytes.reduce((acc, b) => acc * 256 + b, 0) : undefined
+		if (regId !== undefined && regId !== this.d.creds.registrationId)
+			this.d.logger.event('prekeys.digest-reg-id-mismatch', {
+				server: regId,
+				local: this.d.creds.registrationId,
+			})
+	}
+
 	async uploadPreKeys(count: number): Promise<void> {
 		const keys = await this.#generatePreKeys(count)
 		const { creds } = this.d

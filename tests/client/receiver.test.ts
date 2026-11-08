@@ -420,6 +420,79 @@ describe('Receiver: pre-keys', () => {
 	})
 })
 
+describe('Receiver: digest key validation', () => {
+	function setupDigest(reply: (n: BinaryNode) => BinaryNode) {
+		const creds = initAuthCreds()
+		const storage = new FileSignalStorage(
+			mkdtempSync(join(tmpdir(), 'velowa-sig-')),
+			creds.signedIdentityKey,
+			creds.registrationId,
+		)
+		const sent: BinaryNode[] = []
+		const receiver: Receiver = new Receiver({
+			creds,
+			saveCreds() {},
+			lids: new LidMap(),
+			storage,
+			cipher: createSignalCipher(storage),
+			logger: new ProtocolLogger({ enabled: false }),
+			// Only the first request (the <digest> query) gets `reply`; a follow-up upload always succeeds
+			// plainly, same as the real server would once it has accepted a fresh key bundle.
+			send: (n) => {
+				sent.push(n)
+				const isDigestQuery = n.attrs['type'] === 'get'
+				queueMicrotask(() =>
+					receiver.handle(
+						isDigestQuery ? reply(n) : { tag: 'iq', attrs: { id: n.attrs['id']!, type: 'result' } },
+					),
+				)
+			},
+		})
+		return { receiver, sent, creds }
+	}
+
+	it('re-uploads the key bundle when the server has no digest record (404)', async () => {
+		const { receiver, sent, creds } = setupDigest((n) => ({
+			tag: 'iq',
+			attrs: { id: n.attrs['id']!, type: 'error' },
+			content: [{ tag: 'error', attrs: { code: '404', text: 'item-not-found' } }],
+		}))
+		await receiver.validateDigestKey()
+		expect(sent[0]!.content).toEqual([{ tag: 'digest', attrs: {} }])
+		const upload = sent.find((n) => n.attrs['type'] === 'set')
+		expect(upload?.attrs['xmlns']).toBe('encrypt')
+		expect(creds.nextPreKeyId).toBe(31)
+	})
+
+	it('does not re-upload on an unrelated server error', async () => {
+		const { receiver, sent, creds } = setupDigest((n) => ({
+			tag: 'iq',
+			attrs: { id: n.attrs['id']!, type: 'error' },
+			content: [{ tag: 'error', attrs: { code: '503' } }],
+		}))
+		await receiver.validateDigestKey()
+		expect(sent).toHaveLength(1)
+		expect(creds.nextPreKeyId).toBe(1)
+	})
+
+	it('does not re-upload on a successful response, even with a mismatched registration id', async () => {
+		const { receiver, sent, creds } = setupDigest((n) => ({
+			tag: 'iq',
+			attrs: { id: n.attrs['id']!, type: 'result' },
+			content: [
+				{
+					tag: 'digest',
+					attrs: {},
+					content: [{ tag: 'registration', attrs: {}, content: Uint8Array.from([0, 0, 0, 99]) }],
+				},
+			],
+		}))
+		await receiver.validateDigestKey()
+		expect(sent).toHaveLength(1)
+		expect(creds.nextPreKeyId).toBe(1)
+	})
+})
+
 describe('helpers', () => {
 	it('unpads and rejects bad padding', () => {
 		expect(Array.from(unpadRandomMax16(Uint8Array.from([1, 2, 3, 2, 2])))).toEqual([1, 2, 3])

@@ -1,6 +1,7 @@
 // velowa (https://github.com/7ucg/velowa) (c) 2026 Baron. Copying any part of this file, however small, requires credit: see LICENSE.
 import type { BinaryNode } from '../../../codec/index.js'
 import type { RequestFn } from '../group/groups.js'
+import { botProfileProtocol, usync } from './contacts.js'
 
 // The bot directory: the AI bots (Meta AI and its siblings) the server offers this account.
 
@@ -81,3 +82,73 @@ export function parseBotList(res: BinaryNode): BotDirectory {
 
 export const listBots = async (request: RequestFn): Promise<BotDirectory> =>
 	parseBotList(await request(botListRequest()))
+
+// ---- one bot's own profile ---------------------------------------------------------------------
+
+export interface BotProfile {
+	jid: string
+	personaId?: string
+	name?: string
+	attributes?: string
+	description?: string
+	category?: string
+	isDefault: boolean
+	/** `${emoji} ${text}` suggested conversation starters, as the directory shows them. */
+	prompts: string[]
+	commands: { name: string; description: string }[]
+	commandsDescription?: string
+}
+
+const text = (n: BinaryNode | undefined): string | undefined =>
+	!n
+		? undefined
+		: typeof n.content === 'string'
+			? n.content
+			: n.content instanceof Uint8Array
+				? Buffer.from(n.content).toString('utf8')
+				: undefined
+
+/** What one AI bot can do: its name/description/category, suggested prompts and slash commands. */
+export async function fetchBotProfile(
+	request: RequestFn,
+	sid: string,
+	jid: string,
+	personaId: string,
+): Promise<BotProfile | undefined> {
+	const [entry] = await usync(
+		request,
+		sid,
+		'interactive',
+		[botProfileProtocol],
+		[{ jid, personaId }],
+	)
+	const profile = kids(entry?.nodes['bot'], 'profile')[0]
+	if (!profile) return undefined
+	const commandsNode = kids(profile, 'commands')[0]
+	const promptsNode = kids(profile, 'prompts')[0]
+	return {
+		jid: entry!.id,
+		...(profile.attrs['persona_id'] && { personaId: profile.attrs['persona_id'] }),
+		...(text(kids(profile, 'name')[0]) !== undefined && { name: text(kids(profile, 'name')[0]) }),
+		...(text(kids(profile, 'attributes')[0]) !== undefined && {
+			attributes: text(kids(profile, 'attributes')[0]),
+		}),
+		...(text(kids(profile, 'description')[0]) !== undefined && {
+			description: text(kids(profile, 'description')[0]),
+		}),
+		...(text(kids(profile, 'category')[0]) !== undefined && {
+			category: text(kids(profile, 'category')[0]),
+		}),
+		isDefault: kids(profile, 'default').length > 0,
+		commands: kids(commandsNode, 'command').map((c) => ({
+			name: text(kids(c, 'name')[0]) ?? '',
+			description: text(kids(c, 'description')[0]) ?? '',
+		})),
+		prompts: kids(promptsNode, 'prompt').map((p) =>
+			[text(kids(p, 'emoji')[0]), text(kids(p, 'text')[0])].filter(Boolean).join(' '),
+		),
+		...(text(kids(commandsNode, 'description')[0]) !== undefined && {
+			commandsDescription: text(kids(commandsNode, 'description')[0]),
+		}),
+	}
+}

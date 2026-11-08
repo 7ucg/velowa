@@ -1,6 +1,20 @@
 # Changelog
 
 ## Unreleased
+- Fixed: `updateProfileName` synced the new name via app state and remembered it locally, but never sent WA
+  Web's own immediate `<presence name="...">` (`WAWebPushNameBridge`'s first step) - the rename could take a
+  while to show up anywhere, or not at all if the app-state sync itself failed.
+- Added: `stickerMetadata` on `sendSticker` - embeds pack attribution (name, publisher, emojis, app-store links)
+  as WhatsApp's own WebP EXIF convention, so the real app shows "Added by X"; `addStickerMetadata`/
+  `getStickerMetadata` are exported standalone too. Upgrades a simple WebP to the extended format EXIF needs;
+  verified against real `ffmpeg`-encoded lossy, lossless and animated stickers (decoded pixels came back
+  byte-identical; the animated case's chunk structure, which this ffmpeg build can't itself decode either way,
+  was checked byte-for-byte instead).
+- Added: periodically ask the server for its own record of our uploaded prekey bundle
+  (`WAWebHandleDigestKey`'s `<iq xmlns="encrypt"><digest/></iq>`) at login; a 404 (no record at all) re-uploads
+  it, closing a gap `ensurePreKeys`'s own low-count check doesn't catch on its own.
+- Added: `client.fetchBotProfile(jid, personaId)` - one AI bot's name/description/category, suggested prompts
+  and slash commands, from `BotEntry.personaId` in `listBots`'s directory.
 - Added: `client.inviteParticipant(callId, jid)` / `client.ringParticipant(callId, jid)` - add someone to an
   already-running group call, or re-ring a disconnected roster member, carrying the current roster with the
   offer so they're admitted straight into the live call. Needed a new WASM binding (`buildGroupInviteOffer`,

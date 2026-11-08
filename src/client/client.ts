@@ -101,7 +101,13 @@ import {
 	newPackId,
 	type StickerInput,
 } from './features/message/sticker-pack.js'
-import { listBots, type BotDirectory } from './features/contact/bots.js'
+import { addStickerMetadata, type StickerMetadata } from './features/message/sticker-metadata.js'
+import {
+	fetchBotProfile,
+	listBots,
+	type BotDirectory,
+	type BotProfile,
+} from './features/contact/bots.js'
 import {
 	rotateSignedPreKeyNode,
 	SIGNED_PRE_KEY_INTERVAL_MS,
@@ -596,8 +602,20 @@ export class Client {
 		this.sendMedia(to, 'audio', data, opts)
 	sendDocument = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
 		this.sendMedia(to, 'document', data, opts)
-	sendSticker = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
-		this.sendMedia(to, 'sticker', data, opts)
+	/** `stickerMetadata` embeds pack attribution (WhatsApp's own EXIF convention) so the app shows "Added by X". */
+	sendSticker = (
+		to: string,
+		data: Uint8Array,
+		opts: MediaOptions & TextOptions & { stickerMetadata?: StickerMetadata } = {},
+	) => {
+		const { stickerMetadata, ...rest } = opts
+		return this.sendMedia(
+			to,
+			'sticker',
+			stickerMetadata ? addStickerMetadata(data, stickerMetadata) : data,
+			rest,
+		)
+	}
 
 	/** Download and decrypt the media of a received message (`event.message`). */
 	async downloadMedia(
@@ -980,6 +998,10 @@ export class Client {
 
 	/** The AI bots WhatsApp offers this account (Meta AI and others), by section. */
 	listBots = async (): Promise<BotDirectory> => listBots((n) => this.#q(n))
+	/** One bot's own profile: name/description/category, suggested prompts and slash commands (`BotEntry.personaId`). */
+	async fetchBotProfile(jid: string, personaId: string): Promise<BotProfile | undefined> {
+		return fetchBotProfile(this.#q, await this.#sid(), jid, personaId)
+	}
 
 	/** Group management: `client.groups.create(...)`, `.updateParticipants(...)`, `.metadata(...)`, ... */
 	readonly groups: Groups = new Groups(
@@ -1024,8 +1046,14 @@ export class Client {
 	/** Save a contact in the phone's address book, or remove it with `null`. */
 	saveContact = (jid: string, c: { fullName?: string; firstName?: string } | null) =>
 		this.#push(act.contact(jid, c))
-	/** Change the account's display name (push name). */
+	/**
+	 * Change the account's display name (push name): announces it to the server right away
+	 * (`<presence name="...">`, as WA Web's `WAWebPushNameBridge` does), syncs it to app state so other
+	 * devices see it too, and remembers it locally for presence stanzas this client builds afterward.
+	 */
 	async updateProfileName(name: string): Promise<void> {
+		const { receiver } = await this.#live()
+		receiver.sendNode({ tag: 'presence', attrs: { name } })
 		await this.#push(act.pushName(name))
 		this.setName(name)
 	}
@@ -3266,6 +3294,9 @@ export class Client {
 			await receiver.ensurePreKeys()
 			// Always try: with no key yet this only discovers which keys to ask the phone for.
 			void this.#appState.sync()
+			void receiver
+				.validateDigestKey()
+				.catch((e) => this.logger.event('prekeys.digest-check-failed', e))
 		} catch (error) {
 			this.logger.event('login.setup-failed', error)
 		}

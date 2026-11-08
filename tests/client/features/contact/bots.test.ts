@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { BinaryNode } from '../../../../src/codec/index.js'
 import {
 	botListRequest,
+	fetchBotProfile,
 	listBots,
 	parseBotList,
 } from '../../../../src/client/features/contact/bots.js'
@@ -90,5 +91,103 @@ describe('bot directory', () => {
 		expect(sent[0]!.attrs['xmlns']).toBe('bot')
 		expect(d.bots).toHaveLength(2)
 		expect(() => parseBotList({ tag: 'iq', attrs: {} })).toThrow()
+	})
+})
+
+describe('fetchBotProfile', () => {
+	const t = (tag: string, v: string): BinaryNode => ({ tag, attrs: {}, content: Buffer.from(v) })
+
+	it('reads one bot’s name, prompts and commands', async () => {
+		const sent: BinaryNode[] = []
+		const profileAnswer: BinaryNode = {
+			tag: 'iq',
+			attrs: { type: 'result' },
+			content: [
+				{
+					tag: 'usync',
+					attrs: {},
+					content: [
+						{
+							tag: 'list',
+							attrs: {},
+							content: [
+								{
+									tag: 'user',
+									attrs: { jid: '1@bot' },
+									content: [
+										{
+											tag: 'bot',
+											attrs: {},
+											content: [
+												{
+													tag: 'profile',
+													attrs: { persona_id: 'p-default' },
+													content: [
+														t('name', 'Helper'),
+														t('description', 'Helps with stuff'),
+														t('category', 'utility'),
+														{ tag: 'default', attrs: {} },
+														{
+															tag: 'prompts',
+															attrs: {},
+															content: [
+																{
+																	tag: 'prompt',
+																	attrs: {},
+																	content: [t('emoji', '☀️'), t('text', 'weather')],
+																},
+															],
+														},
+														{
+															tag: 'commands',
+															attrs: {},
+															content: [
+																t('description', 'Available commands'),
+																{
+																	tag: 'command',
+																	attrs: {},
+																	content: [t('name', '/help'), t('description', 'show help')],
+																},
+															],
+														},
+													],
+												},
+											],
+										},
+									],
+								},
+							],
+						},
+					],
+				},
+			],
+		}
+		const profile = await fetchBotProfile(
+			async (n) => (sent.push(n), profileAnswer),
+			'sid1',
+			'1@bot',
+			'p-default',
+		)
+		expect(profile).toEqual({
+			jid: '1@bot',
+			personaId: 'p-default',
+			name: 'Helper',
+			description: 'Helps with stuff',
+			category: 'utility',
+			isDefault: true,
+			prompts: ['☀️ weather'],
+			commands: [{ name: '/help', description: 'show help' }],
+			commandsDescription: 'Available commands',
+		})
+	})
+
+	it('returns undefined when the server answers with no profile', async () => {
+		const empty: BinaryNode = {
+			tag: 'iq',
+			attrs: { type: 'result' },
+			content: [{ tag: 'usync', attrs: {}, content: [{ tag: 'list', attrs: {}, content: [] }] }],
+		}
+		const profile = await fetchBotProfile(async () => empty, 'sid1', '1@bot', 'p-default')
+		expect(profile).toBeUndefined()
 	})
 })

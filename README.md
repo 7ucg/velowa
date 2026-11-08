@@ -436,6 +436,7 @@ await client.sendVideo(jid, bytes, { gifPlayback: true })
 await client.sendAudio(jid, bytes, { ptt: true }) // voice note
 await client.sendDocument(jid, bytes, { mimetype: 'application/pdf', fileName: 'a.pdf' })
 await client.sendSticker(jid, webpBytes)
+await client.sendSticker(jid, webpBytes, { stickerMetadata: { packName: 'My Pack', publisher: 'Me' } }) // "Added by Me"
 
 const data = await client.downloadMedia(m.raw.message) // Buffer, decrypted
 ```
@@ -624,6 +625,7 @@ const store = new MemoryStore().bind(client) // later: store.messages(jid, 20), 
 
 // Bots, group calls
 await client.listBots() // the AI bot directory
+await client.fetchBotProfile(jid, productId) // one bot's name/description/category, prompts and slash commands
 await client.setScreenShare(callId, true) // only the signal; others see `screenShare` on the call event
 
 // Business accounts
