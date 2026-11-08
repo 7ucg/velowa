@@ -10,14 +10,14 @@ import {
 	closeSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import type { IdentityKeys, SignalStorage } from '../crypto/signal.js'
+import type { IdentityKeys, RemovableSignalStorage } from '../crypto/signal.js'
 
 /**
  * Durable SignalStorage on the local file system: one file per record, written to a temp file,
  * fsynced and renamed into place, so a crash leaves either the old or the new record, never half.
  * Every promise resolves only after the data is on disk (the durability rule for session state).
  */
-export class FileSignalStorage implements SignalStorage {
+export class FileSignalStorage implements RemovableSignalStorage {
 	constructor(
 		private readonly dir: string,
 		private readonly identity: IdentityKeys,
@@ -71,6 +71,10 @@ export class FileSignalStorage implements SignalStorage {
 	}
 	storeSession(name: string, device: number, record: Uint8Array) {
 		this.#write('sessions', `${name}.${device}`, record)
+		return Promise.resolve()
+	}
+	removeSession(name: string, device: number) {
+		rmSync(this.#path('sessions', `${name}.${device}`), { force: true })
 		return Promise.resolve()
 	}
 	loadPreKey(id: number) {

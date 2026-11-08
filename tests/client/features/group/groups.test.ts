@@ -189,6 +189,60 @@ describe('parseGroupNotification', () => {
 		})
 		expect(events[1]!.subject).toBe('Neuer Name')
 	})
+
+	it('decodes the typed fields of settings-change notifications', async () => {
+		const { parseGroupNotification } =
+			await import('../../../../src/client/features/group/groups.js')
+		const events = parseGroupNotification({
+			tag: 'notification',
+			attrs: { from: 'g@g.us', type: 'w:gp2' },
+			content: [
+				{
+					tag: 'subject',
+					attrs: {
+						subject: 'Neuer Name',
+						s_o: 'renamer@lid',
+						s_o_pn: '4915600000000@s.whatsapp.net',
+						s_o_username: 'renamer',
+						s_t: '1700000001',
+					},
+				},
+				{ tag: 'locked', attrs: { threshold: '7' } },
+				{ tag: 'ephemeral', attrs: { expiration: '604800', trigger: '1700000000' } },
+				{ tag: 'not_ephemeral', attrs: {} },
+				{ tag: 'growth_locked', attrs: { expiration: '86400', type: 'admin' } },
+				{
+					tag: 'membership_approval_request',
+					attrs: { request_method: 'invite_link', parent_group_jid: 'c@g.us' },
+				},
+			],
+		})
+		expect(events[0]).toMatchObject({
+			action: 'subject',
+			subjectOwner: 'renamer@lid',
+			subjectOwnerPn: '4915600000000@s.whatsapp.net',
+			subjectOwnerUsername: 'renamer',
+			subjectTime: 1700000001,
+		})
+		expect(events[1]).toMatchObject({ action: 'locked', threshold: '7' })
+		expect(events[2]).toMatchObject({
+			action: 'ephemeral',
+			expiration: 604800,
+			trigger: 1700000000,
+		})
+		expect(events[3]).toMatchObject({ action: 'ephemeral', expiration: 0 })
+		expect(events[3]!.trigger).toBeUndefined()
+		expect(events[4]).toMatchObject({
+			action: 'growth_locked',
+			expiration: 86400,
+			lockType: 'admin',
+		})
+		expect(events[5]).toMatchObject({
+			action: 'membership_approval_request',
+			requestMethod: 'invite_link',
+			parentGroupJid: 'c@g.us',
+		})
+	})
 })
 
 describe('group permissions and member tag', () => {

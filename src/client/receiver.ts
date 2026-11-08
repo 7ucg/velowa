@@ -2,7 +2,7 @@
 import type { AuthCreds } from '../auth/creds.js'
 import type { BinaryNode } from '../codec/index.js'
 import { newPreKeys } from '../crypto/signal.js'
-import type { SignalCipher, SignalStorage } from '../crypto/signal.js'
+import type { RemovableSignalStorage, SignalCipher } from '../crypto/signal.js'
 import { jidDecode, signalAddress, signalAddressString } from '../jid.js'
 import type { ProtocolLogger } from '../logging/protocol-logger.js'
 import { callAck } from './features/call/call-events.js'
@@ -22,7 +22,7 @@ const REQUEST_TIMEOUT_MS = 20_000
 export interface ReceiverDeps {
 	creds: AuthCreds
 	saveCreds(): void
-	storage: SignalStorage
+	storage: RemovableSignalStorage
 	/** Phone-number <-> LID mapping: sessions are keyed by the LID address once it is known. */
 	lids: LidMap
 	cipher: SignalCipher
@@ -409,6 +409,36 @@ export class Receiver {
 		return keys
 	}
 
+	/**
+	 * `<notification type="encrypt"><identity/></notification>`: the peer's primary device was re-registered
+	 * (e.g. WhatsApp reinstalled) and got a new identity key. Drop our stored session for it (under the PN
+	 * and LID forms, whichever we know) so the next send rebuilds it via a fresh, ADV-verified prekey fetch
+	 * instead of silently encrypting to - or failing to decrypt from - the old identity. A companion device's
+	 * own identity change does not affect this (only the primary's matters), and neither does our own (that
+	 * would break our other devices' sessions with us).
+	 */
+	async #handleIdentityChange(node: BinaryNode): Promise<void> {
+		const from = node.attrs['from']
+		if (!from) return
+		let decoded: { user: string; device: number; server: string }
+		try {
+			decoded = jidDecode(from)
+		} catch {
+			return
+		}
+		if (decoded.device !== 0) return
+		const { creds, storage, lids, logger } = this.d
+		const isMe =
+			(creds.me && jidDecode(creds.me.id).user === decoded.user) ||
+			(creds.me?.lid && jidDecode(creds.me.lid).user === decoded.user)
+		if (isMe) return
+		const pnUser = decoded.server === 'lid' ? lids.pnUser(decoded.user) : decoded.user
+		const lidUser = decoded.server === 'lid' ? decoded.user : lids.lidUser(decoded.user)
+		for (const user of new Set([pnUser, lidUser].filter((u): u is string => !!u)))
+			await storage.removeSession(user, 0)
+		logger.event('identity.changed', { from })
+	}
+
 	// ---- incoming stanzas -----------------------------------------------------------------------
 
 	async #process(node: BinaryNode): Promise<void> {
@@ -427,6 +457,7 @@ export class Receiver {
 						this.d.logger.event('prekeys.upload-failed', e),
 					)
 				}
+				if (children(node, 'identity')[0]) await this.#handleIdentityChange(node)
 			}
 			this.#sendSafe(buildAck(node, meId))
 			this.d.onNotification?.(node)

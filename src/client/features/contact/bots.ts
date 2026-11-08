@@ -64,7 +64,11 @@ export function parseBotList(res: BinaryNode): BotDirectory {
 		d?.attrs['jid'] && d.attrs['persona_id']
 			? { jid: d.attrs['jid'], personaId: d.attrs['persona_id'] }
 			: undefined
-	const bots = sections.flatMap((s) => s.bots)
+	// A bot can be repeated across sections (e.g. in both "featured" and its category); the real server does.
+	const seen = new Set<string>()
+	const bots = sections
+		.flatMap((s) => s.bots)
+		.filter((b) => (seen.has(b.jid) ? false : seen.add(b.jid)))
 	if (defaultBot && !bots.some((b) => b.jid === defaultBot.jid))
 		bots.unshift({ jid: defaultBot.jid, personaId: defaultBot.personaId })
 	return {

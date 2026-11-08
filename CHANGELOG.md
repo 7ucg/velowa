@@ -1,6 +1,24 @@
 # Changelog
 
 ## Unreleased
+- Added (safety): a per-chat token bucket (burst 20, refill 10/min) on resends done for `<receipt type="retry">`,
+  on top of the existing per-message/per-device cap. WhatsApp's anti-abuse penalizes the *aggregate* resend
+  rate to one chat, not any single device's depth: during a mass PN<->LID migration, hundreds of devices can
+  retry the same messages at once, climbing straight into an account lock while the per-device cap alone never
+  engages. A throttled resend is dropped, not queued (the requester gets a fresh sender key on the next
+  ordinary send anyway). Cross-referenced from `whatsapp-rust`'s `resend_rate_limiter.rs`.
+- Added: react to `<notification type="encrypt"><identity/></notification>` (a contact's primary device got a
+  new identity key, e.g. WhatsApp reinstalled) by dropping our stored session for it, so the next send rebuilds
+  it via a fresh, ADV-verified prekey fetch instead of silently encrypting to - or failing to decrypt from -
+  the old identity. Ignored for a companion device and for our own account. `SignalStorage` gained
+  `removeSession` for this (`RemovableSignalStorage`, implemented by both bundled storages).
+- Added: `GroupNotification` now decodes the fields `parseGroupNotification` used to drop - `subject`'s
+  `subjectOwner`/`subjectOwnerPn`/`subjectOwnerUsername`/`subjectTime`, `locked`'s `threshold`, `ephemeral`'s
+  `expiration`/`trigger` (and the `not_ephemeral` alias, collapsed the same way WA Web does), `growth_locked`'s
+  `expiration`/`lockType`, and `request_method`/`parentGroupJid` on `membership_approval_request` /
+  `created_membership_requests`.
+- Fixed: `listBots`'s flattened `bots` list could repeat a bot that appears in more than one section (the real
+  server does this, e.g. "Featured" and its own category) - now deduped by jid, first occurrence wins.
 - Fixed (security): a prekey fetch (`assertSessions`) never checked a device's `ADVSignedDeviceIdentity`
   against the account that is supposed to own it, so a malicious/compromised relay could swap in its own
   identity key on a brand-new session (libsignal's own trust-on-first-use protects every session after

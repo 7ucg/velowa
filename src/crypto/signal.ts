@@ -24,6 +24,17 @@ import type {
 export { SignalCipher }
 export type { DecryptedMessage, EncryptedMessage, PreKeyBundleInput, SignalStorage }
 
+/**
+ * `SignalStorage` plus a way to forget one session: used when a peer's primary device is known to have
+ * been re-issued a fresh identity (`<notification type="encrypt"><identity/></notification>`) and the old
+ * session must not be reused. Rust/WASM never calls this - the Signal core is stateless per call and asks
+ * `loadSession` fresh every time (`rust/wasm-bridge/src/signal.rs`), so removing the record here is enough
+ * to make the next `hasSession`/`processPreKeyBundle` rebuild it.
+ */
+export interface RemovableSignalStorage extends SignalStorage {
+	removeSession(name: string, device: number): Promise<void>
+}
+
 export interface IdentityKeys {
 	publicKey: Uint8Array
 	privateKey: Uint8Array
@@ -80,7 +91,7 @@ export function createSignalCipher(storage: SignalStorage): SignalCipher {
 }
 
 /** Volatile storage: fine for tests and throwaway sessions, never for a real account. */
-export class MemorySignalStorage implements SignalStorage {
+export class MemorySignalStorage implements RemovableSignalStorage {
 	readonly #sessions = new Map<string, Uint8Array>()
 	readonly #identities = new Map<string, Uint8Array>()
 	readonly #preKeys = new Map<number, Uint8Array>()
@@ -110,6 +121,10 @@ export class MemorySignalStorage implements SignalStorage {
 	}
 	storeSession(name: string, device: number, record: Uint8Array) {
 		this.#sessions.set(`${name}.${device}`, record.slice())
+		return Promise.resolve()
+	}
+	removeSession(name: string, device: number) {
+		this.#sessions.delete(`${name}.${device}`)
 		return Promise.resolve()
 	}
 	loadPreKey(id: number) {

@@ -509,6 +509,60 @@ describe('helpers', () => {
 	})
 })
 
+describe('Receiver: identity change', () => {
+	async function sendIdentityChange(from: string) {
+		const { receiver, storage } = await setup()
+		await storage.storeSession('mallory', 0, Buffer.from([1]))
+		await storage.storeSession('mallory', 1, Buffer.from([1]))
+		receiver.handle({
+			tag: 'notification',
+			attrs: { from, type: 'encrypt', id: 'IC1' },
+			content: [{ tag: 'identity', attrs: {}, content: [] }],
+		})
+		await receiver.idle()
+		return storage
+	}
+
+	it('drops the primary session so the next send rebuilds it', async () => {
+		const storage = await sendIdentityChange('mallory@s.whatsapp.net')
+		expect(await storage.loadSession('mallory', 0)).toBeUndefined()
+	})
+
+	it('leaves a companion device alone (only the primary identity matters)', async () => {
+		const storage = await sendIdentityChange('mallory:1@s.whatsapp.net')
+		expect(await storage.loadSession('mallory', 0)).toBeDefined()
+		expect(await storage.loadSession('mallory', 1)).toBeDefined()
+	})
+
+	it('ignores our own account (clearing it would break our own devices)', async () => {
+		const storage = await sendIdentityChange('4915600000000@s.whatsapp.net')
+		expect(await storage.loadSession('mallory', 0)).toBeDefined()
+	})
+
+	it('removes the session under the LID form too, when the pairing is known', async () => {
+		const { storage, creds } = await setup()
+		const lids = new LidMap()
+		lids.set('mallory@s.whatsapp.net', '222222222222@lid')
+		const withLids = new Receiver({
+			creds,
+			saveCreds() {},
+			lids,
+			storage,
+			cipher: createSignalCipher(storage),
+			logger: new ProtocolLogger({ enabled: false }),
+			send: () => {},
+		})
+		await storage.storeSession('222222222222', 0, Buffer.from([1]))
+		withLids.handle({
+			tag: 'notification',
+			attrs: { from: '222222222222@lid', type: 'encrypt', id: 'IC2' },
+			content: [{ tag: 'identity', attrs: {}, content: [] }],
+		})
+		await withLids.idle()
+		expect(await storage.loadSession('222222222222', 0)).toBeUndefined()
+	})
+})
+
 describe('Receiver: app-state key shares', () => {
 	async function shareFrom(authorJid: string, category: string | undefined = 'peer') {
 		const keys: { keyId: Uint8Array; keyData: Uint8Array }[][] = []

@@ -17,6 +17,14 @@ import { reportingNode } from './reporting.js'
 const S_WHATSAPP_NET = 's.whatsapp.net'
 const SENT_CACHE_SIZE = 500
 const MAX_RESEND_COUNT = 5
+// WhatsApp's anti-abuse penalizes the aggregate rate of resends to one chat, not any single message or
+// device's depth: during a mass PN<->LID migration hundreds of devices can retry the same messages at
+// once, so the per-message/per-device cap above never engages while the aggregate rate alone climbs into
+// an account lock. One token bucket per chat bounds that; a throttled resend is dropped, not queued or
+// retried, since the requester gets a fresh sender key distributed on the next ordinary send regardless.
+const RESEND_BUCKET_BURST = 20
+const RESEND_BUCKET_REFILL_PER_MIN = 10
+const RESEND_BUCKET_CACHE_SIZE = 500
 
 const children = (n: BinaryNode, tag?: string): BinaryNode[] =>
 	Array.isArray(n.content) ? n.content.filter((c) => tag === undefined || c.tag === tag) : []
@@ -113,6 +121,8 @@ export class Sender {
 	readonly #lidAlias = new Map<string, string>()
 	/** Resends done per message+device (we do not trust the count in the receipt). */
 	readonly #resends = new Map<string, number>()
+	/** Per-chat resend token bucket (aggregate anti-abuse cap); see `RESEND_BUCKET_BURST`. */
+	readonly #resendBuckets = new Map<string, { tokens: number; last: number }>()
 	/** `group|senderKeyId` -> the devices that already got that sender key (keyed by the key's owner: see #groupStanza). */
 	readonly #memory: Record<string, string[]>
 
@@ -249,6 +259,23 @@ export class Sender {
 		if (this.#sent.size > SENT_CACHE_SIZE) this.#sent.delete(this.#sent.keys().next().value!)
 	}
 
+	/** Take one resend token for `chat`, refilling lazily since the bucket's last use. `false` means throttled. */
+	#resendAllowed(chat: string): boolean {
+		const now = Date.now()
+		const b = this.#resendBuckets.get(chat) ?? { tokens: RESEND_BUCKET_BURST, last: now }
+		b.tokens = Math.min(
+			RESEND_BUCKET_BURST,
+			b.tokens + ((now - b.last) / 60_000) * RESEND_BUCKET_REFILL_PER_MIN,
+		)
+		b.last = now
+		const allowed = b.tokens >= 1
+		if (allowed) b.tokens -= 1
+		this.#resendBuckets.set(chat, b)
+		if (this.#resendBuckets.size > RESEND_BUCKET_CACHE_SIZE)
+			this.#resendBuckets.delete(this.#resendBuckets.keys().next().value!)
+		return allowed
+	}
+
 	/**
 	 * A device told us (`<receipt type="retry">`) that it could not decrypt one of our messages: re-encrypt
 	 * it for exactly that device, with a fresh session when the receipt carries a key bundle.
@@ -270,6 +297,10 @@ export class Sender {
 			: true
 		if (!chatOk || !cached.audience?.has(targetUser)) {
 			logger.event('retry.rejected', { id, target, reason: 'not an original recipient' })
+			return false
+		}
+		if (!this.#resendAllowed(cached.to)) {
+			logger.event('retry.throttled', { id, target, chat: cached.to })
 			return false
 		}
 		const retry = children(receipt, 'retry')[0]

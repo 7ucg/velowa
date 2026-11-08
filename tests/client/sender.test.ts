@@ -246,6 +246,43 @@ describe('Sender: retry receipts', () => {
 		expect(stanzas).toHaveLength(before)
 	})
 
+	it('throttles the aggregate resend rate per chat, independent of the per-message cap', async () => {
+		const { sender, bob1 } = await world()
+		const ids: string[] = []
+		for (let i = 0; i < 21; i++)
+			ids.push(await sender.sendText('4915611111111@s.whatsapp.net', `m${i}`))
+		const retryFor = (id: string): BinaryNode => ({
+			tag: 'receipt',
+			attrs: { from: bob1.jid, id, type: 'retry' },
+			content: [{ tag: 'retry', attrs: { count: '1' } }],
+		})
+		const results: boolean[] = []
+		for (const id of ids) results.push(await sender.handleRetryReceipt(retryFor(id)))
+		expect(results.filter(Boolean)).toHaveLength(20) // the burst
+		expect(results.at(-1)).toBe(false) // the 21st, same chat, is throttled
+	})
+
+	it('does not let one chat throttle another', async () => {
+		const { sender, bob1, phone } = await world()
+		const ids: string[] = []
+		for (let i = 0; i < 21; i++)
+			ids.push(await sender.sendText('4915611111111@s.whatsapp.net', `m${i}`))
+		const otherId = await sender.sendText('4915600000000@s.whatsapp.net', 'to myself')
+		for (const id of ids)
+			await sender.handleRetryReceipt({
+				tag: 'receipt',
+				attrs: { from: bob1.jid, id, type: 'retry' },
+				content: [{ tag: 'retry', attrs: { count: '1' } }],
+			})
+		expect(
+			await sender.handleRetryReceipt({
+				tag: 'receipt',
+				attrs: { from: phone.jid, id: otherId, type: 'retry' },
+				content: [{ tag: 'retry', attrs: { count: '1' } }],
+			}),
+		).toBe(true)
+	})
+
 	it('requires a group retry to come from that group and name a participant', async () => {
 		const { sender, stanzas, bob0 } = await world()
 		const group = '120363000000000001@g.us'

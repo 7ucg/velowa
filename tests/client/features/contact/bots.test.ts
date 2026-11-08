@@ -55,6 +55,35 @@ describe('bot directory', () => {
 		expect(d.defaultBot).toEqual({ jid: '1@bot', personaId: 'p-default' })
 	})
 
+	it('dedupes a bot repeated across sections (the server does this)', () => {
+		const repeated: BinaryNode = {
+			tag: 'iq',
+			attrs: { type: 'result' },
+			content: [
+				{
+					tag: 'bot',
+					attrs: { v: '3' },
+					content: [
+						{
+							tag: 'section',
+							attrs: { name: 'Featured', type: 'featured' },
+							content: [{ tag: 'bot', attrs: { jid: '2@bot', persona_id: 'p2' } }],
+						},
+						{
+							tag: 'section',
+							attrs: { name: 'Cooking', type: 'category' },
+							content: [{ tag: 'bot', attrs: { jid: '2@bot', persona_id: 'p2' } }],
+						},
+					],
+				},
+			],
+		}
+		const d = parseBotList(repeated)
+		expect(d.bots.map((b) => b.jid)).toEqual(['2@bot'])
+		// the raw sections are untouched - only the flattened convenience list is deduped
+		expect(d.sections.map((s) => s.bots.length)).toEqual([1, 1])
+	})
+
 	it('goes through the request function', async () => {
 		const sent: BinaryNode[] = []
 		const d = await listBots(async (n) => (sent.push(n), answer))

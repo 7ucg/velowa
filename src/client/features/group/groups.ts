@@ -546,6 +546,23 @@ export interface GroupNotification {
 	participants?: string[]
 	subject?: string
 	description?: string
+	/** `subject` only: the renamer, when it differs from `actor` (LID-addressed group) - and their PN/username alias. */
+	subjectOwner?: string
+	subjectOwnerPn?: string
+	subjectOwnerUsername?: string
+	subjectTime?: number
+	/** `locked` only: `undefined` means "all admins", a number of days is a time-boxed lock. */
+	threshold?: string
+	/** `ephemeral` / `growth_locked` only: seconds until messages disappear, or until invite links reopen. */
+	expiration?: number
+	/** `ephemeral` only: who/what set it off, when the server says. */
+	trigger?: number
+	/** `growth_locked` only: why invite links are unavailable. */
+	lockType?: string
+	/** `membership_approval_request` / `created_membership_requests` only: how the join was requested. */
+	requestMethod?: string
+	/** `membership_approval_request` / `created_membership_requests` only: the community this group belongs to. */
+	parentGroupJid?: string
 }
 
 /** Turn a `<notification type="w:gp2">` into one event per change it carries. */
@@ -565,8 +582,29 @@ export function parseGroupNotification(node: BinaryNode): GroupNotification[] {
 			action: c.tag,
 			...(participants.length && { participants }),
 		}
-		if (c.tag === 'subject' && c.attrs['subject']) n.subject = c.attrs['subject']
+		if (c.tag === 'subject') {
+			if (c.attrs['subject']) n.subject = c.attrs['subject']
+			if (c.attrs['s_o']) n.subjectOwner = c.attrs['s_o']
+			if (c.attrs['s_o_pn']) n.subjectOwnerPn = c.attrs['s_o_pn']
+			if (c.attrs['s_o_username']) n.subjectOwnerUsername = c.attrs['s_o_username']
+			if (c.attrs['s_t']) n.subjectTime = Number(c.attrs['s_t'])
+		}
 		if (c.tag === 'description') n.description = text(kids(c, 'body')[0]) ?? ''
+		if (c.tag === 'locked' && c.attrs['threshold']) n.threshold = c.attrs['threshold']
+		// `not_ephemeral` carries no attrs: expiration 0 (off), matching `ephemeral`/`not_ephemeral`'s own collapse.
+		if (c.tag === 'ephemeral' || c.tag === 'not_ephemeral') {
+			n.action = 'ephemeral'
+			n.expiration = Number(c.attrs['expiration'] ?? 0)
+			if (c.attrs['trigger']) n.trigger = Number(c.attrs['trigger'])
+		}
+		if (c.tag === 'growth_locked') {
+			n.expiration = Number(c.attrs['expiration'] ?? 0)
+			n.lockType = c.attrs['type'] ?? ''
+		}
+		if (c.tag === 'membership_approval_request' || c.tag === 'created_membership_requests') {
+			if (c.attrs['request_method']) n.requestMethod = c.attrs['request_method']
+			if (c.attrs['parent_group_jid']) n.parentGroupJid = c.attrs['parent_group_jid']
+		}
 		out.push(n)
 	}
 	return out
