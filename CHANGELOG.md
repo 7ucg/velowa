@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- Fixed: `classifyServerFailure` treated an unrecognised (or missing) `<failure reason="...">` as non-terminal,
+  the same as a transient server error - so the reconnect loop would spin forever against a refusal the server
+  will keep repeating (a temp ban, an outdated-client rejection, ...). WA Web's own `ConnectFailureReason` allow-
+  lists only `500`/`503` as worth retrying; everything else now stops reconnecting, surfaced as a new generic
+  `rejected` failure when it isn't already `logged-out`/`forbidden`. `<stream:error>`'s own code space (which
+  has legitimately non-terminal codes like `515` "restart required") is unchanged.
 - Fixed: group sends never carried a `phash` (the participant-hash the server uses to tell a sender its
   device list went stale), and the one helper that computed something hash-shaped (`participantHash`) hashed
   the raw JIDs instead of WA Web's own `user.0:device@server` form (the `.0` agent slot is always literal)
