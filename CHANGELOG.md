@@ -1,6 +1,22 @@
 # Changelog
 
 ## Unreleased
+- Fixed (security): a prekey fetch (`assertSessions`) never checked a device's `ADVSignedDeviceIdentity`
+  against the account that is supposed to own it, so a malicious/compromised relay could swap in its own
+  identity key on a brand-new session (libsignal's own trust-on-first-use protects every session after
+  that, but not the very first one) and the client would encrypt to it silently. `validateAdvDeviceIdentity`
+  (`src/client/adv.ts`) now verifies both halves of the chain (WA Web `validateADVwithIdentityKey`): the
+  account signs the device's identity key, and the device signs back; a primary device (id 0) whose own
+  blob verifies becomes the trust anchor for that same user's companion devices fetched in the same batch
+  (the server omits their account key, expecting the client to already hold it). A device that fails
+  verification is skipped - sending to it then fails instead of silently trusting a swapped identity. Found
+  by cross-referencing `whatsapp-rust`'s `usync.rs`, which pinned the same class of fix.
+- Added: `client.additionalMediaHosts` - extra hostnames `downloadMedia` may also fetch from (a self-hosted
+  relay mirroring WhatsApp's media CDN, say), tried after the official host, with the same HTTPS-only,
+  no-credentials, no-custom-port checks.
+- Added: apply `lidMigrationMappingSyncMessage` (sent by the account's own primary to its companions) to the
+  phone-number <-> LID map - the authoritative counterpart to `noteLidFromAttrs`'s opportunistic learning,
+  below. Rejected from anyone but our own account, to not let a peer poison the mapping.
 - Added: choose the device identity. `config.platformType` (all 31 `DeviceProps.PlatformType` names), `config.releaseChannel` (`RELEASE` / `BETA` / `ALPHA` / `DEBUG`), `config.platform` and `config.webSubPlatform`; `deviceProfile(name)` with 21 presets (`DEVICE_PROFILES`, e.g. `safari-mac`, `ios-phone`), Baileys-style `Browsers.*`. Names are checked in the constructor. The device type is read when pairing; the release channel goes out on every connect. Only the default is checked on a live account. `config.historySync: 'all'` turns on every boolean of `HistorySyncConfig` (`HISTORY_SYNC_FLAGS`, 20 flags); an object sets single flags on top of the defaults.
 - Added: `message.unavailable` for messages with no content for this device (view-once photos and videos stay on the phone); `setMuteState` and `muteState` on `call` events.
 - Fixed: a 1:1 message could fail with "no devices found for ...@lid" (reported: typing a bot command in the bot

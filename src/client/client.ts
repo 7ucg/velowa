@@ -9,7 +9,11 @@ import {
 } from './features/message/send-content.js'
 import { classifyServerFailure, type ServerFailure } from './server-failure.js'
 import { resolveAuthDir } from './auth-dir.js'
-import { decodeAudioFile, resolveCallFiles, type CallFileOptions } from './features/call/media-files.js'
+import {
+	decodeAudioFile,
+	resolveCallFiles,
+	type CallFileOptions,
+} from './features/call/media-files.js'
 import type { LocalAudioOptions } from './features/call/local-audio.js'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
@@ -190,6 +194,13 @@ export interface ClientOptions {
 	 * media again. Turn it off to handle `message.undecryptable` yourself.
 	 */
 	autoRecover?: boolean
+	/**
+	 * Extra hostnames `downloadMedia` may also fetch from, tried after the official host once a message's
+	 * `directPath`/`url` is on it (e.g. a self-hosted relay mirroring WhatsApp's media CDN). Each one is used
+	 * verbatim, with the same HTTPS-only, no-credentials, no-custom-port checks as the official host - this
+	 * does not relax those checks, it only widens which exact hostnames may be tried.
+	 */
+	additionalMediaHosts?: string[]
 }
 
 /**
@@ -591,15 +602,16 @@ export class Client {
 	): Promise<Buffer> {
 		const m = media.mediaOf(message)
 		if (!m) throw new Error('message carries no downloadable media')
+		const extraHosts = this.#options.additionalMediaHosts ?? []
 		try {
-			return await media.downloadMedia(m.ref, m.type)
+			return await media.downloadMedia(m.ref, m.type, undefined, extraHosts)
 		} catch (e) {
 			// 404 / 410: the file expired on the server. With the message key the phone can upload it again.
 			const text = `${(e as Error).message} ${((e as Error).cause as Error | undefined)?.message ?? ''}`
 			if (!this.#autoRecover || !opts.key || !/HTTP (404|410)\b/.test(text)) throw e
 			const fresh = await this.updateMediaMessage(opts.key, message)
 			const again = media.mediaOf(fresh)!
-			return media.downloadMedia(again.ref, again.type)
+			return media.downloadMedia(again.ref, again.type, undefined, extraHosts)
 		}
 	}
 

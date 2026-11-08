@@ -7,6 +7,7 @@ import type { BinaryNode } from '../codec/index.js'
 import type { SignalCipher, SignalStorage } from '../crypto/signal.js'
 import { jidDecode, signalAddress, signalAddressString } from '../jid.js'
 import type { ProtocolLogger } from '../logging/protocol-logger.js'
+import { validateAdvDeviceIdentity } from './adv.js'
 import { encodeProto } from './proto.js'
 import type { TcTokens } from './features/contact/tctoken.js'
 import type { LidMap } from './lid-map.js'
@@ -449,13 +450,35 @@ export class Sender {
 				},
 			],
 		})
-		for (const user of children(children(res, 'list')[0] ?? res, 'user')) {
+		const users = children(children(res, 'list')[0] ?? res, 'user')
+		// Verify each primary (device 0) first: a valid one's own identity key is the account's trust
+		// anchor, and the server omits it from that same user's companion blobs, expecting the client
+		// to already hold it (`validateAdvDeviceIdentity`'s `accountKeyFallback`).
+		const primaryAnchor = new Map<string, Uint8Array>()
+		const byDevice = [...users].sort(
+			(x, y) => jidDecode(x.attrs['jid'] ?? '').device - jidDecode(y.attrs['jid'] ?? '').device,
+		)
+		for (const user of byDevice) {
 			const jid = user.attrs['jid'] ?? ''
 			if (children(user, 'error').length) {
 				this.d.logger.event('send.prekey-error', { jid, error: children(user, 'error')[0]?.attrs })
 				continue
 			}
 			const bundle = parseBundle(user)
+			const { user: u, device } = jidDecode(jid)
+			if (bundle.deviceIdentity) {
+				const result = validateAdvDeviceIdentity(
+					bundle.deviceIdentity,
+					bundle.identityKey,
+					device === 0 ? undefined : primaryAnchor.get(u),
+				)
+				if (result === 'invalid') {
+					this.d.logger.event('send.adv-rejected', { jid })
+					continue
+				}
+				if (result === 'no-account-key') this.d.logger.event('send.adv-unverified', { jid })
+				else if (device === 0) primaryAnchor.set(u, bundle.identityKey)
+			}
 			const a = this.addr(jid)
 			await this.d.cipher.processPreKeyBundle(a.name, a.device, bundle)
 			this.d.logger.event('send.session-created', { jid })
@@ -825,5 +848,6 @@ function parseBundle(user: BinaryNode) {
 		signedPreKeyPublic,
 		signedPreKeySignature,
 		identityKey,
+		deviceIdentity: bytes(user, 'device-identity'),
 	}
 }

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { newIdentityKeyPair } from '../../src/crypto/signal.js'
 import { unpadRandomMax16 } from '../../src/client/receiver.js'
 import { generateMessageId, padRandomMax16, participantHash } from '../../src/client/sender.js'
-import { decodeMsg, kids, world } from '../helpers/world.testkit.js'
+import { decodeMsg, kids, signedDeviceIdentity, world } from '../helpers/world.testkit.js'
 
 describe('Sender: 1:1', () => {
 	it('fans out to every device, wrapping our own devices in deviceSentMessage', async () => {
@@ -408,6 +409,34 @@ describe('Sender: LID addressing', () => {
 		const unknownLid = '333333333333@lid'
 		const { sender } = await world({ emptyUsyncFor: [unknownLid] })
 		await expect(sender.sendText(unknownLid, 'hi')).rejects.toThrow(/no devices found/)
+	})
+})
+
+describe('Sender: device-identity verification', () => {
+	it('sends normally to a device with a validly-signed device-identity', async () => {
+		const account = newIdentityKeyPair()
+		const { sender, stanzas, extra } = await world({
+			extraRemote: {
+				jid: 'mallory@s.whatsapp.net',
+				regId: 42,
+				deviceIdentity: (identity) => signedDeviceIdentity(account, identity),
+			},
+		})
+		await sender.sendText('mallory@s.whatsapp.net', 'hi')
+		const to = kids(kids(stanzas[0]!, 'participants')[0]!, 'to')
+		expect(to.map((t) => t.attrs['jid'])).toContain(extra!.jid)
+	})
+
+	it('refuses to establish a session over a tampered device-identity', async () => {
+		const account = newIdentityKeyPair()
+		const { sender } = await world({
+			extraRemote: {
+				jid: 'mallory@s.whatsapp.net',
+				regId: 42,
+				deviceIdentity: (identity) => signedDeviceIdentity(account, identity, true),
+			},
+		})
+		await expect(sender.sendText('mallory@s.whatsapp.net', 'hi')).rejects.toThrow()
 	})
 })
 

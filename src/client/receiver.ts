@@ -117,6 +117,31 @@ export function noteLidFromAttrs(attrs: Record<string, string>, lids: LidMap): v
 	if (alt) lids.set(acting, alt)
 }
 
+/**
+ * Apply a `lidMigrationMappingSyncMessage`'s payload (`LIDMigrationMappingSyncPayload`): the account's
+ * primary pushes these to its own companions as the authoritative phone-number <-> LID pairing, ahead of
+ * (and more completely than) anything `noteLidFromAttrs` can pick up from ordinary traffic. The caller
+ * must only do this for a message from one of our own devices - a peer could otherwise feed us a forged
+ * pairing and misdirect our own sends. Exported standalone so it is testable without a live `Receiver`.
+ */
+export function applyLidMigrationMapping(encodedPayload: Uint8Array, lids: LidMap): void {
+	let mappings: { pn?: string; assignedLid?: string; latestLid?: string }[]
+	try {
+		const t = protoType('LIDMigrationMappingSyncPayload')
+		const decoded = t.toObject(t.decode(encodedPayload), { longs: String, defaults: true }) as {
+			pnToLidMappings?: { pn?: string; assignedLid?: string; latestLid?: string }[]
+		}
+		mappings = decoded.pnToLidMappings ?? []
+	} catch {
+		return
+	}
+	for (const m of mappings) {
+		const lid = m.latestLid && m.latestLid !== '0' ? m.latestLid : m.assignedLid
+		if (!m.pn || m.pn === '0' || !lid || lid === '0') continue
+		lids.set(`${lid}@lid`, `${m.pn}@s.whatsapp.net`)
+	}
+}
+
 const be = (n: number, len: number): Buffer => {
 	const b = Buffer.alloc(len)
 	b.writeUIntBE(n, 0, len)
@@ -732,6 +757,7 @@ export class Receiver {
 				appStateSyncKeyShare?: {
 					keys?: { keyId?: { keyId?: Buffer }; keyData?: { keyData?: Buffer } }[]
 				}
+				lidMigrationMappingSyncMessage?: { encodedMappingPayload?: Buffer }
 			}
 		}
 		const secret = raw.messageContextInfo?.messageSecret
@@ -748,6 +774,16 @@ export class Receiver {
 					: [],
 			)
 			if (keys.length) this.d.onAppStateKeys(keys)
+		}
+		const migrationPayload =
+			raw.protocolMessage?.lidMigrationMappingSyncMessage?.encodedMappingPayload
+		if (migrationPayload) {
+			// Self-only: a peer sending this could otherwise poison our LID/PN mapping and misdirect our sends.
+			if (this.#isOwnPeer(node, author)) {
+				applyLidMigrationMapping(new Uint8Array(migrationPayload), this.d.lids)
+			} else {
+				this.d.logger.event('lid-migration.rejected', { author })
+			}
 		}
 		const pdo =
 			raw.protocolMessage?.peerDataOperationRequestResponseMessage?.peerDataOperationResult

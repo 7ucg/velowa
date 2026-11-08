@@ -787,6 +787,7 @@ new Client({
   pairWithPhoneNumber: '4915…', // link with a code instead of a QR
   customPairingCode: 'ABCD2345', // your own code instead of a random one (needs pairWithPhoneNumber)
   antiban: true, // or your own limits, see below
+  additionalMediaHosts: ['relay.example.org'], // extra hosts downloadMedia may also fetch from
   config: { /* override the WhatsApp Web version / browser identity */ },
   // Device identity, e.g. config: { ...deviceProfile('ios-phone'), releaseChannel: 'BETA' }
   //   platformType (PLATFORM_TYPES: CHROME, SAFARI, IOS_PHONE, ANDROID_PHONE, ...): read when pairing, re-link to change

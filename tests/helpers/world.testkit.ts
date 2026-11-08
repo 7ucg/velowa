@@ -10,6 +10,7 @@ import {
 	newIdentityKeyPair,
 	newPreKeys,
 	newSignedPreKey,
+	xeddsaSign,
 } from '../../src/crypto/signal.js'
 import { LidMap } from '../../src/client/lid-map.js'
 import { ProtocolLogger } from '../../src/logging/protocol-logger.js'
@@ -26,14 +27,54 @@ const be = (n: number, len: number) => {
 	return b
 }
 
+/**
+ * A valid (or, with `invalid`, intentionally mis-signed) `ADVSignedDeviceIdentity` binding `device`'s
+ * identity key to `account`'s. Mirrors `tests/client/adv.test.ts`'s fixture.
+ */
+export function signedDeviceIdentity(
+	account: { publicKey: Uint8Array; privateKey: Uint8Array },
+	device: { publicKey: Uint8Array; privateKey: Uint8Array },
+	invalid = false,
+): Uint8Array {
+	const T = protoType
+	const details = T('ADVDeviceIdentity')
+		.encode(T('ADVDeviceIdentity').fromObject({ rawId: 1, timestamp: 1, keyIndex: 0 }))
+		.finish()
+	const accountSignature = xeddsaSign(
+		account.privateKey,
+		Buffer.concat([Buffer.from([6, 0]), details, device.publicKey]),
+	)
+	const deviceSignature = xeddsaSign(
+		device.privateKey,
+		Buffer.concat([Buffer.from([6, 1]), details, device.publicKey, account.publicKey]),
+	)
+	const bytes = T('ADVSignedDeviceIdentity')
+		.encode(
+			T('ADVSignedDeviceIdentity').fromObject({
+				details,
+				accountSignatureKey: account.publicKey,
+				accountSignature,
+				deviceSignature,
+			}),
+		)
+		.finish()
+	if (invalid) bytes[bytes.length - 1]! ^= 1
+	return bytes
+}
+
 /** A remote device with its own keys; answers pre-key fetches and decrypts what we send it. */
-export async function remoteDevice(jid: string, regId: number) {
+export async function remoteDevice(
+	jid: string,
+	regId: number,
+	deviceIdentity?: (identity: { publicKey: Uint8Array; privateKey: Uint8Array }) => Uint8Array,
+) {
 	const identity = newIdentityKeyPair()
 	const storage = new MemorySignalStorage(identity, regId)
 	const signed = newSignedPreKey(identity.privateKey, 1)
 	const [pre] = newPreKeys(100, 1)
 	await storage.storeSignedPreKey(signed.id, signed.record)
 	await storage.storePreKey(pre!.id, pre!.record)
+	const builtIdentity = deviceIdentity?.(identity)
 	const userNode: BinaryNode = {
 		tag: 'user',
 		attrs: { jid },
@@ -57,12 +98,24 @@ export async function remoteDevice(jid: string, regId: number) {
 					{ tag: 'signature', attrs: {}, content: signed.signature },
 				],
 			},
+			...(builtIdentity ? [{ tag: 'device-identity', attrs: {}, content: builtIdentity }] : []),
 		],
 	}
-	return { jid, cipher: createSignalCipher(storage), userNode }
+	return { jid, identity, cipher: createSignalCipher(storage), userNode }
 }
 
-export async function world(opts: { ackError?: string; emptyUsyncFor?: string[] } = {}) {
+export async function world(
+	opts: {
+		ackError?: string
+		emptyUsyncFor?: string[]
+		/** An extra single-device (id 0) remote, for testing device-identity verification in isolation. */
+		extraRemote?: {
+			jid: string
+			regId: number
+			deviceIdentity?: (identity: { publicKey: Uint8Array; privateKey: Uint8Array }) => Uint8Array
+		}
+	} = {},
+) {
 	const creds = initAuthCreds()
 	creds.me = { id: '4915600000000:23@s.whatsapp.net', lid: '111111111111:23@lid' }
 	creds.account = new Uint8Array([7, 7, 7])
@@ -75,7 +128,14 @@ export async function world(opts: { ackError?: string; emptyUsyncFor?: string[] 
 	const phone = await remoteDevice('4915600000000@s.whatsapp.net', 1)
 	const bob0 = await remoteDevice('4915611111111@s.whatsapp.net', 2)
 	const bob1 = await remoteDevice('4915611111111:1@s.whatsapp.net', 3)
-	const remotes = [phone, bob0, bob1]
+	const extra = opts.extraRemote
+		? await remoteDevice(
+				opts.extraRemote.jid,
+				opts.extraRemote.regId,
+				opts.extraRemote.deviceIdentity,
+			)
+		: undefined
+	const remotes = [phone, bob0, bob1, ...(extra ? [extra] : [])]
 	const stanzas: BinaryNode[] = []
 	// eslint-disable-next-line prefer-const -- assigned after the closure that references it
 	let receiver!: Receiver
@@ -112,9 +172,12 @@ export async function world(opts: { ackError?: string; emptyUsyncFor?: string[] 
 					if (opts.emptyUsyncFor?.includes(jid))
 						return { tag: 'user', attrs: { jid }, content: [] } as BinaryNode
 					const mine = jid.startsWith('4915600000000')
-					const devs = mine
-						? [{ id: '0' }, { id: '23', 'key-index': '2' }]
-						: [{ id: '0' }, { id: '1', 'key-index': '1' }]
+					const devs =
+						extra && jid === extra.jid
+							? [{ id: '0' }]
+							: mine
+								? [{ id: '0' }, { id: '23', 'key-index': '2' }]
+								: [{ id: '0' }, { id: '1', 'key-index': '1' }]
 					return {
 						tag: 'user',
 						attrs: { jid },
@@ -182,7 +245,7 @@ export async function world(opts: { ackError?: string; emptyUsyncFor?: string[] 
 		logger: new ProtocolLogger({ enabled: false }),
 		senderKeyMemoryPath: join(dir, 'sk.json'),
 	})
-	return { sender, stanzas, phone, bob0, bob1, creds, lids }
+	return { sender, stanzas, phone, bob0, bob1, extra, creds, lids, storage }
 }
 
 export const decodeMsg = (plain: Uint8Array) =>

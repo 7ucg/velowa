@@ -260,24 +260,31 @@ export const MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
 
 /**
  * Media references come from other users, so they are not trusted: the target is always a WhatsApp media
- * host (`directPath` is joined onto the known host and re-checked; `url` must already be https on a
- * `*.whatsapp.net` host with no credentials or custom port).
+ * host, or one of `extraHosts` (e.g. a configured self-hosted relay), verbatim and exact - never a suffix
+ * match (`directPath` is joined onto each host and re-checked; `url` must already be https on one of them,
+ * or a `*.whatsapp.net` host, with no credentials or custom port).
  */
-export function safeMediaUrls(ref: MediaRef): string[] {
+export function safeMediaUrls(ref: MediaRef, extraHosts: string[] = []): string[] {
 	const urls: string[] = []
+	const hosts = [MEDIA_HOST, ...extraHosts]
 	const dp = ref.directPath
 	if (dp !== undefined) {
 		if (!dp.startsWith('/') || dp.startsWith('//') || /[\\@\s]|\.\.|[\u0000-\u001f]/.test(dp))
 			throw new Error('unsafe media directPath')
-		const u = new URL(dp, `https://${MEDIA_HOST}`)
-		if (u.hostname !== MEDIA_HOST || u.protocol !== 'https:' || u.username || u.password || u.port)
-			throw new Error('unsafe media directPath')
-		urls.push(u.toString())
+		for (const host of hosts) {
+			const u = new URL(dp, `https://${host}`)
+			if (u.hostname !== host || u.protocol !== 'https:' || u.username || u.password || u.port)
+				throw new Error('unsafe media directPath')
+			urls.push(u.toString())
+		}
 	}
 	if (ref.url) {
 		try {
 			const u = new URL(ref.url)
-			const okHost = u.hostname === MEDIA_HOST || u.hostname.endsWith('.whatsapp.net')
+			const okHost =
+				u.hostname === MEDIA_HOST ||
+				u.hostname.endsWith('.whatsapp.net') ||
+				hosts.includes(u.hostname)
 			if (u.protocol === 'https:' && okHost && !u.username && !u.password && !u.port)
 				urls.push(u.toString())
 		} catch {
@@ -313,8 +320,9 @@ export async function downloadMedia(
 	ref: MediaRef,
 	type: BlobType,
 	fetchImpl: Fetch = fetch,
+	extraHosts: string[] = [],
 ): Promise<Buffer> {
-	const urls = safeMediaUrls(ref)
+	const urls = safeMediaUrls(ref, extraHosts)
 	if (!urls.length)
 		throw new Error('media message has neither a usable directPath nor a WhatsApp https url')
 	// AES-CBC output is at most one block longer than the input, plus the 10-byte MAC.

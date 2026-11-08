@@ -154,6 +154,20 @@ describe('download safety', () => {
 		}
 	})
 
+	it('tries extra configured hosts too, but still exactly and only those', () => {
+		expect(
+			safeMediaUrls({ mediaKey: new Uint8Array(), directPath: '/v/x' }, ['relay.example.org']),
+		).toEqual(['https://mmg.whatsapp.net/v/x', 'https://relay.example.org/v/x'])
+		expect(
+			safeMediaUrls({ mediaKey: new Uint8Array(), url: 'https://relay.example.org/x' }, [
+				'relay.example.org',
+			]),
+		).toEqual(['https://relay.example.org/x'])
+		expect(
+			safeMediaUrls({ mediaKey: new Uint8Array(), url: 'https://relay.example.org/x' }, []),
+		).toEqual([])
+	})
+
 	it('refuses to fetch an attacker-supplied internal URL at all', async () => {
 		let called = false
 		const f = (async () => ((called = true), new Response('x'))) as unknown as typeof fetch
