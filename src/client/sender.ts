@@ -51,6 +51,24 @@ export function generateMessageId(meId: string): string {
 	return '3EB0' + createHash('sha256').update(data).digest('hex').toUpperCase().slice(0, 18)
 }
 
+/** Which kind of client a message id's own shape (length and prefix) says generated it. */
+export type MessageIdDevice = 'ios' | 'web' | 'android' | 'desktop' | 'api'
+
+/**
+ * Guess which client sent a message from its id's shape alone: iOS (`3A` + 18 = 20 chars), Web (`3E` + 20 =
+ * 22 chars, what `generateMessageId` itself produces), Android (21 or 32 chars, any prefix), Desktop
+ * (starts `3F`, or exactly 18 chars), else an API/bot client (Baileys, velowa itself when not using the
+ * `3EB0` shape, business API, ...). Checked in this order, so a 21-char id starting `3F` reads as Android,
+ * not Desktop.
+ */
+export function deviceOf(id = ''): MessageIdDevice {
+	if (/^3A.{18}$/.test(id)) return 'ios'
+	if (/^3E.{20}$/.test(id)) return 'web'
+	if (/^(.{21}|.{32})$/.test(id)) return 'android'
+	if (/^(3F|.{18}$)/.test(id)) return 'desktop'
+	return 'api'
+}
+
 /**
  * Participant hash the server uses to detect a stale device list on a group send: `2:` + the 8 base64
  * chars of the first 6 raw SHA-256 bytes over every device rendered as `user.0:device@server` (the agent

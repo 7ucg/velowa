@@ -1,6 +1,16 @@
 # Changelog
 
 ## Unreleased
+- Added: `deviceOf(id)` - guesses which client (`ios`/`web`/`android`/`desktop`/`api`) sent a message from
+  its id's own shape (length and prefix) alone, matching whatsmeow/Baileys' own heuristic.
+  `generateMessageId`'s own output (confirmed against whatsmeow's Go and an older Baileys' JS
+  implementation - identical algorithm already) reads back as `web`.
+- Added: `getFakeMsg(jid, msg)` - a test tool for the `fake-chat` defense, not an attack on anyone: builds a
+  message that spoofs the `deviceSentMessage` envelope `onOwnDeviceSent`'s own-account check exists to
+  reject. Send the result (`client.sendMessage(targetJid, fake.message, fake.opts)`) from an account that
+  is *not* the target's own, against a target whose velowa instance you control, to verify over a real
+  connection that the spoof is ignored rather than silently trusted - its id never joins the target's own
+  `SentMessageIds`, so a later receipt for the same id still gets flagged by `detectFakeChat` too.
 - Fixed: the `fake-chat` store (`SentMessageIds`) only ever recorded ids this device itself sent through
   `Sender` - a message the primary phone (or another linked device) sent directly would never show up in
   it, so a real receipt for it would be misread as a forged one. An incoming message that decrypts to a

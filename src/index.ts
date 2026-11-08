@@ -63,6 +63,10 @@ export type {
 	ListSection,
 } from './client/features/message/interactive.js'
 export { pollOptionHash, vcardFor } from './client/features/message/extras.js'
+export { deviceOf } from './client/sender.js'
+export type { MessageIdDevice } from './client/sender.js'
+export { getFakeMsg } from './client/features/contact/fake-chat.js'
+export type { FakeMsg, FakeChatDetected } from './client/features/contact/fake-chat.js'
 export type { MessageKey, Quoted, TextOptions } from './client/features/message/messages.js'
 export { AntiBan, AntiBanError, ANTIBAN_DEFAULTS } from './client/antiban.js'
 export type { AntiBanConfig } from './client/antiban.js'

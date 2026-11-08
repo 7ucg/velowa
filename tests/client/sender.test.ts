@@ -2,7 +2,12 @@ import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { newIdentityKeyPair } from '../../src/crypto/signal.js'
 import { unpadRandomMax16 } from '../../src/client/receiver.js'
-import { generateMessageId, padRandomMax16, participantHash } from '../../src/client/sender.js'
+import {
+	deviceOf,
+	generateMessageId,
+	padRandomMax16,
+	participantHash,
+} from '../../src/client/sender.js'
 import { decodeMsg, kids, signedDeviceIdentity, world } from '../helpers/world.testkit.js'
 
 describe('Sender: 1:1', () => {
@@ -642,5 +647,18 @@ describe('helpers', () => {
 		expect(generateMessageId('4915600000000:23@s.whatsapp.net')).toMatch(/^3EB0[0-9A-F]{18}$/)
 		expect(participantHash(['b@x', 'a@x'])).toBe(participantHash(['a@x', 'b@x']))
 		expect(participantHash(['a@x'])).toMatch(/^2:.{8}$/)
+	})
+
+	it("guesses the sending client from a message id's shape", () => {
+		expect(deviceOf(generateMessageId('4915600000000:23@s.whatsapp.net'))).toBe('web') // 3E + 20 = 22
+		expect(deviceOf('3A' + 'x'.repeat(18))).toBe('ios') // 3A + 18 = 20
+		expect(deviceOf('3E' + 'x'.repeat(20))).toBe('web') // 3E + 20 = 22
+		expect(deviceOf('x'.repeat(21))).toBe('android')
+		expect(deviceOf('x'.repeat(32))).toBe('android')
+		expect(deviceOf('3Fxxxxxxxxxxxxxxxxxxxxxxxx')).toBe('desktop') // starts 3F, any length
+		expect(deviceOf('x'.repeat(18))).toBe('desktop') // exactly 18, any prefix
+		expect(deviceOf('3F' + 'x'.repeat(19))).toBe('android') // 21 chars wins over the 3F prefix
+		expect(deviceOf('tooShort')).toBe('api')
+		expect(deviceOf()).toBe('api')
 	})
 })
