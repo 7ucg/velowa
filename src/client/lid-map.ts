@@ -66,6 +66,32 @@ export class LidMap {
 		return d.device ? `${lid}:${d.device}@lid` : `${lid}@lid`
 	}
 
+	/**
+	 * The other addressing form of a bare (device-less) user JID - the LID for a phone number we know the
+	 * mapping for, or the phone number for a LID we know it for - or `undefined` when no mapping is known
+	 * yet, or `jid` isn't one of those two servers. Used to retry a secret-encrypted add-on (a poll vote, a
+	 * comment, a reaction, an RSVP) under the alternate namespace when the sender addressed it differently
+	 * than we did: the HKDF/HMAC info that keys these is the exact JID string, so PN and LID never decrypt
+	 * each other's.
+	 */
+	swap(jid: string): string | undefined {
+		let d
+		try {
+			d = jidDecode(jid)
+		} catch {
+			return undefined
+		}
+		if (d.server === 's.whatsapp.net') {
+			const lid = this.#pnToLid.get(d.user)
+			return lid ? `${lid}@lid` : undefined
+		}
+		if (d.server === 'lid') {
+			const pn = this.#lidToPn.get(d.user)
+			return pn ? `${pn}@s.whatsapp.net` : undefined
+		}
+		return undefined
+	}
+
 	#save(): void {
 		if (!this.path) return
 		mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })

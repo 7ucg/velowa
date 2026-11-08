@@ -19,6 +19,46 @@ const UPLOAD_PREKEY_COUNT = 30
 const MAX_RETRIES = 5
 const REQUEST_TIMEOUT_MS = 20_000
 
+/**
+ * Try `attempt` with `(a, b)` as given, then - if either side has a known alternate LID/PN form - with each
+ * distinct combination of swapping one or both sides, mirroring WA Web's own `decryptAddOn` LID-migration
+ * resilience. A poll vote, comment, reaction or RSVP is keyed by the exact JID strings of its two parties
+ * (the parent post's author and whoever's answering); as contacts migrate to LID, either one alone can arrive
+ * addressed differently than the record we have of the other. Throws the primary attempt's error if every
+ * combination (including any fallbacks) fails.
+ */
+function withAddressingFallback<T>(
+	lids: LidMap,
+	a: string,
+	b: string,
+	attempt: (a: string, b: string) => T,
+): T {
+	const altA = lids.swap(a)
+	const altB = lids.swap(b)
+	const tried = new Set<string>([`${a}\u0000${b}`])
+	const combos: [string, string][] = [[a, b]]
+	for (const [ca, cb] of [
+		[altA, b],
+		[a, altB],
+		[altA, altB],
+	] as const) {
+		if (ca === undefined || cb === undefined) continue
+		const key = `${ca}\u0000${cb}`
+		if (tried.has(key)) continue
+		tried.add(key)
+		combos.push([ca, cb])
+	}
+	let lastError: unknown
+	for (const [ca, cb] of combos) {
+		try {
+			return attempt(ca, cb)
+		} catch (e) {
+			lastError = e
+		}
+	}
+	throw lastError
+}
+
 export interface ReceiverDeps {
 	creds: AuthCreds
 	saveCreds(): void
@@ -648,9 +688,16 @@ export class Receiver {
 		let lastError = 'poll vote did not decrypt'
 		for (const secret of secrets) {
 			try {
-				const hashes = decryptPollVote(
-					{ encPayload: new Uint8Array(vote.encPayload), encIv: new Uint8Array(vote.encIv) },
-					{ pollCreatorJid: creator, pollMsgId: key.id, pollSecret: secret, voterJid: voter },
+				const hashes = withAddressingFallback(this.d.lids, creator, voter, (creatorJid, voterJid) =>
+					decryptPollVote(
+						{ encPayload: new Uint8Array(vote.encPayload), encIv: new Uint8Array(vote.encIv) },
+						{
+							pollCreatorJid: creatorJid,
+							pollMsgId: key.id,
+							pollSecret: secret,
+							voterJid: voterJid,
+						},
+					),
 				)
 				const names = poll
 					? hashes
@@ -686,15 +733,15 @@ export class Receiver {
 			if (!secret) return { kind: useCase, targetId: key.id, error: 'parent secret unknown' }
 			const strip = (j: string) => j.replace(/:\d+@/, '@')
 			try {
-				const message = decryptAddon(
-					{ encPayload: new Uint8Array(enc.encPayload), encIv: new Uint8Array(enc.encIv) },
-					{
-						parentMsgId: key.id,
-						parentSenderJid: strip(parentSender),
-						modifierJid: strip(who),
-						secret,
-						useCase,
-					},
+				const message = withAddressingFallback(
+					this.d.lids,
+					strip(parentSender),
+					strip(who),
+					(parentSenderJid, modifierJid) =>
+						decryptAddon(
+							{ encPayload: new Uint8Array(enc.encPayload), encIv: new Uint8Array(enc.encIv) },
+							{ parentMsgId: key.id, parentSenderJid, modifierJid, secret, useCase },
+						),
 				)
 				return { kind: useCase, targetId: key.id, message }
 			} catch (e) {
@@ -714,9 +761,15 @@ export class Receiver {
 		const secret = this.#secrets.byId(key.id)
 		if (!secret) return { eventId: key.id, error: 'event secret unknown' }
 		try {
-			const r = decryptEventResponse(
-				{ encPayload: new Uint8Array(enc.encPayload), encIv: new Uint8Array(enc.encIv) },
-				{ eventMsgId: key.id, eventCreatorJid: creator, responderJid: responder, secret },
+			const r = withAddressingFallback(
+				this.d.lids,
+				creator,
+				responder,
+				(eventCreatorJid, responderJid) =>
+					decryptEventResponse(
+						{ encPayload: new Uint8Array(enc.encPayload), encIv: new Uint8Array(enc.encIv) },
+						{ eventMsgId: key.id, eventCreatorJid, responderJid, secret },
+					),
 			)
 			return { eventId: key.id, ...r }
 		} catch (e) {

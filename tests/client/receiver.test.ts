@@ -14,6 +14,7 @@ import {
 } from '../../src/crypto/signal.js'
 import { LidMap } from '../../src/client/lid-map.js'
 import { ProtocolLogger } from '../../src/logging/protocol-logger.js'
+import { encryptAddon } from '../../src/client/features/message/comment.js'
 import { encodeProto } from '../../src/client/proto.js'
 import {
 	Receiver,
@@ -869,6 +870,121 @@ describe('Receiver: poll votes', () => {
 		expect(messages[0]!.message['pollVote']).toMatchObject({
 			pollId: 'UNKNOWN',
 			error: expect.stringContaining('unknown'),
+		})
+	})
+
+	it("decrypts a vote encrypted under the voter's LID when the stanza only names their phone number", async () => {
+		const { storage, creds, messages, alice } = await setup()
+		const lids = new LidMap()
+		lids.set('alice@s.whatsapp.net', '999999999999@lid')
+		const withLids = new Receiver({
+			creds,
+			saveCreds() {},
+			lids,
+			storage,
+			cipher: createSignalCipher(storage),
+			logger: new ProtocolLogger({ enabled: false }),
+			send: () => {},
+			onMessage: (m) => messages.push(m),
+		})
+		const secret = Buffer.alloc(32, 8)
+		const pollId = '3EB0POLLLID'
+		withLids.rememberOwn(pollId, 'alice:2@s.whatsapp.net', {
+			messageContextInfo: { messageSecret: secret },
+			pollCreationMessageV3: {
+				name: 'Pizza?',
+				options: [{ optionName: 'Ja' }, { optionName: 'Nein' }],
+			},
+		})
+		// The vote is HKDF-keyed over the voter's LID (no device, as `LidMap.swap` returns it) - the stanza
+		// below still addresses the voter by phone number, as `#pollVote`'s only record of them.
+		const vote = encryptVote(
+			secret,
+			pollId,
+			'4915600000000:23@s.whatsapp.net',
+			'999999999999@lid',
+			[createHash('sha256').update('Ja').digest()],
+		)
+		const enc = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					pollUpdateMessage: {
+						pollCreationMessageKey: {
+							id: pollId,
+							fromMe: true,
+							remoteJid: 'alice:2@s.whatsapp.net',
+						},
+						vote,
+						senderTimestampMs: Date.now(),
+					},
+				}),
+			),
+		)
+		withLids.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: 'V3', type: 'poll' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
+		})
+		await withLids.idle()
+		expect(messages[0]!.message['pollVote']).toMatchObject({ pollId, options: ['Ja'] })
+	})
+})
+
+describe('Receiver: comments/reactions - LID/PN fallback', () => {
+	it("decrypts a comment encrypted under the commenter's LID when the stanza only names their phone number", async () => {
+		const { storage, creds, messages, alice } = await setup()
+		const lids = new LidMap()
+		lids.set('alice@s.whatsapp.net', '999999999999@lid')
+		const withLids = new Receiver({
+			creds,
+			saveCreds() {},
+			lids,
+			storage,
+			cipher: createSignalCipher(storage),
+			logger: new ProtocolLogger({ enabled: false }),
+			send: () => {},
+			onMessage: (m) => messages.push(m),
+		})
+		const secret = Buffer.alloc(32, 9)
+		withLids.rememberOwn('POST1', 'alice:2@s.whatsapp.net', {
+			messageContextInfo: { messageSecret: secret },
+		})
+		// `#addon` strips the device suffix from both sides before hashing; the fallback must use the same
+		// device-less forms `LidMap.swap` returns.
+		const enc = encryptAddon(
+			{ extendedTextMessage: { text: 'nice' } },
+			{
+				parentMsgId: 'POST1',
+				parentSenderJid: creds.me!.id.split(':')[0]! + '@s.whatsapp.net',
+				modifierJid: '999999999999@lid',
+				secret,
+				useCase: 'Enc Comment',
+			},
+		)
+		const stanza = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					encCommentMessage: {
+						targetMessageKey: { id: 'POST1', fromMe: true, remoteJid: 'alice:2@s.whatsapp.net' },
+						...enc,
+					},
+				}),
+			),
+		)
+		withLids.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: 'C1' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: stanza.type }, content: stanza.ciphertext }],
+		})
+		await withLids.idle()
+		expect(messages[0]!.message['addon']).toMatchObject({
+			kind: 'Enc Comment',
+			targetId: 'POST1',
+			message: { extendedTextMessage: { text: 'nice' } },
 		})
 	})
 })

@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- Fixed: a poll vote, comment, encrypted reaction or event RSVP is decrypted with a key the HKDF derives from
+  the exact JID strings of its two parties (the parent post's author and whoever's answering) - as contacts
+  migrate to LID, either side alone can arrive addressed differently than the other's record of them, and
+  decryption failed outright instead of trying the alternate form. Now retries, mirroring WA Web's own
+  `decryptAddOn` resilience: the as-received pair first, then each distinct combination with one or both
+  sides swapped to their known LID/PN alternate (`LidMap.swap`), before giving up.
 - Fixed: a dropped connection always retried after a flat 1 second, so a server that is actually down got
   hammered with reconnect attempts instead of backing off. Now follows WA Web's own schedule: a Fibonacci
   delay in milliseconds (1s, 1s, 2s, 3s, 5s, ... capped at 15 minutes) with +-10% jitter, and a connection
