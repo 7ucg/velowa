@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyServerFailure } from '../../src/client/server-failure.js'
+import { classifyServerFailure, streamErrorReconnectHint } from '../../src/client/server-failure.js'
 
 const node = (tag: string, attrs: Record<string, string> = {}, content?: unknown[]) =>
 	({ tag, attrs, ...(content && { content }) }) as Parameters<typeof classifyServerFailure>[0]
@@ -37,5 +37,25 @@ describe('classifyServerFailure', () => {
 		expect(classifyServerFailure(node('failure', { reason: '405' }))).toBe('rejected') // client outdated
 		expect(classifyServerFailure(node('failure', { reason: '600' }))).toBe('rejected') // outside WA Web's range
 		expect(classifyServerFailure(node('failure', {}))).toBe('rejected') // no reason at all
+	})
+
+	it("knows stream:error's own 409 (replaced) and 516 (logged-out), a different code space than <failure reason>", () => {
+		expect(classifyServerFailure(node('stream:error', { code: '409' }))).toBe('replaced')
+		expect(classifyServerFailure(node('stream:error', { code: '516' }))).toBe('logged-out')
+		// <failure reason="409"> means something else entirely (BadUserAgent) and must not be terminal via this path
+		expect(classifyServerFailure(node('failure', { reason: '409' }))).toBe('rejected')
+	})
+})
+
+describe('streamErrorReconnectHint', () => {
+	it('flags 515 as an immediate reconnect and 429 as a backoff penalty', () => {
+		expect(streamErrorReconnectHint(node('stream:error', { code: '515' }))).toBe('immediate')
+		expect(streamErrorReconnectHint(node('stream:error', { code: '429' }))).toBe('penalty')
+	})
+
+	it('is undefined for every other code and for non-stream:error stanzas', () => {
+		expect(streamErrorReconnectHint(node('stream:error', { code: '401' }))).toBeUndefined()
+		expect(streamErrorReconnectHint(node('stream:error', {}))).toBeUndefined()
+		expect(streamErrorReconnectHint(node('failure', { reason: '515' }))).toBeUndefined()
 	})
 })

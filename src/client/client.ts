@@ -7,7 +7,11 @@ import {
 	type MessageContent,
 	type SendContentOptions,
 } from './features/message/send-content.js'
-import { classifyServerFailure, type ServerFailure } from './server-failure.js'
+import {
+	classifyServerFailure,
+	streamErrorReconnectHint,
+	type ServerFailure,
+} from './server-failure.js'
 import {
 	BACKOFF_MAX_ATTEMPTS,
 	BACKOFF_STABLE_RESET_MS,
@@ -370,6 +374,9 @@ export class Client {
 	 * that never really recovered, and reset the former back to attempt 0). */
 	#reconnectAttempt = 0
 	#connectedAt: number | undefined
+	/** Set by `#handle` on a non-terminal `<stream:error>` that still changes how the next reconnect should
+	 * behave (see `streamErrorReconnectHint`); read and cleared by the same close this stream:error caused. */
+	#reconnectHint: 'immediate' | 'penalty' | undefined
 	/** A guest's private auth folder, removed again on `close()`. */
 	#guestTmp: string | undefined
 	#isOpen = false
@@ -2960,6 +2967,10 @@ export class Client {
 				onOpen: () => {},
 				onNode: (node) => this.#handle(conn, node),
 				onClose: ({ code, reason: closeReason }) => {
+					// Consumed exactly once per close: set by #handle on a non-terminal <stream:error> that
+					// changes how THIS reconnect should behave (see streamErrorReconnectHint).
+					const hint = this.#reconnectHint
+					this.#reconnectHint = undefined
 					// A connection that stayed up long enough counts as recovered: the next disconnect (if any)
 					// starts the backoff fresh instead of inheriting however far a much earlier run of failures
 					// had climbed.
@@ -2987,8 +2998,16 @@ export class Client {
 						loggedOut: reason === 'logged-out',
 					})
 					if (willReconnect) {
-						const delay = backoffDelayMs(fibonacciBackoffMs(this.#reconnectAttempt))
-						this.#reconnectAttempt = Math.min(this.#reconnectAttempt + 1, BACKOFF_MAX_ATTEMPTS)
+						// `515` ("restart required") is routine and server-expected: reconnect right away,
+						// without touching the backoff count either way. `429` (rate limited) gets an extra
+						// penalty on top of the normal increment, so the next wait is noticeably longer instead
+						// of retrying at the same cadence against a server that just asked us to slow down.
+						if (hint === 'penalty')
+							this.#reconnectAttempt = Math.min(this.#reconnectAttempt + 5, BACKOFF_MAX_ATTEMPTS)
+						const delay =
+							hint === 'immediate' ? 0 : backoffDelayMs(fibonacciBackoffMs(this.#reconnectAttempt))
+						if (hint !== 'immediate')
+							this.#reconnectAttempt = Math.min(this.#reconnectAttempt + 1, BACKOFF_MAX_ATTEMPTS)
 						setTimeout(() => !this.#stopped && this.#start(), delay)
 					} else this.logger.close('disconnect', { code, reason })
 				},
@@ -3012,6 +3031,12 @@ export class Client {
 			this.#stopped = true
 			this.logger.event('server.terminal', { reason: failure, node })
 			conn.close(failure)
+			return
+		}
+		const hint = streamErrorReconnectHint(node)
+		if (hint) {
+			this.#reconnectHint = hint
+			this.logger.event('server.reconnect-hint', { hint, node })
 			return
 		}
 		if (this.#receiver?.handle(node)) return
