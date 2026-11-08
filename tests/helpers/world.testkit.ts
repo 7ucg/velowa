@@ -69,7 +69,7 @@ export function signedDeviceIdentity(
  */
 export function signedKeyIndexList(
 	account: { publicKey: Uint8Array; privateKey: Uint8Array },
-	opts: { currentIndex?: number; validIndexes?: number[] } = {},
+	opts: { currentIndex?: number; validIndexes?: number[]; invalid?: boolean } = {},
 ): Uint8Array {
 	const T = protoType
 	const details = T('ADVKeyIndexList')
@@ -86,6 +86,7 @@ export function signedKeyIndexList(
 		account.privateKey,
 		Buffer.concat([Buffer.from([6, 2]), details]),
 	)
+	if (opts.invalid) accountSignature[0]! ^= 1
 	return T('ADVSignedKeyIndexList')
 		.encode(T('ADVSignedKeyIndexList').fromObject({ details, accountSignature }))
 		.finish()
@@ -148,7 +149,7 @@ export async function world(
 		 * `assertSessions` verifies bob0's device-identity - also pass `bob0DeviceIdentity` for that) and
 		 * attaches it to bob's usync `<devices>` answer.
 		 */
-		keyIndexListForBob?: { currentIndex?: number; validIndexes?: number[] }
+		keyIndexListForBob?: { currentIndex?: number; validIndexes?: number[]; invalid?: boolean }
 		/** Gives bob's primary device a verifiable `<device-identity>`, so `assertSessions` can establish it
 		 * as bob's trust anchor for a later `keyIndexListForBob` check. */
 		bob0DeviceIdentity?: (identity: { publicKey: Uint8Array; privateKey: Uint8Array }) => Uint8Array

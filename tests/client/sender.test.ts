@@ -502,6 +502,18 @@ describe('Sender: key-index-list verification', () => {
 		expect(devices.map((d) => d.jid).sort()).toEqual([bobBare, bob1.jid].sort())
 	})
 
+	it('fails closed (rejects every companion device) when a list is sent but does not verify', async () => {
+		const { sender, bob1 } = await world({
+			bob0DeviceIdentity: (identity) => signedDeviceIdentity(identity, identity),
+			// Would otherwise accept bob1's key-index ('1') - but the signature is tampered.
+			keyIndexListForBob: { currentIndex: 1, validIndexes: [1], invalid: true },
+		})
+		await sender.sendText(bobBare, 'first')
+		const devices = await sender.getDevices([bobBare])
+		expect(devices.map((d) => d.jid)).toEqual([bobBare]) // bob0 kept, bob1 rejected - not silently let through
+		expect(devices.map((d) => d.jid)).not.toContain(bob1.jid)
+	})
+
 	it('does not filter at all before any trust anchor has been established', async () => {
 		const { sender, bob1 } = await world({
 			keyIndexListForBob: { currentIndex: 5, validIndexes: [] },

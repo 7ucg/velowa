@@ -7,7 +7,12 @@ import type { BinaryNode } from '../codec/index.js'
 import type { SignalCipher, SignalStorage } from '../crypto/signal.js'
 import { jidDecode, signalAddress, signalAddressString } from '../jid.js'
 import type { ProtocolLogger } from '../logging/protocol-logger.js'
-import { isKeyIndexValid, validateAdvDeviceIdentity, verifyKeyIndexList } from './adv.js'
+import {
+	isKeyIndexValid,
+	validateAdvDeviceIdentity,
+	verifyKeyIndexList,
+	type DecodedKeyIndex,
+} from './adv.js'
 import { encodeProto } from './proto.js'
 import type { TcTokens } from './features/contact/tctoken.js'
 import type { LidMap } from './lid-map.js'
@@ -448,16 +453,25 @@ export class Sender {
 			// <key-index-list> (present once we have a verified primary identity to check it against) says
 			// which indexes the account actually signed off on. No anchor yet (this session hasn't verified
 			// this user's primary device) means no list to check - proceed unverified, same as a first contact.
+			// A list that IS present but fails to verify is a different, harder case: unlike "no list sent",
+			// this is a positive sign of tampering (wrong signer, corrupted bytes), so every non-primary
+			// device for this user is rejected rather than silently falling back to unverified.
 			const keyIndexBytes = children(devicesNode, 'key-index-list')[0]?.content
 			const anchor = this.#primaryIdentities.get(u)
-			const decodedKeyIndex =
-				anchor && keyIndexBytes instanceof Uint8Array
-					? verifyKeyIndexList(keyIndexBytes, anchor)
-					: undefined
+			let decodedKeyIndex: DecodedKeyIndex | undefined
+			let keyIndexListInvalid = false
+			if (anchor && keyIndexBytes instanceof Uint8Array) {
+				decodedKeyIndex = verifyKeyIndexList(keyIndexBytes, anchor)
+				if (!decodedKeyIndex) {
+					keyIndexListInvalid = true
+					this.d.logger.event('send.key-index-list-rejected', { jid })
+				}
+			}
 			for (const dev of deviceList) {
 				const device = Number(dev.attrs['id'])
 				// Non-zero devices must carry a key-index, otherwise the server rejects the fan-out.
 				if (device !== 0 && !dev.attrs['key-index']) continue
+				if (device !== 0 && keyIndexListInvalid) continue
 				if (
 					device !== 0 &&
 					decodedKeyIndex &&
