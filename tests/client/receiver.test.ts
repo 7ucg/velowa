@@ -989,6 +989,104 @@ describe('Receiver: comments/reactions - LID/PN fallback', () => {
 	})
 })
 
+describe('Receiver: secretEncryptedMessage (event/message/poll edits, poll-add-option)', () => {
+	it('decrypts a MESSAGE_EDIT envelope and surfaces it as secretEdit', async () => {
+		const { receiver, messages, creds, alice } = await setup()
+		const secret = Buffer.alloc(32, 11)
+		receiver.rememberOwn('M1', 'alice:2@s.whatsapp.net', {
+			messageContextInfo: { messageSecret: secret },
+		})
+		const enc = encryptAddon(
+			{ extendedTextMessage: { text: 'corrected' } },
+			{
+				parentMsgId: 'M1',
+				parentSenderJid: creds.me!.id.split(':')[0]! + '@s.whatsapp.net',
+				modifierJid: 'alice@s.whatsapp.net',
+				secret,
+				useCase: 'Message Edit',
+			},
+		)
+		const stanza = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					secretEncryptedMessage: {
+						targetMessageKey: { id: 'M1', fromMe: true, remoteJid: 'alice:2@s.whatsapp.net' },
+						secretEncType: 'MESSAGE_EDIT',
+						...enc,
+					},
+				}),
+			),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: 'E1' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: stanza.type }, content: stanza.ciphertext }],
+		})
+		await receiver.idle()
+		expect(messages[0]!.message['secretEdit']).toMatchObject({
+			kind: 'MESSAGE_EDIT',
+			targetId: 'M1',
+			message: { extendedTextMessage: { text: 'corrected' } },
+		})
+	})
+
+	it('reports a parent secret we never learned instead of failing the whole message', async () => {
+		const { receiver, messages, alice } = await setup()
+		const enc = { encPayload: Buffer.alloc(40), encIv: Buffer.alloc(12) }
+		const stanza = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					secretEncryptedMessage: {
+						targetMessageKey: { id: 'UNKNOWN', remoteJid: 'x' },
+						secretEncType: 'MESSAGE_EDIT',
+						...enc,
+					},
+				}),
+			),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: 'E2' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: stanza.type }, content: stanza.ciphertext }],
+		})
+		await receiver.idle()
+		expect(messages[0]!.message['secretEdit']).toMatchObject({
+			kind: 'MESSAGE_EDIT',
+			targetId: 'UNKNOWN',
+			error: expect.stringContaining('unknown'),
+		})
+	})
+
+	it('skips MESSAGE_SCHEDULE (a different mechanism) instead of misreading it', async () => {
+		const { receiver, messages, alice } = await setup()
+		const enc = { encPayload: Buffer.alloc(40), encIv: Buffer.alloc(12) }
+		const stanza = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					secretEncryptedMessage: {
+						targetMessageKey: { id: 'M2', remoteJid: 'x' },
+						secretEncType: 'MESSAGE_SCHEDULE',
+						...enc,
+					},
+				}),
+			),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: 'E3' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: stanza.type }, content: stanza.ciphertext }],
+		})
+		await receiver.idle()
+		expect(messages[0]!.message['secretEdit']).toBeUndefined()
+	})
+})
+
 describe('Receiver: poll data cannot be poisoned by peers', () => {
 	it('a peer reusing the id of our poll changes neither its secret nor its options', async () => {
 		const { receiver, messages, alice } = await setup()

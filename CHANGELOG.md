@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- Added: `secretEncryptedMessage` (`EVENT_EDIT`/`MESSAGE_EDIT`/`POLL_EDIT`/`POLL_ADD_OPTION`) - the newer
+  generic secret-encrypted envelope for editing a message, an event or a poll, or adding a poll option, built
+  and decrypted with `secretEncryptedMessage()`/`decryptSecretEncrypted()` (`comment.ts`), the same add-on
+  mechanism as comments/reactions (empty AAD, HKDF over the parent's own `messageSecret`, LID/PN fallback
+  included). Wired into the receiver as `message.secretEdit`. `MESSAGE_SCHEDULE` is a distinct mechanism
+  (`ConditionalRevealMessage`'s own reveal key) and is intentionally not covered.
 - Added: `HistoryChunk.globalSettings`/`callLogRecords` and `HistoryMessage.userReceipts`/`scheduledMessage` -
   four fields the already-decoded `HistorySync` blob carries but `parseHistory` silently dropped: account-wide
   settings (wallpaper, auto-download, notification previews), call history, per-recipient delivered/read/played

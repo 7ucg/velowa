@@ -6,7 +6,11 @@ import type { RemovableSignalStorage, SignalCipher } from '../crypto/signal.js'
 import { jidDecode, signalAddress, signalAddressString } from '../jid.js'
 import type { ProtocolLogger } from '../logging/protocol-logger.js'
 import { callAck } from './features/call/call-events.js'
-import { decryptAddon } from './features/message/comment.js'
+import {
+	decryptAddon,
+	decryptSecretEncrypted,
+	type SecretEncType,
+} from './features/message/comment.js'
 import { decryptEventResponse } from './features/message/event-message.js'
 import { decryptPollVote, pollOptionHash } from './features/message/extras.js'
 import type { LidMap } from './lid-map.js'
@@ -18,6 +22,15 @@ const MIN_PREKEY_COUNT = 5
 const UPLOAD_PREKEY_COUNT = 30
 const MAX_RETRIES = 5
 const REQUEST_TIMEOUT_MS = 20_000
+
+/** `Message.SecretEncryptedMessage.SecretEncType` wire numbers (proto enum), for the ones `comment.ts` names.
+ * `0` (UNKNOWN) and `3` (MESSAGE_SCHEDULE) are deliberately absent - see `#secretEncrypted`. */
+const SECRET_ENC_TYPE_BY_NUMBER: Record<number, SecretEncType> = {
+	1: 'EVENT_EDIT',
+	2: 'MESSAGE_EDIT',
+	4: 'POLL_EDIT',
+	5: 'POLL_ADD_OPTION',
+}
 
 /**
  * Try `attempt` with `(a, b)` as given, then - if either side has a known alternate LID/PN form - with each
@@ -777,6 +790,41 @@ export class Receiver {
 		}
 	}
 
+	/**
+	 * `secretEncryptedMessage`: an event/message/poll edit, or a poll-add-option, via the same add-on
+	 * mechanism as `#addon`. `MESSAGE_SCHEDULE` and anything else `comment.ts`'s `SecretEncType` doesn't name
+	 * are not this client's concern yet (see `ConditionalRevealMessage` for the former) and are skipped.
+	 */
+	#secretEncrypted(raw: Loose, who: string, chat: string) {
+		const enc = raw['secretEncryptedMessage']
+		const key = enc?.targetMessageKey
+		if (!key?.id || !enc?.encPayload || !enc?.encIv) return undefined
+		const kind = SECRET_ENC_TYPE_BY_NUMBER[Number(enc.secretEncType)]
+		if (!kind) return undefined
+		const originalSender = key.fromMe
+			? (this.d.creds.me?.id ?? '')
+			: (key.participant ?? key.remoteJid ?? chat)
+		const secret = this.#secrets.byId(key.id)
+		if (!secret) return { kind, targetId: key.id, error: 'parent secret unknown' }
+		const strip = (j: string) => j.replace(/:\d+@/, '@')
+		try {
+			const message = withAddressingFallback(
+				this.d.lids,
+				strip(originalSender),
+				strip(who),
+				(originalSenderJid, modifierJid) =>
+					decryptSecretEncrypted(
+						{ encPayload: new Uint8Array(enc.encPayload), encIv: new Uint8Array(enc.encIv) },
+						kind,
+						{ parentMsgId: key.id, parentSenderJid: originalSenderJid, modifierJid, secret },
+					),
+			)
+			return { kind, targetId: key.id, message }
+		} catch (e) {
+			return { kind, targetId: key.id, error: (e as Error).message }
+		}
+	}
+
 	/** A peer-category stanza (the phone talking to its linked devices) from our own account. */
 	#isOwnPeer(node: BinaryNode, author: string): boolean {
 		return node.attrs['category'] === 'peer' && this.#isOwnAccount(author)
@@ -968,6 +1016,8 @@ export class Receiver {
 		if (addon) asJson['addon'] = addon
 		const rsvp = this.#eventResponse(raw, author, chat)
 		if (rsvp) asJson['eventResponse'] = rsvp
+		const secretEdit = this.#secretEncrypted(raw, author, chat)
+		if (secretEdit) asJson['secretEdit'] = secretEdit
 		const text = lenient ? extractMetaAiText(asJson) : undefined
 		return { json: text !== undefined ? { ...asJson, metaAiText: text } : asJson }
 	}

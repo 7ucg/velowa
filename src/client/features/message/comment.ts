@@ -7,7 +7,8 @@ import type { MessageKey } from './messages.js'
 // "secret add-ons": the body is a normal Message, encrypted with a key derived from the parent post's
 // messageSecret, the post id, the post's author and the commenter. The server never sees the text.
 
-export type AddonUseCase = 'Enc Comment' | 'Enc Reaction'
+export type AddonUseCase =
+	'Enc Comment' | 'Enc Reaction' | 'Event Edit' | 'Message Edit' | 'Poll Edit' | 'Poll Add Option'
 
 export interface AddonContext {
 	parentMsgId: string
@@ -84,3 +85,59 @@ export function commentMessage(
 		messageContextInfo: { messageSecret: randomBytes(32) },
 	}
 }
+
+// ---- secretEncryptedMessage (event/message/poll edits, poll-add-option) ------------------------
+
+/**
+ * `secretEncryptedMessage`: the newer generic secret-encrypted envelope for editing a message, an event or a
+ * poll, or adding an option to an existing poll - same add-on mechanism as comments/reactions above (empty
+ * AAD, HKDF over the parent's own `messageSecret`), just a different use-case literal and a shared field name
+ * on the wire. `MESSAGE_SCHEDULE` is a distinct mechanism (`ConditionalRevealMessage`'s own reveal key) and
+ * is not covered here.
+ */
+export type SecretEncType = 'EVENT_EDIT' | 'MESSAGE_EDIT' | 'POLL_EDIT' | 'POLL_ADD_OPTION'
+
+const SECRET_ENC_USE_CASE: Record<SecretEncType, AddonUseCase> = {
+	EVENT_EDIT: 'Event Edit',
+	MESSAGE_EDIT: 'Message Edit',
+	POLL_EDIT: 'Poll Edit',
+	POLL_ADD_OPTION: 'Poll Add Option',
+}
+
+/**
+ * Build a `secretEncryptedMessage` envelope of `kind`, targeting `parent` (the message, event or poll being
+ * edited, or the poll gaining an option). `inner` is the replacement content - e.g. `textMessage(newText)` for
+ * a `MESSAGE_EDIT`, or `{ pollOption: [{ optionName }] }` for a `POLL_ADD_OPTION`. `ctx.secret` must be the
+ * *parent's* existing `messageContextInfo.messageSecret`, not a new one.
+ */
+export function secretEncryptedMessage(
+	kind: SecretEncType,
+	parent: MessageKey,
+	inner: Record<string, unknown>,
+	ctx: Omit<AddonContext, 'useCase' | 'parentMsgId'>,
+): Record<string, unknown> {
+	const enc = encryptAddon(inner, {
+		...ctx,
+		parentMsgId: parent.id,
+		useCase: SECRET_ENC_USE_CASE[kind],
+	})
+	return {
+		secretEncryptedMessage: {
+			targetMessageKey: {
+				remoteJid: parent.remoteJid,
+				fromMe: !!parent.fromMe,
+				id: parent.id,
+				participant: parent.participant ?? ctx.parentSenderJid,
+			},
+			secretEncType: kind,
+			...enc,
+		},
+	}
+}
+
+/** Decrypt a `secretEncryptedMessage` envelope of `kind` to its inner `Message` (see `secretEncryptedMessage`). */
+export const decryptSecretEncrypted = (
+	enc: { encPayload: Uint8Array; encIv: Uint8Array },
+	kind: SecretEncType,
+	ctx: Omit<AddonContext, 'useCase'>,
+): Record<string, unknown> => decryptAddon(enc, { ...ctx, useCase: SECRET_ENC_USE_CASE[kind] })
