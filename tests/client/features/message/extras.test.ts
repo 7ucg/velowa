@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encodeProto } from '../../../../src/client/proto.js'
+import { encodeProto, protoType } from '../../../../src/client/proto.js'
 import {
 	bCall,
 	callLogMessage,
@@ -36,9 +36,28 @@ import {
 } from '../../../../src/client/features/message/extras.js'
 
 const key = { remoteJid: 'g@g.us', fromMe: true, id: 'M1' }
-/** Every builder here returns one `Message` field; validate it against the real proto schema. */
-const validates = (m: Record<string, unknown>) =>
+/**
+ * Every builder here returns one `Message` field; validate it against the real proto schema. protobufjs
+ * silently drops a field it can't resolve instead of throwing (bit us once: a duplicate nested-message name
+ * elsewhere in the schema shadowed the one `Message.pollAddOptionMessage` actually references), so this also
+ * round-trips the encoded bytes and checks every non-empty object field survived with something in it.
+ */
+function validates(m: Record<string, unknown>): void {
 	expect(() => encodeProto('Message', m)).not.toThrow()
+	const T = protoType('Message')
+	const decoded = T.toObject(T.decode(encodeProto('Message', m)), {
+		bytes: Buffer,
+		longs: Number,
+	}) as Record<string, unknown>
+	for (const [field, value] of Object.entries(m)) {
+		if (!value || typeof value !== 'object' || Object.keys(value).length === 0) continue
+		expect(decoded[field], `${field} vanished on round-trip`).toBeDefined()
+		expect(
+			Object.keys(decoded[field] as object).length,
+			`${field} round-tripped empty`,
+		).toBeGreaterThan(0)
+	}
+}
 
 describe('extras', () => {
 	it('builds single and multiple choice polls with the creation meta node', () => {
@@ -174,10 +193,14 @@ describe('proto message builders', () => {
 	})
 
 	it('builds the plain poll-add-option, question-response and status-question-answer messages', () => {
-		expect(pollAddOption(['Vielleicht'])).toEqual({
-			pollAddOptionMessage: { pollOption: [{ optionName: 'Vielleicht' }] },
+		const addOption = pollAddOption(key, 'Vielleicht')
+		expect(addOption).toEqual({
+			pollAddOptionMessage: {
+				pollCreationMessageKey: { remoteJid: 'g@g.us', fromMe: true, id: 'M1' },
+				addOption: { optionName: 'Vielleicht' },
+			},
 		})
-		validates(pollAddOption(['Vielleicht']))
+		validates(addOption)
 		const qr = questionResponse(key, 'my answer')
 		expect(qr['questionResponseMessage']).toMatchObject({ text: 'my answer' })
 		validates(qr)

@@ -801,22 +801,43 @@ export class Receiver {
 		if (!key?.id || !enc?.encPayload || !enc?.encIv) return undefined
 		const kind = SECRET_ENC_TYPE_BY_NUMBER[Number(enc.secretEncType)]
 		if (!kind) return undefined
-		const originalSender = key.fromMe
-			? (this.d.creds.me?.id ?? '')
-			: (key.participant ?? key.remoteJid ?? chat)
 		const secret = this.#secrets.byId(key.id)
 		if (!secret) return { kind, targetId: key.id, error: 'parent secret unknown' }
 		const strip = (j: string) => j.replace(/:\d+@/, '@')
+		// `targetMessageKey` is attacker-controlled wire metadata on the *incoming* envelope, written in
+		// whichever frame the sender chose (its own `fromMe`/`participant` says nothing trustworthy about
+		// who actually authored the message being edited) - never the authorization check itself.
+		//
+		// A message, event or poll can only be edited by its own author, so for those three kinds the
+		// "original sender" the HKDF needs isn't looked up at all: it's simply whoever sent us this
+		// envelope (`who`, already authenticated by the Signal/sender-key session that decrypted it), the
+		// same as the editor. Trusting `targetMessageKey.participant` here - as this code did before - would
+		// let any chat member who merely knows the secret (every recipient does, by design) forge an edit
+		// credited to someone else, since nothing checked that the claimed author and the actual sender were
+		// the same person.
+		//
+		// POLL_ADD_OPTION is the one exception: like a poll vote, any participant may add an option, not
+		// only the poll's creator - so its "original sender" is the poll's creator, preferred from what we
+		// locally remembered about that poll (not from the wire) when we have it, same as `#pollVote`.
+		const parentSender =
+			kind === 'POLL_ADD_OPTION'
+				? (() => {
+						const claimedCreator = key.fromMe
+							? (this.d.creds.me?.id ?? '')
+							: (key.participant ?? key.remoteJid ?? chat)
+						return this.#polls.get(this.#pollKey(claimedCreator, key.id))?.creator ?? claimedCreator
+					})()
+				: who
 		try {
 			const message = withAddressingFallback(
 				this.d.lids,
-				strip(originalSender),
+				strip(parentSender),
 				strip(who),
-				(originalSenderJid, modifierJid) =>
+				(parentSenderJid, modifierJid) =>
 					decryptSecretEncrypted(
 						{ encPayload: new Uint8Array(enc.encPayload), encIv: new Uint8Array(enc.encIv) },
 						kind,
-						{ parentMsgId: key.id, parentSenderJid: originalSenderJid, modifierJid, secret },
+						{ parentMsgId: key.id, parentSenderJid, modifierJid, secret },
 					),
 			)
 			return { kind, targetId: key.id, message }

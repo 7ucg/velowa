@@ -1,6 +1,22 @@
 # Changelog
 
 ## Unreleased
+- Fixed (security): `#secretEncrypted` derived a MESSAGE_EDIT/EVENT_EDIT/POLL_EDIT envelope's "original
+  sender" from `targetMessageKey.participant`/`fromMe` - attacker-controlled metadata on the *incoming*
+  stanza, written in whichever frame the sender chose. A message, event or poll can only be edited by its
+  own author; since every chat recipient already knows a message's secret (by design, for reactions and
+  comments), this let any of them forge an edit of someone else's message by simply claiming, via that
+  field, that the receiver (or anyone else) was the original author. Now the "original sender" for those
+  three kinds is never looked up from the wire at all: it's always the envelope's own (Signal-authenticated)
+  sender, same as the editor, since the two can never legitimately differ. `POLL_ADD_OPTION` is unaffected -
+  any participant may add a poll option, not just its creator, and its "original sender" already came from
+  the locally-remembered poll, not the wire.
+- Fixed: `pollAddOption()` built `{ pollOption: [...] }`, the shape of a *different*, same-named
+  `PollAddOptionMessage` nested elsewhere in the proto (inside `ConsumerApplication`) that protobufjs never
+  actually resolves for `Message.pollAddOptionMessage` - the real field is `{ pollCreationMessageKey,
+  addOption }`, singular, one option per message. protobufjs drops an unresolved field silently instead of
+  throwing, so this shipped without any error; caught by strengthening the new builders' test helper to
+  round-trip through encode+decode and check nothing vanished, not just that encoding didn't throw.
 - Added: builders (`extras.ts`) for a batch of previously-unused `Message` fields - `product`, `invoice`,
   `requestPhoneNumber`, `requestLocation`/`requestLocationUpdate`, `musicMessage` (a standalone music card,
   distinct from `musicParts`' video-embedded one), `eventInvite`, `scheduledCallCreate`/`scheduledCallCancel`,

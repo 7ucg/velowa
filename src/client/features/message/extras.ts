@@ -416,9 +416,18 @@ export const scheduledCallCancel = (key: MessageKey): Record<string, unknown> =>
 	scheduledCallEditMessage: { key: wireKey(key), editType: 'CANCEL' },
 })
 
-/** Add an option to an existing poll (the plain, non-secret-encrypted form of `pollAddOptionMessage`). */
-export const pollAddOption = (optionNames: string[]): Record<string, unknown> => ({
-	pollAddOptionMessage: { pollOption: optionNames.map((optionName) => ({ optionName })) },
+/**
+ * Add one option to an existing poll (the plain, non-secret-encrypted form of `pollAddOptionMessage`) - one
+ * message per option, like the real app.
+ */
+export const pollAddOption = (
+	pollKey: MessageKey,
+	optionName: string,
+): Record<string, unknown> => ({
+	pollAddOptionMessage: {
+		pollCreationMessageKey: wireKey(pollKey),
+		addOption: { optionName },
+	},
 })
 
 /** Reply to a `question()` post. */

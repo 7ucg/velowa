@@ -990,17 +990,20 @@ describe('Receiver: comments/reactions - LID/PN fallback', () => {
 })
 
 describe('Receiver: secretEncryptedMessage (event/message/poll edits, poll-add-option)', () => {
-	it('decrypts a MESSAGE_EDIT envelope and surfaces it as secretEdit', async () => {
-		const { receiver, messages, creds, alice } = await setup()
+	it('decrypts a MESSAGE_EDIT envelope from its own author and surfaces it as secretEdit', async () => {
+		const { receiver, messages, alice } = await setup()
 		const secret = Buffer.alloc(32, 11)
 		receiver.rememberOwn('M1', 'alice:2@s.whatsapp.net', {
 			messageContextInfo: { messageSecret: secret },
 		})
+		// A message can only be edited by its own author: the editor (whoever sent us this envelope, alice)
+		// is also the "original sender" the HKDF needs - never looked up from `targetMessageKey`, which is
+		// the envelope sender's own, untrusted metadata (see `#secretEncrypted`).
 		const enc = encryptAddon(
 			{ extendedTextMessage: { text: 'corrected' } },
 			{
 				parentMsgId: 'M1',
-				parentSenderJid: creds.me!.id.split(':')[0]! + '@s.whatsapp.net',
+				parentSenderJid: 'alice@s.whatsapp.net',
 				modifierJid: 'alice@s.whatsapp.net',
 				secret,
 				useCase: 'Message Edit',
@@ -1029,6 +1032,51 @@ describe('Receiver: secretEncryptedMessage (event/message/poll edits, poll-add-o
 			kind: 'MESSAGE_EDIT',
 			targetId: 'M1',
 			message: { extendedTextMessage: { text: 'corrected' } },
+		})
+	})
+
+	it("refuses an edit forged with someone else's targetMessageKey.fromMe/participant", async () => {
+		// alice knows our secret (she is a legitimate recipient of M1) and tries to forge an edit that
+		// claims, via the wire-controlled targetMessageKey, that WE (fromMe: true) originally authored M1 -
+		// so that an implementation trusting that field would derive our own identity as the "original
+		// sender" and accept an edit alice never had the right to make.
+		const { receiver, messages, creds, alice } = await setup()
+		const secret = Buffer.alloc(32, 11)
+		receiver.rememberOwn('M1', 'alice:2@s.whatsapp.net', {
+			messageContextInfo: { messageSecret: secret },
+		})
+		const enc = encryptAddon(
+			{ extendedTextMessage: { text: 'forged' } },
+			{
+				parentMsgId: 'M1',
+				parentSenderJid: creds.me!.id.split(':')[0]! + '@s.whatsapp.net', // the forged claim
+				modifierJid: 'alice@s.whatsapp.net',
+				secret,
+				useCase: 'Message Edit',
+			},
+		)
+		const stanza = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					secretEncryptedMessage: {
+						targetMessageKey: { id: 'M1', fromMe: true, remoteJid: 'alice:2@s.whatsapp.net' },
+						secretEncType: 'MESSAGE_EDIT',
+						...enc,
+					},
+				}),
+			),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: 'E1B' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: stanza.type }, content: stanza.ciphertext }],
+		})
+		await receiver.idle()
+		expect(messages[0]!.message['secretEdit']).toMatchObject({
+			kind: 'MESSAGE_EDIT',
+			error: expect.anything(),
 		})
 	})
 
@@ -1084,6 +1132,61 @@ describe('Receiver: secretEncryptedMessage (event/message/poll edits, poll-add-o
 		})
 		await receiver.idle()
 		expect(messages[0]!.message['secretEdit']).toBeUndefined()
+	})
+
+	it('resolves POLL_ADD_OPTION against the remembered poll creator, since any voter (not just the creator) may add one', async () => {
+		const { receiver, messages, alice } = await setup()
+		const secret = Buffer.alloc(32, 12)
+		const pollId = '3EB0POLLADD'
+		// A poll we created: `#notePoll` remembers our own (device-qualified) id as its creator.
+		receiver.rememberOwn(pollId, 'alice:2@s.whatsapp.net', {
+			messageContextInfo: { messageSecret: secret },
+			pollCreationMessageV3: {
+				name: 'Pizza?',
+				options: [{ optionName: 'Ja' }, { optionName: 'Nein' }],
+			},
+		})
+		// alice (not the creator) adds an option - legitimate, unlike an edit: the HKDF's "original sender"
+		// is the poll's creator (us), its "modifier" is alice, two different people.
+		const enc = encryptAddon(
+			{
+				pollAddOptionMessage: {
+					pollCreationMessageKey: { remoteJid: 'alice:2@s.whatsapp.net', fromMe: true, id: pollId },
+					addOption: { optionName: 'Vielleicht' },
+				},
+			},
+			{
+				parentMsgId: pollId,
+				parentSenderJid: '4915600000000@s.whatsapp.net', // our own creator jid, bare
+				modifierJid: 'alice@s.whatsapp.net',
+				secret,
+				useCase: 'Poll Add Option',
+			},
+		)
+		const stanza = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					secretEncryptedMessage: {
+						targetMessageKey: { id: pollId, fromMe: true, remoteJid: 'alice:2@s.whatsapp.net' },
+						secretEncType: 'POLL_ADD_OPTION',
+						...enc,
+					},
+				}),
+			),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: 'E4' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: stanza.type }, content: stanza.ciphertext }],
+		})
+		await receiver.idle()
+		expect(messages[0]!.message['secretEdit']).toMatchObject({
+			kind: 'POLL_ADD_OPTION',
+			targetId: pollId,
+			message: { pollAddOptionMessage: { addOption: { optionName: 'Vielleicht' } } },
+		})
 	})
 })
 
