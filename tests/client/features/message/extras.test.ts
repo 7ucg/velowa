@@ -1,13 +1,44 @@
 import { describe, expect, it } from 'vitest'
+import { encodeProto } from '../../../../src/client/proto.js'
 import {
+	bCall,
+	callLogMessage,
+	cancelPaymentRequestMessage,
 	contactCard,
+	declinePaymentRequestMessage,
+	eventInvite,
+	futureProofMessage,
+	invoice,
 	location,
-	poll,
+	musicMessage,
 	musicParts,
+	newsletterAdminInvite,
+	newsletterFollowerInvite,
+	paymentInviteMessage,
+	paymentReminderMessage,
+	poll,
+	pollAddOption,
+	product,
 	question,
+	questionResponse,
+	requestLocation,
+	requestLocationUpdate,
+	requestPhoneNumber,
+	scheduledCallCancel,
+	scheduledCallCreate,
+	sendPaymentMessage,
+	requestPaymentMessage,
+	splitPaymentMessage,
+	splitPaymentUpdateMessage,
+	statusQuestionAnswer,
 	vcardFor,
 	viewOnce,
 } from '../../../../src/client/features/message/extras.js'
+
+const key = { remoteJid: 'g@g.us', fromMe: true, id: 'M1' }
+/** Every builder here returns one `Message` field; validate it against the real proto schema. */
+const validates = (m: Record<string, unknown>) =>
+	expect(() => encodeProto('Message', m)).not.toThrow()
 
 describe('extras', () => {
 	it('builds single and multiple choice polls with the creation meta node', () => {
@@ -86,5 +117,90 @@ describe('extras', () => {
 				vcard: expect.stringContaining('waid=4915611111111:+4915611111111'),
 			},
 		})
+	})
+})
+
+describe('proto message builders', () => {
+	it('wraps any field in the FutureProofMessage envelope', () => {
+		const m = futureProofMessage('spoilerMessage', { extendedTextMessage: { text: 'surprise!' } })
+		expect(m).toEqual({
+			spoilerMessage: { message: { extendedTextMessage: { text: 'surprise!' } } },
+		})
+		validates(m)
+	})
+
+	it('builds a product share with an optional catalog/body/footer', () => {
+		const m = product(
+			{ productId: 'P1', title: 'Widget', currencyCode: 'EUR', priceAmount1000: 9990 },
+			{ body: 'check it out', footer: 'shop' },
+		)
+		expect(m['productMessage']).toMatchObject({
+			product: { productId: 'P1', title: 'Widget' },
+			body: 'check it out',
+			footer: 'shop',
+		})
+		validates(m)
+	})
+
+	it('builds an invoice, phone/location requests and a live-location-update cancel', () => {
+		validates(invoice({ note: 'thanks', attachmentType: 'PDF' }))
+		validates(requestPhoneNumber())
+		validates(requestLocation())
+		const cancel = requestLocationUpdate(key, true)
+		expect(cancel['requestLocationUpdateMessage']).toMatchObject({ updateType: 'CANCEL' })
+		validates(cancel)
+		validates(requestLocationUpdate(key))
+	})
+
+	it('builds a standalone music-sharing card', () => {
+		const m = musicMessage({ title: 'T', author: 'A', songId: '1', songUri: 'https://x' })
+		expect(m['musicMessage']).toMatchObject({
+			embeddedMusic: { title: 'T', author: 'A', songId: '1' },
+			songUri: 'https://x',
+		})
+		validates(m)
+	})
+
+	it('builds an event invite and scheduled-call create/cancel', () => {
+		const m = eventInvite({ eventId: 'E1', eventTitle: 'Party', startTime: 1700000000 })
+		expect(m['eventInviteMessage']).toMatchObject({ eventId: 'E1', eventTitle: 'Party' })
+		validates(m)
+		const created = scheduledCallCreate({ scheduledTimestampMs: 1700000000000, callType: 'VIDEO' })
+		expect(created['scheduledCallCreationMessage']).toMatchObject({ callType: 'VIDEO' })
+		validates(created)
+		const cancelled = scheduledCallCancel(key)
+		expect(cancelled['scheduledCallEditMessage']).toMatchObject({ editType: 'CANCEL' })
+		validates(cancelled)
+	})
+
+	it('builds the plain poll-add-option, question-response and status-question-answer messages', () => {
+		expect(pollAddOption(['Vielleicht'])).toEqual({
+			pollAddOptionMessage: { pollOption: [{ optionName: 'Vielleicht' }] },
+		})
+		validates(pollAddOption(['Vielleicht']))
+		const qr = questionResponse(key, 'my answer')
+		expect(qr['questionResponseMessage']).toMatchObject({ text: 'my answer' })
+		validates(qr)
+		const sqa = statusQuestionAnswer(key, 'my answer')
+		expect(sqa['statusQuestionAnswerMessage']).toMatchObject({ text: 'my answer' })
+		validates(sqa)
+	})
+
+	it('builds newsletter admin/follower invites and call-timeline entries', () => {
+		validates(newsletterAdminInvite({ newsletterJid: '1@newsletter', newsletterName: 'News' }))
+		validates(newsletterFollowerInvite({ newsletterJid: '1@newsletter' }))
+		validates(bCall({ sessionId: 'S1', mediaType: 'VIDEO', masterKey: new Uint8Array(32) }))
+		validates(callLogMessage({ isVideo: true, callOutcome: 'MISSED', durationSecs: 0 }))
+	})
+
+	it('builds the payment envelopes (wire shape only - no real payment flow)', () => {
+		validates(sendPaymentMessage({ transactionData: 'tx' }))
+		validates(requestPaymentMessage({ currencyCodeIso4217: 'EUR', amount1000: 5000 }))
+		validates(paymentReminderMessage({ reminderId: 'R1', frequency: 'MONTHLY' }))
+		validates(splitPaymentMessage({ splitId: 'S1', totalAmount: { value: 1000 } }))
+		validates(splitPaymentUpdateMessage('S1', 'bob@s.whatsapp.net'))
+		validates(paymentInviteMessage({ serviceType: 'UPI' }))
+		validates(declinePaymentRequestMessage(key))
+		validates(cancelPaymentRequestMessage(key))
 	})
 })

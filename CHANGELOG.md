@@ -1,6 +1,17 @@
 # Changelog
 
 ## Unreleased
+- Added: builders (`extras.ts`) for a batch of previously-unused `Message` fields - `product`, `invoice`,
+  `requestPhoneNumber`, `requestLocation`/`requestLocationUpdate`, `musicMessage` (a standalone music card,
+  distinct from `musicParts`' video-embedded one), `eventInvite`, `scheduledCallCreate`/`scheduledCallCancel`,
+  `pollAddOption` (the plain, non-secret-encrypted form), `questionResponse`, `statusQuestionAnswer`,
+  `newsletterAdminInvite`/`newsletterFollowerInvite`, `bCall`, `callLogMessage`, and the payment envelopes
+  (`sendPaymentMessage`, `requestPaymentMessage`, `paymentReminderMessage`, `splitPaymentMessage`/
+  `splitPaymentUpdateMessage`, `paymentInviteMessage`, `decline`/`cancelPaymentRequestMessage` - wire shape
+  only; WhatsApp Pay itself is region-gated and needs a business partnership with Meta). Also added
+  `futureProofMessage(field, message)`, a single generic builder for the ~15 `Message` fields that are all
+  just a forward-compatible `{ message }` wrapper on the wire (spoilers, status "add yours", bot-platform
+  messages, ...) - one helper instead of a dozen near-identical ones.
 - Added: `secretEncryptedMessage` (`EVENT_EDIT`/`MESSAGE_EDIT`/`POLL_EDIT`/`POLL_ADD_OPTION`) - the newer
   generic secret-encrypted envelope for editing a message, an event or a poll, or adding a poll option, built
   and decrypted with `secretEncryptedMessage()`/`decryptSecretEncrypted()` (`comment.ts`), the same add-on
