@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -5,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import type { BinaryNode } from '../../../../src/codec/index.js'
 import {
 	TcTokens,
+	computeCsToken,
 	isRegularUser,
 	isTcTokenExpired,
 	shouldIssueTcToken,
@@ -76,6 +78,14 @@ describe('tctoken', () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true })
 		}
+	})
+
+	it('computes cstoken as an HMAC-SHA256 of the recipient LID, keyed by the history-synced salt', () => {
+		const salt = new Uint8Array(32).fill(7)
+		const token = computeCsToken(salt, '99@lid')
+		expect(token).toHaveLength(32)
+		expect(Buffer.from(token)).toEqual(createHmac('sha256', salt).update('99@lid').digest())
+		expect(computeCsToken(salt, '98@lid')).not.toEqual(token) // bound to the exact recipient
 	})
 
 	it('issues our token once and remembers the time', async () => {

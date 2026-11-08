@@ -14,7 +14,7 @@ import {
 	type DecodedKeyIndex,
 } from './adv.js'
 import { encodeProto } from './proto.js'
-import type { TcTokens } from './features/contact/tctoken.js'
+import { computeCsToken, type TcTokens } from './features/contact/tctoken.js'
 import type { LidMap } from './lid-map.js'
 import type { Receiver } from './receiver.js'
 import { reportingNode } from './reporting.js'
@@ -694,6 +694,10 @@ export class Sender {
 		if (to.endsWith('@s.whatsapp.net')) content.push({ tag: 'bot', attrs: { biz_bot: '1' } })
 		const tc = this.#tcToken(to)
 		if (tc) content.push({ tag: 'tctoken', attrs: {}, content: tc })
+		else {
+			const cs = this.#csToken(to)
+			if (cs) content.push({ tag: 'cstoken', attrs: {}, content: cs })
+		}
 		content.push(...(opts.extraNodes ?? []))
 		return {
 			tag: 'message',
@@ -714,6 +718,18 @@ export class Sender {
 		const me = this.d.creds.me
 		if (me && jidDecode(to).user === jidDecode(me.id).user) return undefined
 		return this.d.tc.tokenFor(this.d.lids.resolve(to)) ?? this.d.tc.tokenFor(to)
+	}
+
+	/** `cstoken` fallback for a 1:1 message, when we hold no `tctoken` yet: needs the history-synced NCT salt
+	 * and the recipient's account LID, neither of which we always have. */
+	#csToken(to: string): Uint8Array | undefined {
+		const salt = this.d.creds.nctSalt
+		if (!salt) return undefined
+		const me = this.d.creds.me
+		if (me && jidDecode(to).user === jidDecode(me.id).user) return undefined
+		const resolved = this.d.lids.resolve(to)
+		if (jidDecode(resolved).server !== 'lid') return undefined
+		return computeCsToken(salt, `${jidDecode(resolved).user}@lid`)
 	}
 
 	// ---- groups --------------------------------------------------------------------------------

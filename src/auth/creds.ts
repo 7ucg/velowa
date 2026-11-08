@@ -33,6 +33,8 @@ export interface AuthCreds {
 	pairingEphemeralKey: IdentityKeys
 	/** Next unused one-time pre-key id (ids are never reused). */
 	nextPreKeyId: number
+	/** NCT salt from history sync: keys the `cstoken` privacy-token fallback (see `tctoken.ts`). */
+	nctSalt?: Uint8Array
 }
 
 export function initAuthCreds(): AuthCreds {

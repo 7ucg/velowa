@@ -85,6 +85,8 @@ export interface HistoryChunk {
 	pushNames: { id: string; name: string }[]
 	/** LID <-> phone-number pairs learned from the history. */
 	lidMappings: { lid: string; pn: string }[]
+	/** NCT salt (`storeNctSaltFromHistorySync`): keys the `cstoken` privacy-token fallback (`tctoken.ts`). */
+	nctSalt?: Uint8Array
 }
 
 type Raw = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -148,6 +150,8 @@ export function parseHistory(compressed: Uint8Array): HistoryChunk {
 		lidMappings: (h['phoneNumberToLidMappings'] ?? [])
 			.filter((m: Raw) => m.lidJid && m.pnJid)
 			.map((m: Raw) => ({ lid: m.lidJid, pn: m.pnJid })),
+		...(typeof h['nctSalt'] === 'string' &&
+			h['nctSalt'].length > 0 && { nctSalt: new Uint8Array(Buffer.from(h['nctSalt'], 'base64')) }),
 	}
 }
 

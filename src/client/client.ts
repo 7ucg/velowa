@@ -3182,6 +3182,10 @@ export class Client {
 							messages: chunk.chats.reduce((a, c) => a + c.messages.length, 0),
 						})
 						for (const m of chunk.lidMappings) lids.set(m.pn, m.lid)
+						if (chunk.nctSalt) {
+							this.#creds.nctSalt = chunk.nctSalt
+							saveAuthCreds(this.#credsPath, this.#creds)
+						}
 						this.#events.emit('history', chunk)
 					})
 					.catch((error) => this.logger.event('history.error', error))

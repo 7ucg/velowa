@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Added: `cstoken` ("client-side"/NCT token), a privacy-token fallback for the very first message to a
+  contact we hold no `tctoken` for yet - an HMAC-SHA256 over a salt the phone hands us through history sync
+  (`HistorySync.nctSalt`, now parsed and persisted to creds) and the recipient's account LID. Only attached
+  when both inputs are known and no `tctoken` exists; a `tctoken` always wins when we have one.
 - Fixed: a poll vote, comment, encrypted reaction or event RSVP is decrypted with a key the HKDF derives from
   the exact JID strings of its two parties (the parent post's author and whoever's answering) - as contacts
   migrate to LID, either side alone can arrive addressed differently than the other's record of them, and

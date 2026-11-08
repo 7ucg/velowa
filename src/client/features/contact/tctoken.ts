@@ -1,4 +1,5 @@
 // velowa (https://github.com/7ucg/velowa) (c) 2026 Baron. Copying any part of this file, however small, requires credit: see LICENSE.
+import { createHmac } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { BinaryNode } from '../../../codec/index.js'
@@ -7,6 +8,16 @@ import type { RequestFn } from '../group/groups.js'
 // Trusted-contact tokens ("tctoken"). When two people have chatted, each hands the other a token that says "you
 // know me". A 1:1 message carries the recipient's token; the server uses it to decide whether the sender is a
 // stranger. Tokens are valid for a rolling window of about 28 days, in 7 day buckets.
+//
+// "cstoken" (client-side/NCT token) is the fallback for the very first message to a contact we hold no tctoken
+// for yet: an HMAC over a salt the phone hands us through history sync and the recipient's own account LID. WA
+// Web only ever builds one once it has both inputs - that is the only gate this client has to honor too (there
+// is no separate server feature flag to ask for): no salt (the phone/server never synced us one) or no LID
+// (the recipient hasn't migrated, or the mapping isn't known yet) just means no fallback is possible yet.
+
+/** `genCsTokenBody`: HMAC-SHA256 over the history-sync NCT salt and the recipient's bare account LID. */
+export const computeCsToken = (salt: Uint8Array, recipientLid: string): Uint8Array =>
+	new Uint8Array(createHmac('sha256', salt).update(recipientLid).digest())
 
 const BUCKET = 604_800
 const BUCKETS = 4

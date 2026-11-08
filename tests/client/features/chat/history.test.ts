@@ -44,6 +44,7 @@ const sample = () =>
 		],
 		pushnames: [{ id: '4915611111111@s.whatsapp.net', pushname: 'Max' }],
 		phoneNumberToLidMappings: [{ lidJid: '9@lid', pnJid: '4915611111111@s.whatsapp.net' }],
+		nctSalt: new Uint8Array(32).fill(5),
 	})
 
 describe('history sync', () => {
@@ -69,6 +70,12 @@ describe('history sync', () => {
 		expect(h.chats[0]!.messages[1]!.key.remoteJid).toBe('4915611111111@s.whatsapp.net') // falls back to the chat id
 		expect(h.pushNames).toEqual([{ id: '4915611111111@s.whatsapp.net', name: 'Max' }])
 		expect(h.lidMappings).toEqual([{ lid: '9@lid', pn: '4915611111111@s.whatsapp.net' }])
+		expect(h.nctSalt).toEqual(new Uint8Array(32).fill(5))
+	})
+
+	it('omits nctSalt when the chunk never carried one', () => {
+		const blob = encodeProto('HistorySync', { conversations: [] })
+		expect(parseHistory(deflateSync(blob)).nctSalt).toBeUndefined()
 	})
 
 	it('carries a structural stub (no real message) as stubType/stubParameters', () => {

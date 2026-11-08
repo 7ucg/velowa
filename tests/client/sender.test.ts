@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { newIdentityKeyPair } from '../../src/crypto/signal.js'
 import { unpadRandomMax16 } from '../../src/client/receiver.js'
@@ -450,6 +451,33 @@ describe('Sender: LID addressing', () => {
 		const unknownLid = '333333333333@lid'
 		const { sender } = await world({ emptyUsyncFor: [unknownLid] })
 		await expect(sender.sendText(unknownLid, 'hi')).rejects.toThrow(/no devices found/)
+	})
+})
+
+describe('Sender: cstoken fallback', () => {
+	it('attaches a cstoken when no tctoken exists but the NCT salt and recipient LID are both known', async () => {
+		const { sender, stanzas, creds, lids } = await world()
+		creds.nctSalt = new Uint8Array(32).fill(3)
+		lids.set('4915611111111@s.whatsapp.net', '222222222222@lid')
+		await sender.sendText('4915611111111@s.whatsapp.net', 'hi')
+		const cs = kids(stanzas[0]!, 'cstoken')[0]
+		expect(cs).toBeDefined()
+		expect(Buffer.from(cs!.content as Uint8Array)).toEqual(
+			createHmac('sha256', creds.nctSalt).update('222222222222@lid').digest(),
+		)
+		expect(kids(stanzas[0]!, 'tctoken')).toHaveLength(0)
+	})
+
+	it('omits cstoken with no NCT salt yet, or with no known LID for the recipient', async () => {
+		const { sender, stanzas, creds, lids } = await world()
+		await sender.sendText('4915611111111@s.whatsapp.net', 'no salt, no LID')
+		expect(kids(stanzas[0]!, 'cstoken')).toHaveLength(0)
+		creds.nctSalt = new Uint8Array(32).fill(3)
+		await sender.sendText('4915611111111@s.whatsapp.net', 'salt, still no LID')
+		expect(kids(stanzas[1]!, 'cstoken')).toHaveLength(0)
+		lids.set('4915611111111@s.whatsapp.net', '222222222222@lid')
+		await sender.sendText('4915611111111@s.whatsapp.net', 'now both')
+		expect(kids(stanzas[2]!, 'cstoken')).toHaveLength(1)
 	})
 })
 
