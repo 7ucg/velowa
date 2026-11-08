@@ -8,6 +8,12 @@ import {
 	type SendContentOptions,
 } from './features/message/send-content.js'
 import { classifyServerFailure, type ServerFailure } from './server-failure.js'
+import {
+	BACKOFF_MAX_ATTEMPTS,
+	BACKOFF_STABLE_RESET_MS,
+	backoffDelayMs,
+	fibonacciBackoffMs,
+} from './reconnect-backoff.js'
 import { resolveAuthDir } from './auth-dir.js'
 import {
 	decodeAudioFile,
@@ -324,6 +330,11 @@ export class Client {
 	#stopped = false
 	/** Set when the server ended the session for good (see `classifyServerFailure`): no reconnect, reported on close. */
 	#terminal: ServerFailure | undefined
+	/** Reconnect backoff state: how many unsuccessful attempts in a row, and when the last connection opened
+	 * (so `onClose` can tell a connection that proved stable - open for `BACKOFF_STABLE_RESET_MS` - from one
+	 * that never really recovered, and reset the former back to attempt 0). */
+	#reconnectAttempt = 0
+	#connectedAt: number | undefined
 	/** A guest's private auth folder, removed again on `close()`. */
 	#guestTmp: string | undefined
 	#isOpen = false
@@ -2890,6 +2901,15 @@ export class Client {
 				onOpen: () => {},
 				onNode: (node) => this.#handle(conn, node),
 				onClose: ({ code, reason: closeReason }) => {
+					// A connection that stayed up long enough counts as recovered: the next disconnect (if any)
+					// starts the backoff fresh instead of inheriting however far a much earlier run of failures
+					// had climbed.
+					if (
+						this.#connectedAt !== undefined &&
+						Date.now() - this.#connectedAt >= BACKOFF_STABLE_RESET_MS
+					)
+						this.#reconnectAttempt = 0
+					this.#connectedAt = undefined
 					this.#teardown()
 					// The reason the server gave for ending the session (if it did) beats the bare socket close.
 					const reason = this.#terminal ?? closeReason
@@ -2907,8 +2927,11 @@ export class Client {
 						willReconnect,
 						loggedOut: reason === 'logged-out',
 					})
-					if (willReconnect) setTimeout(() => !this.#stopped && this.#start(), 1000)
-					else this.logger.close('disconnect', { code, reason })
+					if (willReconnect) {
+						const delay = backoffDelayMs(fibonacciBackoffMs(this.#reconnectAttempt))
+						this.#reconnectAttempt = Math.min(this.#reconnectAttempt + 1, BACKOFF_MAX_ATTEMPTS)
+						setTimeout(() => !this.#stopped && this.#start(), delay)
+					} else this.logger.close('disconnect', { code, reason })
 				},
 			},
 			undefined,
@@ -3312,6 +3335,7 @@ export class Client {
 				})
 		}, 30_000)
 		this.#isOpen = true
+		this.#connectedAt = Date.now()
 		this.#events.emit('open', { id: creds.me?.id ?? '' })
 		// A key of unknown age (a creds file from before the timestamp existed) counts as due.
 		if (!creds.signedPreKeyAt || Date.now() - creds.signedPreKeyAt >= SIGNED_PRE_KEY_INTERVAL_MS)

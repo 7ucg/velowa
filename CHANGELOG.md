@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Fixed: a dropped connection always retried after a flat 1 second, so a server that is actually down got
+  hammered with reconnect attempts instead of backing off. Now follows WA Web's own schedule: a Fibonacci
+  delay in milliseconds (1s, 1s, 2s, 3s, 5s, ... capped at 15 minutes) with +-10% jitter, and a connection
+  that stays up for 30s resets the count back to the start.
 - Fixed: `classifyServerFailure` treated an unrecognised (or missing) `<failure reason="...">` as non-terminal,
   the same as a transient server error - so the reconnect loop would spin forever against a refusal the server
   will keep repeating (a temp ban, an outdated-client rejection, ...). WA Web's own `ConnectFailureReason` allow-
