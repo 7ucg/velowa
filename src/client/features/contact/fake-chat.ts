@@ -1,4 +1,5 @@
 // velowa (https://github.com/7ucg/velowa) (c) 2026 Baron. Copying any part of this file, however small, requires credit: see LICENSE.
+import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
@@ -78,4 +79,34 @@ export function detectFakeChat(
 	const ids = receipt.ids.filter((id) => !sentIds.has(id))
 	if (!ids.length) return undefined
 	return { jid: receipt.chat, ids, type: receipt.type }
+}
+
+export interface FakeMsg {
+	message: Record<string, unknown>
+	opts: { messageId: string }
+}
+
+/**
+ * Build a message that spoofs the `deviceSentMessage` envelope `onOwnDeviceSent`'s own-account check
+ * exists to reject (see `receiver.ts`): it claims to be our own account fanning a send - originally
+ * addressed to `jid` - out to its other devices, when really it's whichever account sends it.
+ *
+ * This is a test tool for the `fake-chat` defense, not an attack on anyone: send the result from an
+ * account that is *not* the target's own, against a target whose velowa instance you control, e.g.
+ *
+ * ```ts
+ * const fake = getFakeMsg(someJid, 'hi, pretending to be your own device')
+ * await attackerClient.sendMessage(targetJid, fake.message, fake.opts)
+ * ```
+ *
+ * A correctly-defended target ignores this (the envelope shape alone is never trusted - only the
+ * envelope's actual, unspoofable sender matters) and its id never joins its own `SentMessageIds`, so a
+ * later receipt for the same id (see `detectFakeChat`) still gets flagged rather than waved through.
+ */
+export function getFakeMsg(jid: string, msg: string | Record<string, unknown>): FakeMsg {
+	const inner = typeof msg === 'string' ? { conversation: msg } : msg
+	return {
+		message: { deviceSentMessage: { destinationJid: jid, message: inner } },
+		opts: { messageId: `FAKE${randomBytes(8).toString('hex').toUpperCase()}` },
+	}
 }

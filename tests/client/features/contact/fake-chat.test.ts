@@ -2,9 +2,11 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { encodeProto } from '../../../../src/client/proto.js'
 import {
 	SentMessageIds,
 	detectFakeChat,
+	getFakeMsg,
 } from '../../../../src/client/features/contact/fake-chat.js'
 
 const notOurs = () => false
@@ -74,5 +76,35 @@ describe('detectFakeChat', () => {
 				(jid) => jid === '4915600000000@s.whatsapp.net',
 			),
 		).toBeUndefined()
+	})
+})
+
+describe('getFakeMsg', () => {
+	it('builds a deviceSentMessage spoof naming the given jid and a fresh id each time', () => {
+		const a = getFakeMsg('alice@s.whatsapp.net', 'hi')
+		const b = getFakeMsg('alice@s.whatsapp.net', 'hi')
+		expect(a.message).toEqual({
+			deviceSentMessage: {
+				destinationJid: 'alice@s.whatsapp.net',
+				message: { conversation: 'hi' },
+			},
+		})
+		expect(a.opts.messageId).toMatch(/^FAKE[0-9A-F]{16}$/)
+		expect(a.opts.messageId).not.toBe(b.opts.messageId)
+	})
+
+	it('accepts a full message-content object instead of plain text', () => {
+		const fake = getFakeMsg('alice@s.whatsapp.net', { extendedTextMessage: { text: 'hi' } })
+		expect(fake.message).toEqual({
+			deviceSentMessage: {
+				destinationJid: 'alice@s.whatsapp.net',
+				message: { extendedTextMessage: { text: 'hi' } },
+			},
+		})
+	})
+
+	it('matches the real proto schema, so a real client accepts it on the wire', () => {
+		const fake = getFakeMsg('alice@s.whatsapp.net', 'hi')
+		expect(() => encodeProto('Message', fake.message)).not.toThrow()
 	})
 })
