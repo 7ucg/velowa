@@ -29,6 +29,25 @@ export interface HistoryMessage {
 	 */
 	stubType?: string
 	stubParameters?: string[]
+	/** Per-recipient delivered/read/played timestamps and pending/delivered device lists. */
+	userReceipts?: HistoryUserReceipt[]
+	/** Present when this message was sent via WhatsApp's "schedule a message" feature. */
+	scheduledMessage?: HistoryScheduledMessage
+}
+
+export interface HistoryUserReceipt {
+	userJid: string
+	receiptTimestamp?: number
+	readTimestamp?: number
+	playedTimestamp?: number
+	pendingDeviceJid?: string[]
+	deliveredDeviceJid?: string[]
+}
+
+export interface HistoryScheduledMessage {
+	revealKeyId?: string
+	revealKey?: Uint8Array
+	scheduledTime?: number
 }
 
 /** One participant named by a `GROUP_PARTICIPANT_*` history stub's `stubParameters` (Baileys' JSON convention). */
@@ -87,6 +106,10 @@ export interface HistoryChunk {
 	lidMappings: { lid: string; pn: string }[]
 	/** NCT salt (`storeNctSaltFromHistorySync`): keys the `cstoken` privacy-token fallback (`tctoken.ts`). */
 	nctSalt?: Uint8Array
+	/** Wallpaper, auto-download, notification-preview and other account-wide settings, decoded as-is. */
+	globalSettings?: Record<string, unknown>
+	/** Call history, decoded as-is (`CallLogRecord`: callResult, duration, isVideo, participants, ...). */
+	callLogRecords?: Record<string, unknown>[]
 }
 
 type Raw = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -120,6 +143,42 @@ export function parseHistory(compressed: Uint8Array): HistoryChunk {
 					...(w['messageStubParameters']?.length && {
 						stubParameters: w['messageStubParameters'],
 					}),
+					...(w['userReceipt']?.length && {
+						userReceipts: w['userReceipt']
+							.filter((r: Raw) => r.userJid)
+							.map((r: Raw) => ({
+								userJid: r.userJid,
+								...(num(r.receiptTimestamp) !== undefined && {
+									receiptTimestamp: num(r.receiptTimestamp)!,
+								}),
+								...(num(r.readTimestamp) !== undefined && {
+									readTimestamp: num(r.readTimestamp)!,
+								}),
+								...(num(r.playedTimestamp) !== undefined && {
+									playedTimestamp: num(r.playedTimestamp)!,
+								}),
+								...(r.pendingDeviceJid?.length && { pendingDeviceJid: r.pendingDeviceJid }),
+								...(r.deliveredDeviceJid?.length && {
+									deliveredDeviceJid: r.deliveredDeviceJid,
+								}),
+							})),
+					}),
+					...(w['scheduledMessageMetadata'] && {
+						scheduledMessage: {
+							...(w['scheduledMessageMetadata'].revealKeyId && {
+								revealKeyId: w['scheduledMessageMetadata'].revealKeyId,
+							}),
+							...(typeof w['scheduledMessageMetadata'].revealKey === 'string' &&
+								w['scheduledMessageMetadata'].revealKey.length > 0 && {
+									revealKey: new Uint8Array(
+										Buffer.from(w['scheduledMessageMetadata'].revealKey, 'base64'),
+									),
+								}),
+							...(num(w['scheduledMessageMetadata'].scheduledTime) !== undefined && {
+								scheduledTime: num(w['scheduledMessageMetadata'].scheduledTime)!,
+							}),
+						},
+					}),
 				},
 			]
 		})
@@ -152,6 +211,8 @@ export function parseHistory(compressed: Uint8Array): HistoryChunk {
 			.map((m: Raw) => ({ lid: m.lidJid, pn: m.pnJid })),
 		...(typeof h['nctSalt'] === 'string' &&
 			h['nctSalt'].length > 0 && { nctSalt: new Uint8Array(Buffer.from(h['nctSalt'], 'base64')) }),
+		...(h['globalSettings'] && { globalSettings: h['globalSettings'] }),
+		...(h['callLogRecords']?.length && { callLogRecords: h['callLogRecords'] }),
 	}
 }
 

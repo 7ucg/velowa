@@ -110,6 +110,81 @@ describe('history sync', () => {
 		expect(h.chats[0]!.messages[0]!.message).toBeUndefined()
 	})
 
+	it('surfaces globalSettings, callLogRecords, userReceipt and scheduledMessageMetadata', () => {
+		const blob = encodeProto('HistorySync', {
+			conversations: [
+				{
+					id: '4915611111111@s.whatsapp.net',
+					messages: [
+						{
+							message: {
+								key: { remoteJid: '4915611111111@s.whatsapp.net', fromMe: true, id: 'M1' },
+								message: { conversation: 'hi' },
+								userReceipt: [
+									{
+										userJid: '4915611111111@s.whatsapp.net',
+										receiptTimestamp: 1700000001,
+										readTimestamp: 1700000002,
+										deliveredDeviceJid: ['4915611111111:1@s.whatsapp.net'],
+									},
+									{ userJid: '' }, // no userJid: skipped
+								],
+								scheduledMessageMetadata: {
+									revealKeyId: 'R1',
+									revealKey: new Uint8Array(32).fill(6),
+									scheduledTime: 1700000500,
+								},
+							},
+						},
+					],
+				},
+			],
+			globalSettings: { showIndividualNotificationsPreview: true, fontSize: 14 },
+			callLogRecords: [
+				{
+					callId: 'C1',
+					callResult: 'CONNECTED',
+					isVideo: true,
+					duration: 42,
+					startTime: 1700000000,
+				},
+			],
+		})
+		const h = parseHistory(deflateSync(blob))
+		expect(h.globalSettings).toMatchObject({
+			showIndividualNotificationsPreview: true,
+			fontSize: 14,
+		})
+		expect(h.callLogRecords).toEqual([
+			{
+				callId: 'C1',
+				callResult: 'CONNECTED',
+				isVideo: true,
+				duration: '42',
+				startTime: '1700000000',
+			},
+		])
+		expect(h.chats[0]!.messages[0]!.userReceipts).toEqual([
+			{
+				userJid: '4915611111111@s.whatsapp.net',
+				receiptTimestamp: 1700000001,
+				readTimestamp: 1700000002,
+				deliveredDeviceJid: ['4915611111111:1@s.whatsapp.net'],
+			},
+		])
+		expect(h.chats[0]!.messages[0]!.scheduledMessage).toEqual({
+			revealKeyId: 'R1',
+			revealKey: new Uint8Array(32).fill(6),
+			scheduledTime: 1700000500,
+		})
+	})
+
+	it('omits globalSettings and callLogRecords when the chunk never carried either', () => {
+		const h = parseHistory(deflateSync(encodeProto('HistorySync', { conversations: [] })))
+		expect(h.globalSettings).toBeUndefined()
+		expect(h.callLogRecords).toBeUndefined()
+	})
+
 	it('downloads, decrypts and parses a chunk announced by the phone', async () => {
 		const enc = encryptMedia(deflateSync(sample()), 'md-msg-hist')
 		const chunk = await loadHistory(

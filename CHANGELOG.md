@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Added: `HistoryChunk.globalSettings`/`callLogRecords` and `HistoryMessage.userReceipts`/`scheduledMessage` -
+  four fields the already-decoded `HistorySync` blob carries but `parseHistory` silently dropped: account-wide
+  settings (wallpaper, auto-download, notification previews), call history, per-recipient delivered/read/played
+  receipts, and "schedule a message" metadata.
 - Added: `cstoken` ("client-side"/NCT token), a privacy-token fallback for the very first message to a
   contact we hold no `tctoken` for yet - an HMAC-SHA256 over a salt the phone hands us through history sync
   (`HistorySync.nctSalt`, now parsed and persisted to creds) and the recipient's account LID. Only attached
