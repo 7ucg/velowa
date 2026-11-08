@@ -11,10 +11,19 @@ const MAX_SECRETS_PER_CHAT = 20
 export class MessageSecrets {
 	readonly #byId = new Map<string, Buffer>()
 	readonly #byChat = new Map<string, { id: string; secret: Buffer }[]>()
+	/** Who actually sent the message this id's secret belongs to (ourselves, for `rememberOwn`), and in
+	 * which chat - set alongside the secret so a later secret-encrypted edit can be bound to its real
+	 * author instead of trusting whoever the *editing* envelope claims to be. */
+	readonly #originById = new Map<string, { author: string; chat: string }>()
 
 	/** The secret stored for exactly this message id (no chat-wide fallback). */
 	byId(id: string): Buffer | undefined {
 		return this.#byId.get(id)
+	}
+
+	/** Who sent this id's message, and in which chat - as recorded when its secret was first seen. */
+	originOf(id: string): { author: string; chat: string } | undefined {
+		return this.#originById.get(id)
 	}
 
 	/** Is a secret already stored for this id? (First write wins: a later message with the same id cannot replace it.) */
@@ -22,9 +31,10 @@ export class MessageSecrets {
 		return this.#byId.has(id)
 	}
 
-	set(id: string, secret: Uint8Array, chat?: string): void {
+	set(id: string, secret: Uint8Array, chat?: string, author?: string): void {
 		const buf = Buffer.from(secret)
 		this.#byId.set(id, buf)
+		if (author && chat) this.#originById.set(id, { author, chat })
 		if (!chat) return
 		const list = (this.#byChat.get(chat) ?? []).filter((e) => e.id !== id && !e.secret.equals(buf))
 		list.unshift({ id, secret: buf })

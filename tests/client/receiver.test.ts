@@ -993,12 +993,19 @@ describe('Receiver: secretEncryptedMessage (event/message/poll edits, poll-add-o
 	it('decrypts a MESSAGE_EDIT envelope from its own author and surfaces it as secretEdit', async () => {
 		const { receiver, messages, alice } = await setup()
 		const secret = Buffer.alloc(32, 11)
-		receiver.rememberOwn('M1', 'alice:2@s.whatsapp.net', {
-			messageContextInfo: { messageSecret: secret },
+		// The real original message M1 arrives from alice, carrying its own messageSecret, so
+		// #secretEncrypted can later check the edit's claimed editor against the author *we* recorded for
+		// it (never the wire) - see `#secretEncrypted`.
+		const orig = await alice.encrypt(
+			'bob',
+			1,
+			pad(text('original', { messageContextInfo: { messageSecret: secret } })),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: 'M1', type: 'text' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: orig.type }, content: orig.ciphertext }],
 		})
-		// A message can only be edited by its own author: the editor (whoever sent us this envelope, alice)
-		// is also the "original sender" the HKDF needs - never looked up from `targetMessageKey`, which is
-		// the envelope sender's own, untrusted metadata (see `#secretEncrypted`).
 		const enc = encryptAddon(
 			{ extendedTextMessage: { text: 'corrected' } },
 			{
@@ -1015,7 +1022,7 @@ describe('Receiver: secretEncryptedMessage (event/message/poll edits, poll-add-o
 			pad(
 				text('', {
 					secretEncryptedMessage: {
-						targetMessageKey: { id: 'M1', fromMe: true, remoteJid: 'alice:2@s.whatsapp.net' },
+						targetMessageKey: { id: 'M1', fromMe: false, remoteJid: 'alice:2@s.whatsapp.net' },
 						secretEncType: 'MESSAGE_EDIT',
 						...enc,
 					},
@@ -1028,19 +1035,20 @@ describe('Receiver: secretEncryptedMessage (event/message/poll edits, poll-add-o
 			content: [{ tag: 'enc', attrs: { v: '2', type: stanza.type }, content: stanza.ciphertext }],
 		})
 		await receiver.idle()
-		expect(messages[0]!.message['secretEdit']).toMatchObject({
+		expect(messages[1]!.message['secretEdit']).toMatchObject({
 			kind: 'MESSAGE_EDIT',
 			targetId: 'M1',
 			message: { extendedTextMessage: { text: 'corrected' } },
 		})
 	})
 
-	it("refuses an edit forged with someone else's targetMessageKey.fromMe/participant", async () => {
-		// alice knows our secret (she is a legitimate recipient of M1) and tries to forge an edit that
-		// claims, via the wire-controlled targetMessageKey, that WE (fromMe: true) originally authored M1 -
-		// so that an implementation trusting that field would derive our own identity as the "original
-		// sender" and accept an edit alice never had the right to make.
-		const { receiver, messages, creds, alice } = await setup()
+	it("refuses an edit from anyone but M1's actual, locally-recorded author - whatever targetMessageKey claims", async () => {
+		// alice is a legitimate recipient of a message WE sent (so she genuinely knows its secret, same as
+		// for a real reaction/comment) and tries to forge an edit of it, claiming - via the wire-controlled
+		// targetMessageKey - that she is simply "editing her own message". Trusting `who` alone (an earlier,
+		// incomplete fix) would accept this, since both HKDF roles would equal `who` either way; only
+		// checking the *recorded* author (us, from `rememberOwn`) against `who` (alice) catches it.
+		const { receiver, messages, alice } = await setup()
 		const secret = Buffer.alloc(32, 11)
 		receiver.rememberOwn('M1', 'alice:2@s.whatsapp.net', {
 			messageContextInfo: { messageSecret: secret },
@@ -1049,7 +1057,7 @@ describe('Receiver: secretEncryptedMessage (event/message/poll edits, poll-add-o
 			{ extendedTextMessage: { text: 'forged' } },
 			{
 				parentMsgId: 'M1',
-				parentSenderJid: creds.me!.id.split(':')[0]! + '@s.whatsapp.net', // the forged claim
+				parentSenderJid: 'alice@s.whatsapp.net', // the forged "I am editing my own message" claim
 				modifierJid: 'alice@s.whatsapp.net',
 				secret,
 				useCase: 'Message Edit',
@@ -1076,7 +1084,7 @@ describe('Receiver: secretEncryptedMessage (event/message/poll edits, poll-add-o
 		await receiver.idle()
 		expect(messages[0]!.message['secretEdit']).toMatchObject({
 			kind: 'MESSAGE_EDIT',
-			error: expect.anything(),
+			error: 'editor is not the author',
 		})
 	})
 
@@ -1186,6 +1194,115 @@ describe('Receiver: secretEncryptedMessage (event/message/poll edits, poll-add-o
 			kind: 'POLL_ADD_OPTION',
 			targetId: pollId,
 			message: { pollAddOptionMessage: { addOption: { optionName: 'Vielleicht' } } },
+		})
+	})
+
+	it('rejects POLL_ADD_OPTION for a poll we never saw created, instead of trusting the wire-claimed creator', async () => {
+		const { receiver, messages, alice } = await setup()
+		const secret = Buffer.alloc(32, 13)
+		// The secret is known (e.g. shared some other way), but we never saw this poll's creation message -
+		// `rememberOwn` with no pollCreation* field records the secret without populating `#polls`, so
+		// there is no locally-known creator to authorize against.
+		receiver.rememberOwn('UNKNOWNPOLL', 'alice:2@s.whatsapp.net', {
+			messageContextInfo: { messageSecret: secret },
+		})
+		const enc = encryptAddon(
+			{
+				pollAddOptionMessage: {
+					pollCreationMessageKey: {
+						remoteJid: 'alice:2@s.whatsapp.net',
+						fromMe: true,
+						id: 'UNKNOWNPOLL',
+					},
+					addOption: { optionName: 'Vielleicht' },
+				},
+			},
+			{
+				parentMsgId: 'UNKNOWNPOLL',
+				parentSenderJid: '4915600000000@s.whatsapp.net',
+				modifierJid: 'alice@s.whatsapp.net',
+				secret,
+				useCase: 'Poll Add Option',
+			},
+		)
+		const stanza = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					secretEncryptedMessage: {
+						targetMessageKey: {
+							id: 'UNKNOWNPOLL',
+							fromMe: true,
+							remoteJid: 'alice:2@s.whatsapp.net',
+						},
+						secretEncType: 'POLL_ADD_OPTION',
+						...enc,
+					},
+				}),
+			),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'alice:2@s.whatsapp.net', id: 'E5' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: stanza.type }, content: stanza.ciphertext }],
+		})
+		await receiver.idle()
+		expect(messages[0]!.message['secretEdit']).toMatchObject({
+			kind: 'POLL_ADD_OPTION',
+			error: 'poll unknown',
+		})
+	})
+
+	it('rejects a MESSAGE_EDIT whose author matches but whose chat does not', async () => {
+		// alice is the right person, but M1 was recorded in a different chat than this envelope arrives in -
+		// an id collision (or a replay into the wrong chat) must not let the edit through just because the
+		// author happens to line up. `participant` is set explicitly on both stanzas so `author` (alice) and
+		// `chat` (the group/chat id) vary independently, same as a real group vs. 1:1 would.
+		const { receiver, messages, alice } = await setup()
+		const secret = Buffer.alloc(32, 14)
+		const orig = await alice.encrypt(
+			'bob',
+			1,
+			pad(text('original', { messageContextInfo: { messageSecret: secret } })),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'chatA@g.us', participant: 'alice:2@s.whatsapp.net', id: 'M1', type: 'text' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: orig.type }, content: orig.ciphertext }],
+		})
+		const enc = encryptAddon(
+			{ extendedTextMessage: { text: 'x' } },
+			{
+				parentMsgId: 'M1',
+				parentSenderJid: 'alice@s.whatsapp.net',
+				modifierJid: 'alice@s.whatsapp.net',
+				secret,
+				useCase: 'Message Edit',
+			},
+		)
+		const stanza = await alice.encrypt(
+			'bob',
+			1,
+			pad(
+				text('', {
+					secretEncryptedMessage: {
+						targetMessageKey: { id: 'M1', fromMe: false, remoteJid: 'chatA@g.us' },
+						secretEncType: 'MESSAGE_EDIT',
+						...enc,
+					},
+				}),
+			),
+		)
+		receiver.handle({
+			tag: 'message',
+			attrs: { from: 'chatB@g.us', participant: 'alice:2@s.whatsapp.net', id: 'E6' },
+			content: [{ tag: 'enc', attrs: { v: '2', type: stanza.type }, content: stanza.ciphertext }],
+		})
+		await receiver.idle()
+		expect(messages[1]!.message['secretEdit']).toMatchObject({
+			kind: 'MESSAGE_EDIT',
+			error: 'parent unknown',
 		})
 	})
 })

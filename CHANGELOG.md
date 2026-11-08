@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- Fixed (security): the previous fix for the spoofable `secretEncryptedMessage` edit (binding the editor to
+  itself) was still incomplete - it let anyone who merely knows a message's secret (every recipient does, by
+  design) self-attribute a forged edit of a message that was never theirs, since both HKDF roles equalled
+  `who` regardless of whose message it actually was. `MessageSecrets` now records who actually sent each id's
+  message (and in which chat) when its secret is first seen; a MESSAGE_EDIT/EVENT_EDIT/POLL_EDIT is rejected
+  outright unless that record exists, names the same chat, and names the same person (via LID/PN) as the
+  envelope's own sender. `POLL_ADD_OPTION` is tightened too: an unknown poll is now rejected instead of
+  falling back to a wire-claimed creator, since there would be nothing left to authorize against.
 - Added: `statusLinkPreviewMetadata`, `statusQuotedMessage`, `statusStickerInteraction`,
   `statusNotification` (status/story interaction) and `messageHistoryNotice` (a text-only group-history
   notice - `MessageHistoryBundle`, the variant carrying an actual media attachment, needs the upload

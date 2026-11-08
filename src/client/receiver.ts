@@ -309,7 +309,7 @@ export class Receiver {
 		this.#ownIds.add(id)
 		if (this.#ownIds.size > 2000) this.#ownIds.delete(this.#ownIds.values().next().value!)
 		const secret = message['messageContextInfo']?.messageSecret
-		if (secret) this.#secrets.set(id, secret, chat)
+		if (secret) this.#secrets.set(id, secret, chat, this.d.creds.me?.id ?? '')
 		this.#notePoll(id, message, this.d.creds.me?.id ?? '', true)
 	}
 
@@ -808,26 +808,41 @@ export class Receiver {
 		// whichever frame the sender chose (its own `fromMe`/`participant` says nothing trustworthy about
 		// who actually authored the message being edited) - never the authorization check itself.
 		//
-		// A message, event or poll can only be edited by its own author, so for those three kinds the
-		// "original sender" the HKDF needs isn't looked up at all: it's simply whoever sent us this
-		// envelope (`who`, already authenticated by the Signal/sender-key session that decrypted it), the
-		// same as the editor. Trusting `targetMessageKey.participant` here - as this code did before - would
-		// let any chat member who merely knows the secret (every recipient does, by design) forge an edit
-		// credited to someone else, since nothing checked that the claimed author and the actual sender were
-		// the same person.
+		// A message, event or poll can only be edited by its own author. Trusting `who` alone here isn't
+		// enough either: anyone who merely knows the secret (every recipient does, by design) could still
+		// self-attribute a forged edit of a message that was never theirs, by targeting any id+secret they
+		// happen to know - cryptographically indistinguishable from a real self-edit, since both roles in
+		// the HKDF would equal `who` either way. What actually anchors "the editor is the author" is the
+		// origin *we* recorded when that id's secret first arrived - never the wire - so the three edit
+		// kinds are rejected outright when we have no such record, or it names someone other than `who`.
 		//
 		// POLL_ADD_OPTION is the one exception: like a poll vote, any participant may add an option, not
-		// only the poll's creator - so its "original sender" is the poll's creator, preferred from what we
-		// locally remembered about that poll (not from the wire) when we have it, same as `#pollVote`.
-		const parentSender =
-			kind === 'POLL_ADD_OPTION'
-				? (() => {
-						const claimedCreator = key.fromMe
-							? (this.d.creds.me?.id ?? '')
-							: (key.participant ?? key.remoteJid ?? chat)
-						return this.#polls.get(this.#pollKey(claimedCreator, key.id))?.creator ?? claimedCreator
-					})()
-				: who
+		// only the poll's creator - so its "original sender" is the poll's creator, from what we locally
+		// remembered about that poll (never the wire); an unknown poll is rejected rather than falling
+		// back to a wire-claimed creator, since there would be nothing left to authorize against.
+		let parentSender: string
+		if (kind === 'POLL_ADD_OPTION') {
+			const claimedCreator = key.fromMe
+				? (this.d.creds.me?.id ?? '')
+				: (key.participant ?? key.remoteJid ?? chat)
+			const creator = this.#polls.get(this.#pollKey(claimedCreator, key.id))?.creator
+			if (!creator) return { kind, targetId: key.id, error: 'poll unknown' }
+			parentSender = creator
+		} else {
+			const origin = this.#secrets.originOf(key.id)
+			if (!origin || origin.chat !== chat)
+				return { kind, targetId: key.id, error: 'parent unknown' }
+			try {
+				if (jidDecode(strip(origin.author)).user !== jidDecode(strip(who)).user) {
+					const swapped = this.d.lids.swap(strip(who))
+					if (!swapped || jidDecode(swapped).user !== jidDecode(strip(origin.author)).user)
+						return { kind, targetId: key.id, error: 'editor is not the author' }
+				}
+			} catch {
+				return { kind, targetId: key.id, error: 'editor is not the author' }
+			}
+			parentSender = origin.author
+		}
 		try {
 			const message = withAddressingFallback(
 				this.d.lids,
@@ -956,7 +971,7 @@ export class Receiver {
 		}
 		const secret = raw.messageContextInfo?.messageSecret
 		if (secret && !this.#ownIds.has(id) && !this.#secrets.has(id))
-			this.#secrets.set(id, secret, chat)
+			this.#secrets.set(id, secret, chat, author)
 		const shared = raw.protocolMessage?.appStateSyncKeyShare?.keys
 		if (shared?.length && this.d.onAppStateKeys && !this.#isOwnPeer(node, author)) {
 			// Whoever holds these keys can forge our chat/contact state, so only our own account may hand them out.
