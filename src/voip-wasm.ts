@@ -17,6 +17,7 @@ export {
 	CallEngine,
 	GroupSession,
 	buildGroupEncRekey,
+	buildGroupInviteOffer,
 	buildGroupOffer,
 	parseGroupEncRekey,
 	RelayChannel,

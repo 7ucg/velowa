@@ -6,9 +6,10 @@
 use wacore_binary::Jid;
 use wacore_voip::stanza::call::OfferDeviceKey;
 use wacore_voip::stanza::group_call::{
-    parse_group_invite_snapshot,
-    GroupEncRekeyParams, InitialGroupOfferParams, build_group_enc_rekey, build_initial_group_offer,
-    parse_group_enc_rekey, parse_group_update, parse_initial_group_call_ack,
+    build_group_enc_rekey, build_group_invite_offer, build_initial_group_offer,
+    parse_group_enc_rekey, parse_group_invite_snapshot, parse_group_update,
+    parse_initial_group_call_ack, GroupEncRekeyParams, GroupInviteOfferParams,
+    InitialGroupOfferParams,
 };
 use wacore_voip::types::group_call::{GroupCallDevice, GroupCallParticipant, GroupCallUpdate};
 use wacore_voip::voip::{
@@ -18,7 +19,7 @@ use wacore_voip::voip::{
 use wacore_voip::voip_control::group::{GroupCallState, GroupStateApply};
 use wasm_bindgen::prelude::*;
 
-use crate::{CallEngine, RngTxIds, node_to_js_value, unpack_node};
+use crate::{node_to_js_value, unpack_node, CallEngine, RngTxIds};
 
 fn err(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
@@ -59,14 +60,9 @@ fn default_rate() -> u32 {
     16_000
 }
 
-/// Build the call-scoped offer of an ad-hoc or group-bound group call (a plain node object for `sendNode`).
-#[wasm_bindgen(js_name = buildGroupOffer)]
-pub fn build_group_offer(params_json: &str) -> Result<JsValue, JsValue> {
-    let p: OfferJson = serde_json::from_str(params_json).map_err(err)?;
-    let creator = jid(&p.creator)?;
-    let group = p.group_jid.as_deref().map(jid).transpose()?;
-    let mut participants = Vec::with_capacity(p.participants.len());
-    for u in &p.participants {
+fn parse_participants(items: &[ParticipantJson]) -> Result<Vec<GroupCallParticipant>, JsValue> {
+    let mut participants = Vec::with_capacity(items.len());
+    for u in items {
         let mut devices = Vec::with_capacity(u.devices.len());
         for d in &u.devices {
             let mut dev = GroupCallDevice::new(jid(&d.jid)?);
@@ -77,6 +73,16 @@ pub fn build_group_offer(params_json: &str) -> Result<JsValue, JsValue> {
         }
         participants.push(GroupCallParticipant::new(jid(&u.jid)?, devices));
     }
+    Ok(participants)
+}
+
+/// Build the call-scoped offer of an ad-hoc or group-bound group call (a plain node object for `sendNode`).
+#[wasm_bindgen(js_name = buildGroupOffer)]
+pub fn build_group_offer(params_json: &str) -> Result<JsValue, JsValue> {
+    let p: OfferJson = serde_json::from_str(params_json).map_err(err)?;
+    let creator = jid(&p.creator)?;
+    let group = p.group_jid.as_deref().map(jid).transpose()?;
+    let participants = parse_participants(&p.participants)?;
     let node = build_initial_group_offer(&InitialGroupOfferParams {
         call_id: &p.call_id,
         id: &p.id,
@@ -85,6 +91,47 @@ pub fn build_group_offer(params_json: &str) -> Result<JsValue, JsValue> {
         participants: &participants,
         audio_rate: p.audio_rate,
         video: p.video,
+    })
+    .map_err(err)?;
+    Ok(node_to_js_value(&node))
+}
+
+#[derive(serde::Deserialize)]
+struct InviteOfferJson {
+    call_id: String,
+    id: String,
+    to: String,
+    creator: String,
+    target_devices: Vec<String>,
+    participants: Vec<ParticipantJson>,
+    #[serde(default)]
+    video: bool,
+    #[serde(default)]
+    device_orientation: u8,
+}
+
+/// Build the offer that invites one new, or re-rings one disconnected, participant into an already
+/// running group call: the current authoritative roster (`participants`) travels with it, addressed to
+/// `target_devices` (that one user's devices, from a fresh usync lookup). A plain node object for `sendNode`.
+#[wasm_bindgen(js_name = buildGroupInviteOffer)]
+pub fn build_group_invite_offer_js(params_json: &str) -> Result<JsValue, JsValue> {
+    let p: InviteOfferJson = serde_json::from_str(params_json).map_err(err)?;
+    let to = jid(&p.to)?;
+    let creator = jid(&p.creator)?;
+    let mut target_devices = Vec::with_capacity(p.target_devices.len());
+    for d in &p.target_devices {
+        target_devices.push(jid(d)?);
+    }
+    let participants = parse_participants(&p.participants)?;
+    let node = build_group_invite_offer(&GroupInviteOfferParams {
+        call_id: &p.call_id,
+        id: &p.id,
+        to: &to,
+        call_creator: &creator,
+        target_devices: &target_devices,
+        participants: &participants,
+        video: p.video,
+        device_orientation: p.device_orientation,
     })
     .map_err(err)?;
     Ok(node_to_js_value(&node))
@@ -206,23 +253,36 @@ impl GroupSession {
     fn summary(&mut self, applied: &GroupStateApply) -> Result<JsValue, JsValue> {
         let rekey_owed = self.state.take_owed_rekey();
         let snap = self.state.snapshot();
-        let (transaction_id, media, rekey_requested, participants, relay_endpoint, has_relay, recipients) =
-            match snap {
-                Some(u) => (
-                    u.transaction_id,
-                    u.media.clone(),
-                    u.rekey_requested,
-                    serde_json::to_value(&u.participants).unwrap_or_default(),
-                    u.relay.as_ref().and_then(|r| {
-                        r.endpoints
-                            .iter()
-                            .find_map(|e| e.ipv4.clone().zip(e.port))
-                    }),
-                    u.relay.is_some(),
-                    recipients(u, &self.self_jid),
-                ),
-                None => (0, String::new(), false, serde_json::Value::Null, None, false, vec![]),
-            };
+        let (
+            transaction_id,
+            media,
+            rekey_requested,
+            participants,
+            relay_endpoint,
+            has_relay,
+            recipients,
+        ) = match snap {
+            Some(u) => (
+                u.transaction_id,
+                u.media.clone(),
+                u.rekey_requested,
+                serde_json::to_value(&u.participants).unwrap_or_default(),
+                u.relay
+                    .as_ref()
+                    .and_then(|r| r.endpoints.iter().find_map(|e| e.ipv4.clone().zip(e.port))),
+                u.relay.is_some(),
+                recipients(u, &self.self_jid),
+            ),
+            None => (
+                0,
+                String::new(),
+                false,
+                serde_json::Value::Null,
+                None,
+                false,
+                vec![],
+            ),
+        };
         let members: Vec<String> = self
             .state
             .snapshot()
@@ -306,7 +366,10 @@ impl GroupSession {
             .snapshot()
             .ok_or_else(|| err("no group snapshot yet"))?
             .clone();
-        let relay = update.relay.as_ref().ok_or_else(|| err("the snapshot has no relay"))?;
+        let relay = update
+            .relay
+            .as_ref()
+            .ok_or_else(|| err("the snapshot has no relay"))?;
         let direction = if incoming {
             CallDirection::Incoming
         } else {
@@ -324,8 +387,7 @@ impl GroupSession {
             cfg.audio = AudioConfig::encoded(AudioFormat::OPUS_16KHZ_60MS);
         }
         cfg.enable_video = video;
-        let mut engine =
-            CoreCallEngine::new(cfg, Box::new(RngTxIds)).map_err(err)?;
+        let mut engine = CoreCallEngine::new(cfg, Box::new(RngTxIds)).map_err(err)?;
         engine
             .configure_group(GroupEngineConfig {
                 call_creator: self.creator.clone(),

@@ -53,6 +53,7 @@ import * as act from './features/chat/chat-actions.js'
 import type { RangeMessage } from './features/chat/chat-actions.js'
 import type { AppStateEvent, ChatUpdate, ContactUpdate } from './features/chat/appstate-sync.js'
 import * as contacts from './features/contact/contacts.js'
+import { numericSecurityCode, type SecurityCodeVersion } from './features/account/security-code.js'
 import * as callEvents from './features/call/call-events.js'
 import * as extras from './features/message/extras.js'
 import * as interactiveMsg from './features/message/interactive.js'
@@ -119,6 +120,7 @@ import { MediaSession } from './features/call/call-media.js'
 import {
 	GroupSession,
 	buildGroupEncRekey,
+	buildGroupInviteOffer,
 	buildGroupOffer,
 	ensureVoipWasm,
 	parseGroupEncRekey,
@@ -1114,6 +1116,57 @@ export class Client {
 	async lidsFor(...jids: string[]) {
 		return contacts.lidsFor(this.#q, await this.#sid(), jids)
 	}
+
+	/**
+	 * The 60-digit numeric security code WhatsApp Web shows for comparing your and `peerJid`'s complete
+	 * identity-key sets out of band (the idea behind Signal's safety number): read the same digits off both
+	 * devices and compare them by some channel other than this connection to catch a swapped identity
+	 * independently of the server - a check `assertSessions`'s own ADV verification cannot make, since that
+	 * trusts the server's signed chain in the first place. `version` (`V4`, LID-based, by default; `V3` is
+	 * phone-number based) must match on both ends or the digits never agree. `peerJid` must be given in its
+	 * phone-number form (LID resolution for the other side is looked up here). A point-in-time snapshot: wrong
+	 * again once either side's identity or device list changes - recompute rather than cache it for long.
+	 */
+	async securityCode(peerJid: string, version: SecurityCodeVersion = 'V4'): Promise<string> {
+		const { sender } = await this.#live()
+		const storage = this.#signalStorage
+		if (!storage) throw new Error('not connected')
+		const creds = this.#creds
+		if (!creds.me) throw new Error('not paired')
+		if (peerJid.endsWith('@lid'))
+			throw new Error('securityCode needs the phone-number form of peerJid')
+		const meUser = creds.me.id.replace(/:\d+@.*/, '')
+		const peerUser = peerJid.replace(/:\d+@.*/, '').replace(/@.*/, '')
+		const ownBare = `${meUser}@s.whatsapp.net`
+		const peerBare = `${peerUser}@s.whatsapp.net`
+		const devices = await sender.getDevices([ownBare, peerBare])
+		const ownOthers = devices.filter((d) => d.user === meUser)
+		const peerDevices = devices.filter((d) => d.user === peerUser)
+		if (!peerDevices.length) throw new Error(`no devices found for ${peerJid}`)
+		const toEstablish = [...ownOthers, ...peerDevices].map((d) => d.jid)
+		if (toEstablish.length) await sender.assertSessions(toEstablish)
+		const identityOf = async (jid: string): Promise<Uint8Array> => {
+			const a = sender.addr(jid)
+			const key = await storage.loadIdentity(a.name, a.device)
+			if (!key) throw new Error(`identity key for ${jid} is unavailable`)
+			return key
+		}
+		const ownKeys = [
+			creds.signedIdentityKey.publicKey,
+			...(await Promise.all(ownOthers.map((d) => identityOf(d.jid)))),
+		]
+		const peerKeys = await Promise.all(peerDevices.map((d) => identityOf(d.jid)))
+		let localUser = meUser
+		let remoteUser = peerUser
+		if (version === 'V4') {
+			if (!creds.me.lid) throw new Error('own LID is unavailable')
+			localUser = creds.me.lid.replace(/:\d+@.*/, '')
+			const found = (await this.lidsFor(peerBare)).find((x) => x.pn === peerBare)
+			if (!found) throw new Error(`no LID known for ${peerJid}`)
+			remoteUser = found.lid.replace(/@.*/, '')
+		}
+		return numericSecurityCode(version, localUser, ownKeys, remoteUser, peerKeys)
+	}
 	profilePictureUrl = (jid: string, type: 'preview' | 'image' = 'preview') =>
 		contacts.profilePictureUrl(this.#q, jid, type)
 	/** Set our own "About" text. */
@@ -1797,6 +1850,87 @@ export class Client {
 			throw e
 		}
 		return state
+	}
+
+	/** This group call's current roster, in the `buildGroupInviteOffer`/`buildGroupOffer` participants shape. */
+	async #currentRosterParticipants(
+		c: callSig.CallState,
+		ownUser: string,
+		own: string,
+	): Promise<{ jid: string; devices: { jid: string }[] }[]> {
+		const { sender } = await this.#live()
+		const isHosted = (jid: string) => /:99@/.test(jid)
+		const users = [...(c.members ?? [])].filter((u) => u !== ownUser)
+		const devices = (await sender.getDevices(users)).filter((d) => !isHosted(d.jid))
+		return [
+			{ jid: ownUser, devices: [{ jid: own }] },
+			...users.map((u) => ({
+				jid: u,
+				devices: devices
+					.filter((d) => d.jid.replace(/:\d+@/, '@') === u)
+					.map((d) => ({ jid: d.jid })),
+			})),
+		]
+	}
+
+	async #resolveCallTarget(target: string): Promise<string> {
+		const user = target.replace(/:\d+@/, '@')
+		if (user.endsWith('@lid')) return user
+		const found = (await this.lidsFor(user)).find((x) => x.pn === user)
+		if (!found) throw new Error(`no LID known for ${target}`)
+		return found.lid
+	}
+
+	async #sendParticipantInvite(
+		callId: string,
+		c: callSig.CallState,
+		targetUser: string,
+	): Promise<void> {
+		const { sender, receiver } = await this.#live()
+		const own = this.#creds.me?.lid
+		if (!own) throw new Error('no own LID yet; wait for the login to finish')
+		const ownUser = own.replace(/:\d+@/, '@')
+		const isHosted = (jid: string) => /:99@/.test(jid)
+		const targetDevices = (await sender.getDevices([targetUser]))
+			.filter((d) => !isHosted(d.jid))
+			.map((d) => d.jid)
+		if (!targetDevices.length) throw new Error(`${targetUser} has no devices`)
+		const participants = await this.#currentRosterParticipants(c, ownUser, own)
+		const id = receiver.nextId()
+		const offer = buildGroupInviteOffer(
+			JSON.stringify({
+				call_id: callId,
+				id,
+				to: targetUser,
+				creator: c.creator,
+				target_devices: targetDevices,
+				participants,
+				video: c.video,
+			}),
+		) as BinaryNode
+		await receiver.sendCallAndWait(offer)
+	}
+
+	/**
+	 * Invite a user who is not yet in this group call's roster. The current roster travels with the offer, as
+	 * the app does, so the invitee is admitted straight into the live call rather than just answering this one
+	 * device's offer. Use `ringParticipant` for someone already in the roster but disconnected.
+	 */
+	async inviteParticipant(callId: string, target: string): Promise<void> {
+		const c = this.#calls.get(callId)
+		if (!c?.groupSession) throw new Error(`${callId} is not a running group call`)
+		const targetUser = await this.#resolveCallTarget(target)
+		if (c.members?.has(targetUser)) throw new Error(`${target} is already in this call`)
+		await this.#sendParticipantInvite(callId, c, targetUser)
+	}
+
+	/** Re-ring a disconnected participant who is already in this group call's roster. */
+	async ringParticipant(callId: string, target: string): Promise<void> {
+		const c = this.#calls.get(callId)
+		if (!c?.groupSession) throw new Error(`${callId} is not a running group call`)
+		const targetUser = await this.#resolveCallTarget(target)
+		if (!c.members?.has(targetUser)) throw new Error(`${target} is not in this call's roster`)
+		await this.#sendParticipantInvite(callId, c, targetUser)
 	}
 
 	/** Build the group engine once the server gave us a relay, then deliver the shared key where it is owed. */

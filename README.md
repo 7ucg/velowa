@@ -543,6 +543,7 @@ await client.profilePictureUrl(jid, 'image')
 await client.findUserByUsername('someone')
 await client.usernames.check('wanted-name') // + set, mine
 await client.lidsFor(jid)
+await client.securityCode(jid) // 60-digit safety-number-style code, compare it to the other side's out of band
 
 await client.updateProfileName('My Bot')
 await client.updateProfileStatus('Ask me with !help')
@@ -560,6 +561,7 @@ await client.fetchBlocklist()
 await client.getBusinessProfile(jid) // null for a private account
 await client.getCatalog(jid)
 await client.updateBusinessProfile({ description: 'We repair bikes' }) // Business accounts only
+await client.getOrder(jid, id, 'the orderMessage’s token') // from the orderMessage a "Review and pay" tap sends
 await client.requestPayment(jid, { amount1000: 12_500, currency: 'EUR', note: 'Lunch' }) // 12.50 EUR; + sendPaymentNote, declinePaymentRequest, cancelPaymentRequest
 ```
 
@@ -693,6 +695,8 @@ await client.disableCamera(call.callId)
 await client.raiseHand(gc.callId, true) // group calls
 await client.setMuteState(gc.callId, false) // tell a group call our microphone is unmuted (others' state: `muteState` on the `call` event)
 await client.sendReaction(gc.callId, '👍') // group calls
+await client.inviteParticipant(gc.callId, jid) // add someone not yet in this running group call
+await client.ringParticipant(gc.callId, jid) // re-ring a disconnected member of the roster
 ```
 
 **A room** is a call link you own and run: guests open it in a browser (no WhatsApp account needed), ask to join, and

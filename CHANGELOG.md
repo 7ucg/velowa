@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- Added: `client.inviteParticipant(callId, jid)` / `client.ringParticipant(callId, jid)` - add someone to an
+  already-running group call, or re-ring a disconnected roster member, carrying the current roster with the
+  offer so they're admitted straight into the live call. Needed a new WASM binding (`buildGroupInviteOffer`,
+  wrapping whatsapp-rust's own `build_group_invite_offer`) alongside the existing `buildGroupOffer`.
+- Added: `client.securityCode(peerJid, version?)` - the 60-digit numeric security code WhatsApp Web shows for
+  comparing two accounts' complete identity-key sets out of band (the idea behind Signal's safety number),
+  verified against WhatsApp Web's own official test vectors. Independent of the server, unlike the ADV
+  verification `assertSessions` already does.
 - Fixed: `subscribePresence`'d contacts went silent (no more `presence`/`chatstate` events, no error) after any
   reconnect - the server forgets presence subscriptions across one. Every subscription is now re-sent once the
   connection is back up; `unsubscribePresence(jid)` stops it (and is itself remembered, so an unsubscribe right
