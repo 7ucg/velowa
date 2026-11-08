@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- Added: `client.simulateIncomingMessage(from, content)` - injects a message into this client's own
+  `message` event exactly as if it had really arrived, entirely local, no network traffic. Ported from a
+  known WhatsApp mod feature ("Fake real-time chat"/"Modify Chat"): type something yourself and have your
+  own chat view show it as if the other person sent it. The mod's own mechanism turned out to need nothing
+  mod-specific on this side - a genuinely received message already reads as `fromMe: false` by default
+  (`serialize()`), so building and emitting a normal-looking incoming message *is* the entire trick. Not
+  for groups, the same restriction the original mod enforces (a fabricated `participant` can collide with
+  real membership-list validation).
 - Added: `deviceOf(id)` - guesses which client (`ios`/`web`/`android`/`desktop`/`api`) sent a message from
   its id's own shape (length and prefix) alone, matching whatsmeow/Baileys' own heuristic.
   `generateMessageId`'s own output (confirmed against whatsmeow's Go and an older Baileys' JS

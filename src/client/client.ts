@@ -68,7 +68,7 @@ import type { PresenceEvent, ReceiptEvent } from './features/message/events.js'
 import * as business from './features/contact/business.js'
 import { Communities } from './features/community/communities.js'
 import { LidMap } from './lid-map.js'
-import { jidDecode } from '../jid.js'
+import { isJidGroup, jidDecode } from '../jid.js'
 import {
 	companionFinish,
 	companionHello,
@@ -514,6 +514,29 @@ export class Client {
 	): Promise<string> {
 		const { sender } = await this.#live()
 		return sender.sendMessage(to, message, opts)
+	}
+
+	/**
+	 * Inject a message into this client's own `message` event exactly as if it had really arrived from
+	 * `from` - entirely local, no network traffic, nothing sent or received for real. Ported from a known
+	 * WhatsApp mod feature ("Fake real-time chat"/"Modify Chat"): type something yourself and have your
+	 * own chat view show it as if the other person sent it. The result needs no special handling on your
+	 * side - a genuinely received message already reads as `fromMe: false` by default (see `serialize()`),
+	 * so building and emitting a normal-looking incoming message is the entire trick.
+	 *
+	 * Not for groups, same restriction the original mod enforces: a fabricated `participant` can collide
+	 * with real membership-list validation if this ever gets mixed into real group state.
+	 */
+	simulateIncomingMessage(from: string, content: string | Record<string, unknown>): DecodedMessage {
+		if (isJidGroup(from)) throw new Error('simulateIncomingMessage: not for groups')
+		const decoded: DecodedMessage = {
+			id: generateMessageId(this.#creds.me?.id ?? from),
+			from,
+			message: typeof content === 'string' ? { conversation: content } : content,
+			timestamp: Math.floor(Date.now() / 1000),
+		}
+		this.#events.emit('message', decoded)
+		return decoded
 	}
 
 	/** React to a message with an emoji (empty string removes the reaction). */
