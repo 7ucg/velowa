@@ -21,6 +21,48 @@ export interface HistoryMessage {
 	message?: Record<string, unknown>
 	timestamp?: number
 	pushName?: string
+	/**
+	 * A structural event (group created/renamed/participant changed, ...) from before this device last
+	 * synced, carried as a stub instead of a real message - `message` is absent for these. The enum name
+	 * (e.g. `"GROUP_PARTICIPANT_ADD"`), matching `WebMessageInfo.StubType`. For the `GROUP_PARTICIPANT_*`
+	 * family, `decodeGroupStubParticipant` reads each of `stubParameters`.
+	 */
+	stubType?: string
+	stubParameters?: string[]
+}
+
+/** One participant named by a `GROUP_PARTICIPANT_*` history stub's `stubParameters` (Baileys' JSON convention). */
+export interface GroupStubParticipant {
+	id: string
+	phoneNumber?: string
+	lid?: string
+	username?: string
+	admin?: 'admin' | 'superadmin' | null
+}
+
+/** Decode one `HistoryMessage.stubParameters[i]` for a `GROUP_PARTICIPANT_*` stub. `undefined` if malformed. */
+export function decodeGroupStubParticipant(raw: string): GroupStubParticipant | undefined {
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(raw)
+	} catch {
+		return undefined
+	}
+	if (
+		!parsed ||
+		typeof parsed !== 'object' ||
+		typeof (parsed as Record<string, unknown>)['id'] !== 'string'
+	)
+		return undefined
+	const obj = parsed as Record<string, unknown>
+	const out: GroupStubParticipant = { id: obj['id'] as string }
+	if (typeof obj['phoneNumber'] === 'string' && obj['phoneNumber'])
+		out.phoneNumber = obj['phoneNumber']
+	if (typeof obj['lid'] === 'string' && obj['lid']) out.lid = obj['lid']
+	if (typeof obj['username'] === 'string' && obj['username']) out.username = obj['username']
+	if (obj['admin'] === 'admin' || obj['admin'] === 'superadmin' || obj['admin'] === null)
+		out.admin = obj['admin']
+	return out
 }
 
 export interface HistoryChat {
@@ -72,6 +114,10 @@ export function parseHistory(compressed: Uint8Array): HistoryChunk {
 						timestamp: num(w['messageTimestamp'])!,
 					}),
 					...(w['pushName'] && { pushName: w['pushName'] }),
+					...(w['messageStubType'] && { stubType: w['messageStubType'] }),
+					...(w['messageStubParameters']?.length && {
+						stubParameters: w['messageStubParameters'],
+					}),
 				},
 			]
 		})

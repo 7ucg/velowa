@@ -62,6 +62,35 @@ export function signedDeviceIdentity(
 	return bytes
 }
 
+/**
+ * A signed `<key-index-list>` (`ADVSignedKeyIndexList`) naming which `key-index` values the account
+ * currently considers valid. `account` must be the same identity keypair whose device-0 identity key
+ * `assertSessions` will have verified as that user's trust anchor (see `signedDeviceIdentity`).
+ */
+export function signedKeyIndexList(
+	account: { publicKey: Uint8Array; privateKey: Uint8Array },
+	opts: { currentIndex?: number; validIndexes?: number[] } = {},
+): Uint8Array {
+	const T = protoType
+	const details = T('ADVKeyIndexList')
+		.encode(
+			T('ADVKeyIndexList').fromObject({
+				rawId: 1,
+				timestamp: 1000,
+				currentIndex: opts.currentIndex ?? 1,
+				validIndexes: opts.validIndexes ?? [1],
+			}),
+		)
+		.finish()
+	const accountSignature = xeddsaSign(
+		account.privateKey,
+		Buffer.concat([Buffer.from([6, 2]), details]),
+	)
+	return T('ADVSignedKeyIndexList')
+		.encode(T('ADVSignedKeyIndexList').fromObject({ details, accountSignature }))
+		.finish()
+}
+
 /** A remote device with its own keys; answers pre-key fetches and decrypts what we send it. */
 export async function remoteDevice(
 	jid: string,
@@ -114,6 +143,15 @@ export async function world(
 			regId: number
 			deviceIdentity?: (identity: { publicKey: Uint8Array; privateKey: Uint8Array }) => Uint8Array
 		}
+		/**
+		 * Signs a `<key-index-list>` for bob with bob0's own identity (so it is a valid trust anchor once
+		 * `assertSessions` verifies bob0's device-identity - also pass `bob0DeviceIdentity` for that) and
+		 * attaches it to bob's usync `<devices>` answer.
+		 */
+		keyIndexListForBob?: { currentIndex?: number; validIndexes?: number[] }
+		/** Gives bob's primary device a verifiable `<device-identity>`, so `assertSessions` can establish it
+		 * as bob's trust anchor for a later `keyIndexListForBob` check. */
+		bob0DeviceIdentity?: (identity: { publicKey: Uint8Array; privateKey: Uint8Array }) => Uint8Array
 	} = {},
 ) {
 	const creds = initAuthCreds()
@@ -126,8 +164,11 @@ export async function world(
 		creds.registrationId,
 	)
 	const phone = await remoteDevice('4915600000000@s.whatsapp.net', 1)
-	const bob0 = await remoteDevice('4915611111111@s.whatsapp.net', 2)
+	const bob0 = await remoteDevice('4915611111111@s.whatsapp.net', 2, opts.bob0DeviceIdentity)
 	const bob1 = await remoteDevice('4915611111111:1@s.whatsapp.net', 3)
+	const keyIndexListForBob = opts.keyIndexListForBob
+		? signedKeyIndexList(bob0.identity, opts.keyIndexListForBob)
+		: undefined
 	const extra = opts.extraRemote
 		? await remoteDevice(
 				opts.extraRemote.jid,
@@ -178,6 +219,7 @@ export async function world(
 							: mine
 								? [{ id: '0' }, { id: '23', 'key-index': '2' }]
 								: [{ id: '0' }, { id: '1', 'key-index': '1' }]
+					const keyIndexList = jid === bob0.jid ? keyIndexListForBob : undefined
 					return {
 						tag: 'user',
 						attrs: { jid },
@@ -191,6 +233,9 @@ export async function world(
 										attrs: {},
 										content: devs.map((a) => ({ tag: 'device', attrs: a })),
 									},
+									...(keyIndexList
+										? [{ tag: 'key-index-list', attrs: {}, content: keyIndexList } as BinaryNode]
+										: []),
 								],
 							},
 						],

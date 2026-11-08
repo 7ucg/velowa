@@ -477,6 +477,42 @@ describe('Sender: device-identity verification', () => {
 	})
 })
 
+describe('Sender: key-index-list verification', () => {
+	const bobBare = '4915611111111@s.whatsapp.net'
+
+	it('filters out a companion device whose key-index the verified list no longer accepts', async () => {
+		const { sender } = await world({
+			bob0DeviceIdentity: (identity) => signedDeviceIdentity(identity, identity),
+			// bob1's hardcoded key-index ('1') is neither in validIndexes nor newer than currentIndex.
+			keyIndexListForBob: { currentIndex: 5, validIndexes: [] },
+		})
+		// First send establishes sessions, verifying bob0's device-identity and anchoring bob's trust.
+		await sender.sendText(bobBare, 'first')
+		const devices = await sender.getDevices([bobBare])
+		expect(devices.map((d) => d.jid)).toEqual([bobBare]) // bob0 (id 0) kept, bob1 (id 1) filtered out
+	})
+
+	it('keeps a companion device whose key-index the verified list still accepts', async () => {
+		const { sender, bob1 } = await world({
+			bob0DeviceIdentity: (identity) => signedDeviceIdentity(identity, identity),
+			keyIndexListForBob: { currentIndex: 1, validIndexes: [1] },
+		})
+		await sender.sendText(bobBare, 'first')
+		const devices = await sender.getDevices([bobBare])
+		expect(devices.map((d) => d.jid).sort()).toEqual([bobBare, bob1.jid].sort())
+	})
+
+	it('does not filter at all before any trust anchor has been established', async () => {
+		const { sender, bob1 } = await world({
+			keyIndexListForBob: { currentIndex: 5, validIndexes: [] },
+		})
+		// No bob0DeviceIdentity this time: assertSessions never verifies an anchor for bob, so getDevices
+		// has nothing to check the list against and must not reject bob1 on that basis alone.
+		const devices = await sender.getDevices([bobBare])
+		expect(devices.map((d) => d.jid)).toContain(bob1.jid)
+	})
+})
+
 describe('Sender: peer messages', () => {
 	it('sends a flat enc to our own phone (device 0) as category=peer, wrapped as deviceSentMessage', async () => {
 		const { sender, stanzas, phone } = await world()

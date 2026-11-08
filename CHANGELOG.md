@@ -1,6 +1,18 @@
 # Changelog
 
 ## Unreleased
+- Fixed (security): `getDevices()` trusted a non-primary device's bare `key-index` attribute at face value.
+  The server also sends a signed `<key-index-list>` (`ADVSignedKeyIndexList`) naming which indexes the account
+  actually considers valid; once `assertSessions` has verified a user's primary device at least once this
+  session (the same trust anchor the ADV identity check already establishes), that list is now verified and a
+  device whose `key-index` it doesn't accept - e.g. a relay replaying a revoked device's stale record - is
+  filtered out instead of trusted on the server's word alone. No anchor yet (never-verified account) means no
+  list to check against - unverified, not rejected, same as the ADV check's own first-contact behavior.
+- Fixed: a structural history-sync event (group created/renamed/participant changed, ... from before this
+  device's last sync) arrives as a stub (`messageStubType`/`messageStubParameters`) instead of a real message,
+  and `parseHistory` silently dropped both fields - the event vanished entirely, not just undecoded.
+  `HistoryMessage` now carries `stubType`/`stubParameters`; `decodeGroupStubParticipant` reads one
+  `GROUP_PARTICIPANT_*` parameter (Baileys' JSON-participant convention).
 - Fixed: `updateProfileName` synced the new name via app state and remembered it locally, but never sent WA
   Web's own immediate `<presence name="...">` (`WAWebPushNameBridge`'s first step) - the rename could take a
   while to show up anywhere, or not at all if the app-state sync itself failed.

@@ -7,7 +7,7 @@ import type { BinaryNode } from '../codec/index.js'
 import type { SignalCipher, SignalStorage } from '../crypto/signal.js'
 import { jidDecode, signalAddress, signalAddressString } from '../jid.js'
 import type { ProtocolLogger } from '../logging/protocol-logger.js'
-import { validateAdvDeviceIdentity } from './adv.js'
+import { isKeyIndexValid, validateAdvDeviceIdentity, verifyKeyIndexList } from './adv.js'
 import { encodeProto } from './proto.js'
 import type { TcTokens } from './features/contact/tctoken.js'
 import type { LidMap } from './lid-map.js'
@@ -119,6 +119,10 @@ export class Sender {
 	>()
 	/** phone-number user -> LID user, learned from usync, so an answer from either identity counts as the same person. */
 	readonly #lidAlias = new Map<string, string>()
+	/** Each user's primary device identity key, once an `assertSessions` ADV check has verified it: the
+	 * trust anchor `getDevices` needs to verify that same user's `<key-index-list>`. Session-lifetime only -
+	 * empty at startup, so key-index-list verification is skipped (not rejected) until it is populated. */
+	readonly #primaryIdentities = new Map<string, Uint8Array>()
 	/** Resends done per message+device (we do not trust the count in the receipt). */
 	readonly #resends = new Map<string, number>()
 	/** Per-chat resend token bucket (aggregate anti-abuse cap); see `RESEND_BUCKET_BURST`. */
@@ -438,14 +442,28 @@ export class Sender {
 				this.#lidAlias.set(u, jidDecode(lid).user)
 				this.d.lids.set(jid, lid)
 			}
-			const deviceList = children(
-				children(children(user, 'devices')[0] ?? user, 'device-list')[0] ?? user,
-				'device',
-			)
+			const devicesNode = children(user, 'devices')[0] ?? user
+			const deviceList = children(children(devicesNode, 'device-list')[0] ?? devicesNode, 'device')
+			// The server attaches a bare key-index attribute per device, but that alone proves nothing; a
+			// <key-index-list> (present once we have a verified primary identity to check it against) says
+			// which indexes the account actually signed off on. No anchor yet (this session hasn't verified
+			// this user's primary device) means no list to check - proceed unverified, same as a first contact.
+			const keyIndexBytes = children(devicesNode, 'key-index-list')[0]?.content
+			const anchor = this.#primaryIdentities.get(u)
+			const decodedKeyIndex =
+				anchor && keyIndexBytes instanceof Uint8Array
+					? verifyKeyIndexList(keyIndexBytes, anchor)
+					: undefined
 			for (const dev of deviceList) {
 				const device = Number(dev.attrs['id'])
 				// Non-zero devices must carry a key-index, otherwise the server rejects the fan-out.
 				if (device !== 0 && !dev.attrs['key-index']) continue
+				if (
+					device !== 0 &&
+					decodedKeyIndex &&
+					!isKeyIndexValid(Number(dev.attrs['key-index']), decodedKeyIndex)
+				)
+					continue
 				// Cloud-API "hosted" devices (id 99) have no Signal keys to fan out to.
 				if (device === 99) continue
 				const isThisDevice = (u === me.user || u === meLidUser) && device === me.device
@@ -510,7 +528,12 @@ export class Sender {
 					continue
 				}
 				if (result === 'no-account-key') this.d.logger.event('send.adv-unverified', { jid })
-				else if (device === 0) primaryAnchor.set(u, bundle.identityKey)
+				else if (device === 0) {
+					primaryAnchor.set(u, bundle.identityKey)
+					// Kept beyond this one batch: it is also the trust anchor getDevices needs to verify
+					// that user's <key-index-list> on a later, independent usync.
+					this.#primaryIdentities.set(u, bundle.identityKey)
+				}
 			}
 			const a = this.addr(jid)
 			await this.d.cipher.processPreKeyBundle(a.name, a.device, bundle)

@@ -81,3 +81,56 @@ export function validateAdvDeviceIdentity(
 	if (!xeddsaVerify(fetchedIdentityKey, deviceMsg, account.deviceSignature)) return 'invalid'
 	return 'valid'
 }
+
+const KEY_INDEX_SIG_PREFIX = Buffer.from([6, 2])
+
+export interface DecodedKeyIndex {
+	currentIndex: number
+	validIndexes: number[]
+}
+
+/**
+ * Decode and verify a usync response's `<key-index-list>` (`ADVSignedKeyIndexList`, WA Web
+ * `WAWebAdvKeyIndexSignatureVerify`): signed by the account's primary identity over `[6, 2] + details`.
+ * The server attaches a bare `key-index` attribute to every non-primary device in a device list, but
+ * that attribute alone proves nothing - this signed list is what actually says which indexes the account
+ * currently considers valid (see `isKeyIndexValid`), so a device with a `key-index` the account never
+ * signed (e.g. a relay replaying a revoked device's old record) gets filtered out instead of trusted.
+ * Returns `undefined` on a malformed blob or a signature that does not verify against `accountIdentity`.
+ */
+export function verifyKeyIndexList(
+	signedBytes: Uint8Array,
+	accountIdentity: Uint8Array,
+): DecodedKeyIndex | undefined {
+	let signed: { details?: Buffer; accountSignature?: Buffer }
+	try {
+		const t = T('ADVSignedKeyIndexList')
+		signed = t.toObject(t.decode(signedBytes), { bytes: Buffer, defaults: true })
+	} catch {
+		return undefined
+	}
+	if (!signed.details || !signed.accountSignature) return undefined
+	const msg = Buffer.concat([KEY_INDEX_SIG_PREFIX, signed.details])
+	if (!xeddsaVerify(accountIdentity, msg, signed.accountSignature)) return undefined
+	try {
+		const t = T('ADVKeyIndexList')
+		const decoded = t.toObject(t.decode(signed.details), { defaults: true }) as {
+			currentIndex?: number
+			validIndexes?: number[]
+		}
+		return { currentIndex: decoded.currentIndex ?? 0, validIndexes: decoded.validIndexes ?? [] }
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * Whether a device's `key-index` is accepted by a verified `<key-index-list>`: either it is one of the
+ * indexes the account's signed list names as currently valid, or it is newer than that list's own
+ * `currentIndex` (a device the account added after the list was signed - provisionally trusted until a
+ * fresher list arrives, matching WA Web's own `AdvDeviceNotificationApi` rule). The primary device (id 0)
+ * is never subject to this check; callers must keep it unconditionally.
+ */
+export const isKeyIndexValid = (keyIndex: number | undefined, decoded: DecodedKeyIndex): boolean =>
+	keyIndex !== undefined &&
+	(decoded.validIndexes.includes(keyIndex) || keyIndex > decoded.currentIndex)
