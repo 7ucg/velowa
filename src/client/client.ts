@@ -68,6 +68,7 @@ import type { PresenceEvent, ReceiptEvent } from './features/message/events.js'
 import * as business from './features/contact/business.js'
 import { Communities } from './features/community/communities.js'
 import { LidMap } from './lid-map.js'
+import { jidDecode } from '../jid.js'
 import {
 	companionFinish,
 	companionHello,
@@ -3314,10 +3315,24 @@ export class Client {
 					const c = parseContactsNotification(node)
 					if (c) {
 						// Mirrors WA Web's WAWebDBCreateLidPnMappings: a number change with both LID forms known
-						// pairs up the old and new identities, not just the new one.
+						// pairs up the old and new identities, not just the new one - but only when neither
+						// pairing conflicts with one we already trust. This notification is one of the least
+						// authoritative sources of a mapping (wacore's own learning policy seeds only genuinely
+						// unseen LIDs for it and defers a conflict to a live usync instead of overwriting), so a
+						// claim that disagrees with what we already have is dropped rather than applied blind.
 						if (c.action === 'number-changed' && c.oldLid && c.newLid) {
-							lids.set(c.oldJid, c.oldLid)
-							lids.set(c.newJid, c.newLid)
+							const agrees = (pnJid: string, lidJid: string): boolean => {
+								try {
+									const cur = lids.lidUser(jidDecode(pnJid).user)
+									return !cur || cur === jidDecode(lidJid).user
+								} catch {
+									return false
+								}
+							}
+							if (agrees(c.oldJid, c.oldLid) && agrees(c.newJid, c.newLid)) {
+								lids.set(c.oldJid, c.oldLid)
+								lids.set(c.newJid, c.newLid)
+							}
 						}
 						this.#events.emit('contact.change', c)
 					}

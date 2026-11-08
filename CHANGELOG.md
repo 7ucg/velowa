@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Fixed (security): a `contacts` `modify` notification's LID/PN mapping was applied unconditionally,
+  letting the least-authoritative source of a mapping overwrite one already trusted from a more reliable
+  one (e.g. a live usync lookup). Mirrors wacore's own learning policy for this exact notification source:
+  a claim is applied only when it doesn't conflict with what is already cached, never as a blind overwrite.
 - Added: six events for server notifications that previously only reached the generic `notification`
   passthrough (parseable, but unparsed) - `identity.changed` (a contact's security code changed; the
   session-clearing logic already existed, it just never told the app), `contact.picture`, `contact.about`,
