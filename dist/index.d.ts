@@ -279,6 +279,16 @@ declare function startXxHandshake(staticPrivate: Uint8Array, staticPublic: Uint8
 /** The 4-byte connection header, sent once in front of the first frame. */
 declare function connHeader(): Uint8Array;
 
+/**
+ * `SignalStorage` plus a way to forget one session: used when a peer's primary device is known to have
+ * been re-issued a fresh identity (`<notification type="encrypt"><identity/></notification>`) and the old
+ * session must not be reused. Rust/WASM never calls this - the Signal core is stateless per call and asks
+ * `loadSession` fresh every time (`rust/wasm-bridge/src/signal.rs`), so removing the record here is enough
+ * to make the next `hasSession`/`processPreKeyBundle` rebuild it.
+ */
+interface RemovableSignalStorage extends SignalStorage {
+    removeSession(name: string, device: number): Promise<void>;
+}
 interface IdentityKeys {
     publicKey: Uint8Array;
     privateKey: Uint8Array;
@@ -304,7 +314,7 @@ declare function newPreKeys(start: number, count: number): GeneratedPreKey[];
  */
 declare function createSignalCipher(storage: SignalStorage): SignalCipher;
 /** Volatile storage: fine for tests and throwaway sessions, never for a real account. */
-declare class MemorySignalStorage implements SignalStorage {
+declare class MemorySignalStorage implements RemovableSignalStorage {
     #private;
     private readonly identity;
     private readonly registrationId;
@@ -315,6 +325,7 @@ declare class MemorySignalStorage implements SignalStorage {
     saveIdentity(name: string, device: number, key: Uint8Array): Promise<void>;
     loadSession(name: string, device: number): Promise<Uint8Array<ArrayBufferLike> | undefined>;
     storeSession(name: string, device: number, record: Uint8Array): Promise<void>;
+    removeSession(name: string, device: number): Promise<void>;
     loadPreKey(id: number): Promise<Uint8Array<ArrayBufferLike> | undefined>;
     storePreKey(id: number, record: Uint8Array): Promise<void>;
     removePreKey(id: number): Promise<void>;
@@ -601,6 +612,23 @@ interface GroupNotification {
     participants?: string[];
     subject?: string;
     description?: string;
+    /** `subject` only: the renamer, when it differs from `actor` (LID-addressed group) - and their PN/username alias. */
+    subjectOwner?: string;
+    subjectOwnerPn?: string;
+    subjectOwnerUsername?: string;
+    subjectTime?: number;
+    /** `locked` only: `undefined` means "all admins", a number of days is a time-boxed lock. */
+    threshold?: string;
+    /** `ephemeral` / `growth_locked` only: seconds until messages disappear, or until invite links reopen. */
+    expiration?: number;
+    /** `ephemeral` only: who/what set it off, when the server says. */
+    trigger?: number;
+    /** `growth_locked` only: why invite links are unavailable. */
+    lockType?: string;
+    /** `membership_approval_request` / `created_membership_requests` only: how the join was requested. */
+    requestMethod?: string;
+    /** `membership_approval_request` / `created_membership_requests` only: the community this group belongs to. */
+    parentGroupJid?: string;
 }
 
 interface DecodedMessage {
@@ -618,6 +646,16 @@ interface DecodedMessage {
     message: Record<string, unknown>;
 }
 
+/** Which kind of client a message id's own shape (length and prefix) says generated it. */
+type MessageIdDevice = 'ios' | 'web' | 'android' | 'desktop' | 'api';
+/**
+ * Guess which client sent a message from its id's shape alone: iOS (`3A` + 18 = 20 chars), Web (`3E` + 20 =
+ * 22 chars, what `generateMessageId` itself produces), Android (21 or 32 chars, any prefix), Desktop
+ * (starts `3F`, or exactly 18 chars), else an API/bot client (Baileys, velowa itself when not using the
+ * `3EB0` shape, business API, ...). Checked in this order, so a 21-char id starting `3F` reads as Android,
+ * not Desktop.
+ */
+declare function deviceOf(id?: string): MessageIdDevice;
 /** Extras for one outgoing message. */
 interface SendOptions {
     /** Extra attributes on the `<message>` stanza, e.g. `{ edit: '1' }` for an edit, `{ edit: '7' }` for a revoke. */
@@ -1086,6 +1124,9 @@ interface BlockOptions {
 type PrivacyCategory = 'last' | 'online' | 'profile' | 'status' | 'groupadd' | 'readreceipts' | 'calladd' | 'messages' | 'stickers' | 'about';
 type PrivacyValue = 'all' | 'contacts' | 'contact_blacklist' | 'none' | 'match_last_seen';
 
+/** `V3` is phone-number based (what the app calls it for a PN contact), `V4` is LID based. Never compare the two. */
+type SecurityCodeVersion = 'V3' | 'V4';
+
 interface CallEvent {
     /** `offer`, `terminate`, `reject`, `accept`, `timeout`, ... (the call stanza's first child). */
     status: string;
@@ -1256,6 +1297,37 @@ interface Product {
     isHidden: boolean;
     imageUrls: string[];
 }
+interface OrderProduct {
+    id?: string;
+    name?: string;
+    /** Amount in thousandths of the currency unit (as WhatsApp sends it), and its ISO 4217 code. */
+    price?: {
+        amount1000: number;
+        currency: string;
+    };
+    quantity?: number;
+    imageUrls: string[];
+    /** The variant the customer chose (size, colour, ...); empty for a product with no variants. */
+    variantProperties: {
+        name?: string;
+        value?: string;
+    }[];
+}
+interface Order {
+    products: OrderProduct[];
+    priceDetails?: {
+        subtotal?: {
+            amount1000: number;
+            currency: string;
+        };
+        total?: {
+            amount1000: number;
+            currency: string;
+        };
+    };
+    /** Unix seconds, as sent. */
+    creationTimestamp?: number;
+}
 
 interface LinkedGroup {
     id: string;
@@ -1337,6 +1409,31 @@ interface HistoryMessage {
     message?: Record<string, unknown>;
     timestamp?: number;
     pushName?: string;
+    /**
+     * A structural event (group created/renamed/participant changed, ...) from before this device last
+     * synced, carried as a stub instead of a real message - `message` is absent for these. The enum name
+     * (e.g. `"GROUP_PARTICIPANT_ADD"`), matching `WebMessageInfo.StubType`. For the `GROUP_PARTICIPANT_*`
+     * family, `decodeGroupStubParticipant` reads each of `stubParameters`.
+     */
+    stubType?: string;
+    stubParameters?: string[];
+    /** Per-recipient delivered/read/played timestamps and pending/delivered device lists. */
+    userReceipts?: HistoryUserReceipt[];
+    /** Present when this message was sent via WhatsApp's "schedule a message" feature. */
+    scheduledMessage?: HistoryScheduledMessage;
+}
+interface HistoryUserReceipt {
+    userJid: string;
+    receiptTimestamp?: number;
+    readTimestamp?: number;
+    playedTimestamp?: number;
+    pendingDeviceJid?: string[];
+    deliveredDeviceJid?: string[];
+}
+interface HistoryScheduledMessage {
+    revealKeyId?: string;
+    revealKey?: Uint8Array;
+    scheduledTime?: number;
 }
 interface HistoryChat {
     id: string;
@@ -1363,6 +1460,12 @@ interface HistoryChunk {
         lid: string;
         pn: string;
     }[];
+    /** NCT salt (`storeNctSaltFromHistorySync`): keys the `cstoken` privacy-token fallback (`tctoken.ts`). */
+    nctSalt?: Uint8Array;
+    /** Wallpaper, auto-download, notification-preview and other account-wide settings, decoded as-is. */
+    globalSettings?: Record<string, unknown>;
+    /** Call history, decoded as-is (`CallLogRecord`: callResult, duration, isVideo, participants, ...). */
+    callLogRecords?: Record<string, unknown>[];
 }
 
 interface NewsletterMetadata {
@@ -1527,6 +1630,23 @@ interface ChannelStatusEvent {
         count: number;
     }[];
 }
+interface NewsletterLiveUpdateMessage {
+    serverId: number;
+    forwardsCount?: number;
+    reactions?: {
+        code: string;
+        count: number;
+    }[];
+    /** Hex SHA-256 of the voted option's text, matching `pollOptionHash` elsewhere in this client. */
+    votes?: {
+        optionHash: string;
+        count: number;
+    }[];
+}
+interface NewsletterLiveUpdate {
+    newsletter: string;
+    messages: NewsletterLiveUpdateMessage[];
+}
 
 type UsernameSource = 'FB' | 'IG' | 'USER_INPUT' | 'SUGGESTION';
 type UsernameCheck = {
@@ -1559,6 +1679,73 @@ declare class Usernames {
     /** Set (or with `null` clear) the 4-digit PIN others need to message you by username. */
     setPin: (pin: string | null) => Promise<unknown>;
 }
+
+interface PictureUpdate {
+    jid: string;
+    author?: string;
+    removed: boolean;
+    pictureId?: string;
+    timestamp?: number;
+}
+interface AboutUpdate {
+    jid: string;
+    status: string;
+    timestamp?: number;
+}
+interface DisappearingModeChanged {
+    jid: string;
+    duration: number;
+    settingTimestamp: number;
+}
+type ContactChange = {
+    action: 'update';
+    jid: string;
+    timestamp?: number;
+} | {
+    action: 'number-changed';
+    oldJid: string;
+    newJid: string;
+    oldLid?: string;
+    newLid?: string;
+    timestamp?: number;
+} | {
+    action: 'sync-requested';
+    after?: number;
+    timestamp?: number;
+};
+
+interface FakeChatDetected {
+    /** The other party (never a group - there is no single sender to blame there). */
+    jid: string;
+    /** The receipt's ids that don't match anything we sent. */
+    ids: string[];
+    /** The receipt's own type (`delivery`, `read`, `played`, ...). */
+    type: string;
+}
+interface FakeMsg {
+    message: Record<string, unknown>;
+    opts: {
+        messageId: string;
+    };
+}
+/**
+ * Build a message that spoofs the `deviceSentMessage` envelope `onOwnDeviceSent`'s own-account check
+ * exists to reject (see `receiver.ts`): it claims to be our own account fanning a send - originally
+ * addressed to `jid` - out to its other devices, when really it's whichever account sends it.
+ *
+ * This is a test tool for the `fake-chat` defense, not an attack on anyone: send the result from an
+ * account that is *not* the target's own, against a target whose velowa instance you control, e.g.
+ *
+ * ```ts
+ * const fake = getFakeMsg(someJid, 'hi, pretending to be your own device')
+ * await attackerClient.sendMessage(targetJid, fake.message, fake.opts)
+ * ```
+ *
+ * A correctly-defended target ignores this (the envelope shape alone is never trusted - only the
+ * envelope's actual, unspoofable sender matters) and its id never joins its own `SentMessageIds`, so a
+ * later receipt for the same id (see `detectFakeChat`) still gets flagged rather than waved through.
+ */
+declare function getFakeMsg(jid: string, msg: string | Record<string, unknown>): FakeMsg;
 
 interface TrustedDevice {
     device_id?: string;
@@ -1617,6 +1804,26 @@ interface StickerInput {
     accessibilityLabel?: string;
 }
 
+/** Pack attribution a sticker carries so WhatsApp shows "Added by X" and groups it under its pack. */
+interface StickerMetadata {
+    /** A random UUID is generated if omitted. */
+    packId?: string;
+    packName: string;
+    publisher: string;
+    emojis?: string[];
+    androidAppStoreLink?: string;
+    iosAppStoreLink?: string;
+}
+/**
+ * Attach pack attribution to a WebP sticker, so the real app shows "Added by X" and groups it under its pack.
+ * Upgrades a simple (non-extended) WebP to the extended format it needs to carry EXIF; an already-extended one
+ * (e.g. animated, or with alpha) keeps its other chunks and just gets the EXIF bit set and the chunk placed
+ * where the format requires it. Any pre-existing sticker metadata is replaced, not merged.
+ */
+declare function addStickerMetadata(webp: Uint8Array, metadata: StickerMetadata): Uint8Array;
+/** Read a WebP sticker's pack attribution, if it carries any. */
+declare function getStickerMetadata(webp: Uint8Array): StickerMetadata | undefined;
+
 interface BotEntry {
     jid: string;
     personaId: string;
@@ -1639,6 +1846,22 @@ interface BotDirectory {
     sections: BotSection[];
     /** Every bot of every section, the default one first if no section holds it. */
     bots: BotEntry[];
+}
+interface BotProfile {
+    jid: string;
+    personaId?: string;
+    name?: string;
+    attributes?: string;
+    description?: string;
+    category?: string;
+    isDefault: boolean;
+    /** `${emoji} ${text}` suggested conversation starters, as the directory shows them. */
+    prompts: string[];
+    commands: {
+        name: string;
+        description: string;
+    }[];
+    commandsDescription?: string;
 }
 
 interface AbProps {
@@ -2510,6 +2733,13 @@ interface ClientOptions {
      * media again. Turn it off to handle `message.undecryptable` yourself.
      */
     autoRecover?: boolean;
+    /**
+     * Extra hostnames `downloadMedia` may also fetch from, tried after the official host once a message's
+     * `directPath`/`url` is on it (e.g. a self-hosted relay mirroring WhatsApp's media CDN). Each one is used
+     * verbatim, with the same HTTPS-only, no-credentials, no-custom-port checks as the official host - this
+     * does not relax those checks, it only widens which exact hostnames may be tried.
+     */
+    additionalMediaHosts?: string[];
 }
 /**
  * The connection in one event: where it is (`state`) and what just happened. `qr` and `pairingCode` appear while
@@ -2597,6 +2827,23 @@ type ClientEvents = {
         type: string;
         node: BinaryNode;
     };
+    /** A contact's security code changed (they reinstalled WhatsApp or linked a new primary device). */
+    'identity.changed': {
+        jid: string;
+    };
+    /** A contact's profile photo changed, or was removed. */
+    'contact.picture': PictureUpdate;
+    /** A contact's About/status text changed. */
+    'contact.about': AboutUpdate;
+    /** A contact changed their default disappearing-messages timer. */
+    'contact.disappearing-mode': DisappearingModeChanged;
+    /** A contact's profile changed, their phone number changed, or the server asks for a full re-sync. */
+    'contact.change': ContactChange;
+    /** Live counters (forwards, reactions, poll votes) for recent channel posts. */
+    'newsletter.live-update': NewsletterLiveUpdate;
+    /** A delivery/read/played receipt named a message id we never sent - a known scam technique: a
+     * fabricated tick staged to make a conversation look more credible than it is. */
+    'fake-chat': FakeChatDetected;
 };
 declare class Client {
     #private;
@@ -2639,19 +2886,35 @@ declare class Client {
     mex: <T = unknown>(queryId: string, variables: unknown, dataPath?: string) => Promise<T>;
     /** Send a raw WAProto `Message` object. */
     sendMessage(to: string, message: Record<string, unknown>, opts?: SendOptions): Promise<string>;
+    /**
+     * Inject a message into this client's own `message` event exactly as if it had really arrived from
+     * `from` - entirely local, no network traffic, nothing sent or received for real. Ported from a known
+     * WhatsApp mod feature ("Fake real-time chat"/"Modify Chat"): type something yourself and have your
+     * own chat view show it as if the other person sent it. The result needs no special handling on your
+     * side - a genuinely received message already reads as `fromMe: false` by default (see `serialize()`),
+     * so building and emitting a normal-looking incoming message is the entire trick.
+     *
+     * Not for groups, same restriction the original mod enforces: a fabricated `participant` can collide
+     * with real membership-list validation if this ever gets mixed into real group state.
+     */
+    simulateIncomingMessage(from: string, content: string | Record<string, unknown>): DecodedMessage;
     /** React to a message with an emoji (empty string removes the reaction). */
     react(key: MessageKey, emoji: string): Promise<string>;
     /** Edit the text of one of our own messages. */
     edit(key: MessageKey, newText: string): Promise<string>;
     /** Delete a message for everyone. */
     revoke(key: MessageKey): Promise<string>;
-    /** Encrypt, upload and send an image / video / audio / document / sticker. */
-    sendMedia(to: string, type: MediaType, data: Uint8Array, opts?: MediaOptions & TextOptions): Promise<string>;
-    sendImage: (to: string, data: Uint8Array, opts?: MediaOptions & TextOptions) => Promise<string>;
-    sendVideo: (to: string, data: Uint8Array, opts?: MediaOptions & TextOptions) => Promise<string>;
-    sendAudio: (to: string, data: Uint8Array, opts?: MediaOptions & TextOptions) => Promise<string>;
-    sendDocument: (to: string, data: Uint8Array, opts?: MediaOptions & TextOptions) => Promise<string>;
-    sendSticker: (to: string, data: Uint8Array, opts?: MediaOptions & TextOptions) => Promise<string>;
+    /** Encrypt, upload and send an image / video / audio / document / sticker. `data` is bytes, a local path
+     * (`{ path }`), an `http(s)` URL (`{ url }`) or a stream (`{ stream }`); see `MediaSource`. */
+    sendMedia(to: string, type: MediaType, data: MediaSource, opts?: MediaOptions & TextOptions): Promise<string>;
+    sendImage: (to: string, data: MediaSource, opts?: MediaOptions & TextOptions) => Promise<string>;
+    sendVideo: (to: string, data: MediaSource, opts?: MediaOptions & TextOptions) => Promise<string>;
+    sendAudio: (to: string, data: MediaSource, opts?: MediaOptions & TextOptions) => Promise<string>;
+    sendDocument: (to: string, data: MediaSource, opts?: MediaOptions & TextOptions) => Promise<string>;
+    /** `stickerMetadata` embeds pack attribution (WhatsApp's own EXIF convention) so the app shows "Added by X". */
+    sendSticker(to: string, data: MediaSource, opts?: MediaOptions & TextOptions & {
+        stickerMetadata?: StickerMetadata;
+    }): Promise<string>;
     /** Download and decrypt the media of a received message (`event.message`). */
     downloadMedia(message: Record<string, unknown>, opts?: {
         key?: MessageKey;
@@ -2663,11 +2926,13 @@ declare class Client {
     sendStickerPack(to: string, pack: {
         name: string;
         publisher: string;
-        stickers: StickerInput[];
+        stickers: (Omit<StickerInput, 'data'> & {
+            data: MediaSource;
+        })[];
         /** WebP cover (the pack's tray icon). */
-        cover: Uint8Array;
+        cover: MediaSource;
         /** JPEG preview shown in the chat. */
-        thumbnail: Uint8Array;
+        thumbnail: MediaSource;
         packId?: string;
         description?: string;
         caption?: string;
@@ -2734,6 +2999,8 @@ declare class Client {
     serverTime: () => number;
     /** The AI bots WhatsApp offers this account (Meta AI and others), by section. */
     listBots: () => Promise<BotDirectory>;
+    /** One bot's own profile: name/description/category, suggested prompts and slash commands (`BotEntry.personaId`). */
+    fetchBotProfile(jid: string, personaId: string): Promise<BotProfile | undefined>;
     /** Group management: `client.groups.create(...)`, `.updateParticipants(...)`, `.metadata(...)`, ... */
     readonly groups: Groups;
     /** Archive / unarchive a chat on all devices. */
@@ -2766,7 +3033,11 @@ declare class Client {
         fullName?: string;
         firstName?: string;
     } | null) => Promise<void>;
-    /** Change the account's display name (push name). */
+    /**
+     * Change the account's display name (push name): announces it to the server right away
+     * (`<presence name="...">`, as WA Web's `WAWebPushNameBridge` does), syncs it to app state so other
+     * devices see it too, and remembers it locally for presence stanzas this client builds afterward.
+     */
     updateProfileName(name: string): Promise<void>;
     addLabel: (l: Parameters<typeof addLabel>[0]) => Promise<void>;
     labelChat: (jid: string, labelId: string, labeled?: boolean) => Promise<void>;
@@ -2805,6 +3076,17 @@ declare class Client {
         pn: string;
         lid: string;
     }[]>;
+    /**
+     * The 60-digit numeric security code WhatsApp Web shows for comparing your and `peerJid`'s complete
+     * identity-key sets out of band (the idea behind Signal's safety number): read the same digits off both
+     * devices and compare them by some channel other than this connection to catch a swapped identity
+     * independently of the server - a check `assertSessions`'s own ADV verification cannot make, since that
+     * trusts the server's signed chain in the first place. `version` (`V4`, LID-based, by default; `V3` is
+     * phone-number based) must match on both ends or the digits never agree. `peerJid` must be given in its
+     * phone-number form (LID resolution for the other side is looked up here). A point-in-time snapshot: wrong
+     * again once either side's identity or device list changes - recompute rather than cache it for long.
+     */
+    securityCode(peerJid: string, version?: SecurityCodeVersion): Promise<string>;
     profilePictureUrl: (jid: string, type?: "preview" | "image") => Promise<string | undefined>;
     /** Set our own "About" text. */
     updateProfileStatus: (text: string) => Promise<void>;
@@ -2829,6 +3111,11 @@ declare class Client {
         name?: string;
         products: Product[];
     }[]>;
+    /**
+     * Read a placed order's line items and totals. `jid`/`orderId`/`token` come from the `orderMessage` the
+     * customer's "Review and pay" tap sent (`.sellerJid`/`.orderId`/`.token`).
+     */
+    getOrder: (jid: string, orderId: string, token: string) => Promise<Order>;
     /** Buttons / list message (native flow). Build buttons with `quickReply`, `urlButton`, `singleSelect`, ... from the package. */
     sendInteractive(to: string, o: InteractiveOptions): Promise<string>;
     /** Who may see our statuses (the "Status privacy" screen). */
@@ -2866,6 +3153,24 @@ declare class Client {
         aiContent?: boolean;
         paidPartnership?: boolean;
     }, opts?: SendOptions): Promise<{
+        id: string;
+        serverId?: string;
+    }>;
+    /**
+     * Post a channel status (shows in followers' Status tray, distinct from `postToChannel`'s permanent
+     * feed post).
+     */
+    postChannelStatus(channel: string, text: string, opts?: SendOptions): Promise<{
+        id: string;
+        serverId?: string;
+    }>;
+    /**
+     * Post an image/video/audio channel status. Uploads to the same `/newsletter/newsletter-image`-style
+     * path `sendMedia` uses for normal channel posts, but with `media_id`/`server_thumb_gen` on the query
+     * string - that's what makes the server's response carry a `handle`, which becomes the `<status>`
+     * stanza's own `media_id` attribute (confirmed against WA Web's own upload).
+     */
+    postChannelStatusMedia(channel: string, type: MediaType, data: MediaSource, opts?: MediaOptions & SendOptions): Promise<{
         id: string;
         serverId?: string;
     }>;
@@ -2928,6 +3233,14 @@ declare class Client {
         group?: string;
         video?: boolean;
     } & GroupMediaOptions & CallFileOptions): Promise<CallState>;
+    /**
+     * Invite a user who is not yet in this group call's roster. The current roster travels with the offer, as
+     * the app does, so the invitee is admitted straight into the live call rather than just answering this one
+     * device's offer. Use `ringParticipant` for someone already in the roster but disconnected.
+     */
+    inviteParticipant(callId: string, target: string): Promise<void>;
+    /** Re-ring a disconnected participant who is already in this group call's roster. */
+    ringParticipant(callId: string, target: string): Promise<void>;
     /**
      * Join a call link ("room"). When the creator wants to approve joiners the call waits in the waiting room
      * (`status` `ringing`, `waiting` true) and goes on once the creator lets us in.
@@ -3059,14 +3372,14 @@ declare class Client {
      * Channel poll or quiz whose options are images (`images[i]` belongs to `values[i]`). Like the phone, every option
      * image goes out first as its own post pointing at the poll's id, then the poll itself.
      */
-    sendImagePoll(to: string, name: string, values: string[], images: Uint8Array[], o?: {
+    sendImagePoll(to: string, name: string, values: string[], images: MediaSource[], o?: {
         correctAnswer?: string;
     }): Promise<string>;
     /** Send a question (the audience answers in a box). */
     sendQuestion(to: string, text: string): Promise<string>;
-    sendQuestionImage: (to: string, data: Uint8Array, question: string, opts?: MediaOptions) => Promise<string>;
+    sendQuestionImage: (to: string, data: MediaSource, question: string, opts?: MediaOptions) => Promise<string>;
     /** Send a video with a song attached (the app's "music" post; the video is what plays). */
-    sendMusic: (to: string, video: Uint8Array, music: MusicInfo, opts?: MediaOptions) => Promise<string>;
+    sendMusic: (to: string, video: MediaSource, music: MusicInfo, opts?: MediaOptions) => Promise<string>;
     sendLocation(to: string, latitude: number, longitude: number, o?: {
         name?: string;
         address?: string;
@@ -3079,8 +3392,10 @@ declare class Client {
     removeProfilePicture: (jid?: string) => Promise<void>;
     /** Remember the account's display name (used for presence). */
     setName(name: string): void;
-    /** Get presence updates for a contact. */
+    /** Get presence updates for a contact. Re-sent automatically after a reconnect (the server forgets it otherwise). */
     subscribePresence(jid: string): Promise<void>;
+    /** Stop getting presence updates for a contact subscribed to with `subscribePresence`. */
+    unsubscribePresence(jid: string): Promise<void>;
     /**
      * Log this device out of the account: tell WhatsApp to unlink it, then close. The phone shows the device gone from
      * "Linked devices". `deleteAuth` also erases the saved login (credentials, Signal keys, app-state) from `authDir`;
@@ -3253,4 +3568,4 @@ declare class MemoryStore {
     }[];
 }
 
-export { ANTIBAN_DEFAULTS, type AbProps, AntiBan, type AntiBanConfig, AntiBanError, AppStateCollection, type AppStateKeyLookup, type AppStateMac, type AppStateMutation, type AppStateResult, type AuthStore, type BinaryNode, type BotDirectory, type BotEntry, type BotSection, type BroadcastQuota, Browsers, type ButtonReply, type ButtonsOptions, type CallFileOptions, Client, type ClientEvents, type ClientOptions, type ConnectionUpdate, DEFAULT_HISTORY_SYNC, DEVICE_PROFILES, type DecryptedMessage, type EncryptedMessage, type EventOptions, type EventResponseType, FrameDecoder, GroupCache, type GroupInfo, HISTORY_SYNC_FLAGS, type HistorySyncFlag, type InteractiveOptions, type LinkPreview, type LinkPreviewOptions, type ListOptions, type ListSection, type Listener, type LocalAudioOptions, type MediaFileOptions, type MediaRetryResult, type MediaSource, MemoryAuthStore, MemorySignalStorage, MemoryStore, type Message, type MessageContent, type MessageKey, type NativeButton, NoiseTransport, NoiseXxHandshake, PLATFORM_TYPES, type PaymentRequestInput, type PlatformType, type PreKeyBundleInput, type ProductInput, ProtocolLogger, type ProtocolLoggerOptions, type Quoted, type QuotedMessage, RELEASE_CHANNELS, REPORT_FLOWS, type ReleaseChannel, type ReportOptions, ReportStore, type ReportedMessage, type RetentionOptions, type RichResponseOptions, Room, type RoomAdmit, type RoomEvents, type RoomOptions, type RoomPerson, type SendContentOptions, type SessionInfo, SignalCipher, type SignalStorage, type StickerInput, type TemplateOptions, type TextOptions, TypedEmitter, USER_AGENT_PLATFORMS, type Unsubscribe, type UserAgentPlatform, type VideoFileOptions, WAM_EVENTS, WAM_GLOBALS, WEB_SUB_PLATFORMS, type WamEvent, type WamValue, type WebSubPlatform, areJidsSameUser, buildReport, callButton, compressSession, connHeader, copyButton, createSignalCipher, decodeAudioFile, decodeNode, decodeVideoFile, deviceProfile, encodeFrame, encodeNode, encodeWam, fetchLinkPreview, findUrl, getContentType, isGroupAdmin, isJidBroadcast, isJidGroup, isJidNewsletter, isJidStatusBroadcast, isJidUser, isLidUser, isMe, jidDecode, jidEncode, jidNormalizedUser, linkPreviewMessage, listSessions, messageText, migrateFlatSessions, newAppStateCollection, newIdentityKeyPair, newPreKeys, newSignedPreKey, normalizeMessageContent, parseButtonReply, pollOptionHash, pruneSessions, quickReply, restoreAppStateCollection, richResponse, serialize, singleSelect, splitAnnexB, startXxHandshake, tokenizeCode, urlButton, vcardFor, writeWav };
+export { ANTIBAN_DEFAULTS, type AbProps, AntiBan, type AntiBanConfig, AntiBanError, AppStateCollection, type AppStateKeyLookup, type AppStateMac, type AppStateMutation, type AppStateResult, type AuthStore, type BinaryNode, type BotDirectory, type BotEntry, type BotProfile, type BotSection, type BroadcastQuota, Browsers, type ButtonReply, type ButtonsOptions, type CallFileOptions, Client, type ClientEvents, type ClientOptions, type ConnectionUpdate, DEFAULT_HISTORY_SYNC, DEVICE_PROFILES, type DecryptedMessage, type EncryptedMessage, type EventOptions, type EventResponseType, type FakeChatDetected, type FakeMsg, FrameDecoder, GroupCache, type GroupInfo, HISTORY_SYNC_FLAGS, type HistorySyncFlag, type InteractiveOptions, type LinkPreview, type LinkPreviewOptions, type ListOptions, type ListSection, type Listener, type LocalAudioOptions, type MediaFileOptions, type MediaRetryResult, type MediaSource, MemoryAuthStore, MemorySignalStorage, MemoryStore, type Message, type MessageContent, type MessageIdDevice, type MessageKey, type NativeButton, NoiseTransport, NoiseXxHandshake, type Order, type OrderProduct, PLATFORM_TYPES, type PaymentRequestInput, type PlatformType, type PreKeyBundleInput, type ProductInput, ProtocolLogger, type ProtocolLoggerOptions, type Quoted, type QuotedMessage, RELEASE_CHANNELS, REPORT_FLOWS, type ReleaseChannel, type ReportOptions, ReportStore, type ReportedMessage, type RetentionOptions, type RichResponseOptions, Room, type RoomAdmit, type RoomEvents, type RoomOptions, type RoomPerson, type SecurityCodeVersion, type SendContentOptions, type SessionInfo, SignalCipher, type SignalStorage, type StickerInput, type StickerMetadata, type TemplateOptions, type TextOptions, TypedEmitter, USER_AGENT_PLATFORMS, type Unsubscribe, type UserAgentPlatform, type VideoFileOptions, WAM_EVENTS, WAM_GLOBALS, WEB_SUB_PLATFORMS, type WamEvent, type WamValue, type WebSubPlatform, addStickerMetadata, areJidsSameUser, buildReport, callButton, compressSession, connHeader, copyButton, createSignalCipher, decodeAudioFile, decodeNode, decodeVideoFile, deviceOf, deviceProfile, encodeFrame, encodeNode, encodeWam, fetchLinkPreview, findUrl, getContentType, getFakeMsg, getStickerMetadata, isGroupAdmin, isJidBroadcast, isJidGroup, isJidNewsletter, isJidStatusBroadcast, isJidUser, isLidUser, isMe, jidDecode, jidEncode, jidNormalizedUser, linkPreviewMessage, listSessions, messageText, migrateFlatSessions, newAppStateCollection, newIdentityKeyPair, newPreKeys, newSignedPreKey, normalizeMessageContent, parseButtonReply, pollOptionHash, pruneSessions, quickReply, restoreAppStateCollection, richResponse, serialize, singleSelect, splitAnnexB, startXxHandshake, tokenizeCode, urlButton, vcardFor, writeWav };

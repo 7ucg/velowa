@@ -1354,6 +1354,10 @@ var MemorySignalStorage = class {
     this.#sessions.set(`${name}.${device}`, record.slice());
     return Promise.resolve();
   }
+  removeSession(name, device) {
+    this.#sessions.delete(`${name}.${device}`);
+    return Promise.resolve();
+  }
   loadPreKey(id) {
     return Promise.resolve(this.#preKeys.get(id));
   }
@@ -1407,8 +1411,8 @@ import https from "https";
 import { isIP } from "net";
 var URL_RE = /\bhttps?:\/\/[^\s<>"']+/i;
 var MAX_REDIRECTS = 4;
-function findUrl(text4) {
-  const m = URL_RE.exec(text4);
+function findUrl(text5) {
+  const m = URL_RE.exec(text5);
   return m?.[0].replace(/[.,;:!?)\]}]+$/, "");
 }
 function isPrivateAddress(ip) {
@@ -1580,8 +1584,8 @@ async function makeThumbnail(image, type, maxBytes) {
     return isJpeg && image.length <= maxBytes ? image : void 0;
   }
 }
-async function fetchLinkPreview(text4, opts = {}) {
-  const url = findUrl(text4);
+async function fetchLinkPreview(text5, opts = {}) {
+  const url = findUrl(text5);
   if (!url) return void 0;
   const o = { timeoutMs: 4e3, ...opts };
   let page;
@@ -1621,10 +1625,10 @@ async function fetchLinkPreview(text4, opts = {}) {
     ...jpegThumbnail && { jpegThumbnail }
   };
 }
-function linkPreviewMessage(text4, p) {
+function linkPreviewMessage(text5, p) {
   return {
     extendedTextMessage: {
-      text: text4,
+      text: text5,
       matchedText: p.matchedText,
       canonicalUrl: p.canonicalUrl,
       title: p.title,
@@ -2303,6 +2307,15 @@ function buildGroupEncRekey(params_json) {
   const ptr0 = passStringToWasm02(params_json, wasm2.__wbindgen_malloc, wasm2.__wbindgen_realloc);
   const len0 = WASM_VECTOR_LEN2;
   const ret = wasm2.buildGroupEncRekey(ptr0, len0);
+  if (ret[2]) {
+    throw takeFromExternrefTable02(ret[1]);
+  }
+  return takeFromExternrefTable02(ret[0]);
+}
+function buildGroupInviteOffer(params_json) {
+  const ptr0 = passStringToWasm02(params_json, wasm2.__wbindgen_malloc, wasm2.__wbindgen_realloc);
+  const len0 = WASM_VECTOR_LEN2;
+  const ret = wasm2.buildGroupInviteOffer(ptr0, len0);
   if (ret[2]) {
     throw takeFromExternrefTable02(ret[1]);
   }
@@ -3457,8 +3470,8 @@ function toXml(node, indent = "") {
   if (c === void 0) return `${indent}<${tag}${attrs}/>`;
   if (typeof c === "string") return `${indent}<${tag}${attrs}>${escapeXml(c)}</${tag}>`;
   if (c instanceof Uint8Array) {
-    const text4 = printable(c);
-    return `${indent}<${tag}${attrs}>${text4 !== void 0 && text4.length > 0 ? escapeXml(text4) : `{${c.length} bytes: ${Buffer.from(c).toString("hex")}}`}</${tag}>`;
+    const text5 = printable(c);
+    return `${indent}<${tag}${attrs}>${text5 !== void 0 && text5.length > 0 ? escapeXml(text5) : `{${c.length} bytes: ${Buffer.from(c).toString("hex")}}`}</${tag}>`;
   }
   return `${indent}<${tag}${attrs}>
 ${c.map((n) => toXml(n, indent + "  ")).join("\n")}
@@ -4001,10 +4014,1117 @@ var AntiBan = class {
     }
   }
   /** How long "typing..." should last for a text (about 40 ms per character, 600 ms to 4 s). */
-  typingMs(text4) {
-    return Math.min(4e3, Math.max(600, text4.length * 40)) * (0.8 + this.random() * 0.4);
+  typingMs(text5) {
+    return Math.min(4e3, Math.max(600, text5.length * 40)) * (0.8 + this.random() * 0.4);
   }
 };
+
+// src/client/sender.ts
+import { createHash as createHash3, randomBytes as randomBytes2 } from "crypto";
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync4, renameSync as renameSync3, writeFileSync as writeFileSync4 } from "fs";
+import { dirname as dirname2 } from "path";
+
+// src/client/adv.ts
+var ACCOUNT_SIG_PREFIX = Buffer.from([6, 0]);
+var DEVICE_SIG_PREFIX = Buffer.from([6, 1]);
+var HOSTED_ACCOUNT_SIG_PREFIX = Buffer.from([6, 5]);
+function validateAdvDeviceIdentity(deviceIdentityBytes, fetchedIdentityKey, accountKeyFallback) {
+  let account;
+  try {
+    const accType = protoType("ADVSignedDeviceIdentity");
+    account = accType.toObject(accType.decode(deviceIdentityBytes), {
+      bytes: Buffer,
+      defaults: true
+    });
+  } catch {
+    return "invalid";
+  }
+  if (!account.details || !account.accountSignature || !account.deviceSignature) return "invalid";
+  let deviceType;
+  try {
+    const idType = protoType("ADVDeviceIdentity");
+    const identity = idType.toObject(idType.decode(account.details), {
+      enums: Number,
+      defaults: true
+    });
+    deviceType = identity.deviceType;
+  } catch {
+    return "invalid";
+  }
+  const accountKey = account.accountSignatureKey && account.accountSignatureKey.length > 0 ? account.accountSignatureKey : accountKeyFallback;
+  if (!accountKey) return "no-account-key";
+  if (account.accountSignatureKey && account.accountSignatureKey.length > 0 && accountKeyFallback && !Buffer.from(accountKey).equals(Buffer.from(accountKeyFallback))) {
+    return "invalid";
+  }
+  const hostedType = protoRoot().lookupEnum("proto.ADVEncryptionType").values["HOSTED"];
+  const accountPrefix = deviceType === hostedType ? HOSTED_ACCOUNT_SIG_PREFIX : ACCOUNT_SIG_PREFIX;
+  const accountMsg = Buffer.concat([accountPrefix, account.details, fetchedIdentityKey]);
+  if (!xeddsaVerify(accountKey, accountMsg, account.accountSignature)) return "invalid";
+  const deviceMsg = Buffer.concat([
+    DEVICE_SIG_PREFIX,
+    account.details,
+    fetchedIdentityKey,
+    accountKey
+  ]);
+  if (!xeddsaVerify(fetchedIdentityKey, deviceMsg, account.deviceSignature)) return "invalid";
+  return "valid";
+}
+var KEY_INDEX_SIG_PREFIX = Buffer.from([6, 2]);
+function verifyKeyIndexList(signedBytes, accountIdentity) {
+  let signed;
+  try {
+    const t = protoType("ADVSignedKeyIndexList");
+    signed = t.toObject(t.decode(signedBytes), { bytes: Buffer, defaults: true });
+  } catch {
+    return void 0;
+  }
+  if (!signed.details || !signed.accountSignature) return void 0;
+  const msg = Buffer.concat([KEY_INDEX_SIG_PREFIX, signed.details]);
+  if (!xeddsaVerify(accountIdentity, msg, signed.accountSignature)) return void 0;
+  try {
+    const t = protoType("ADVKeyIndexList");
+    const decoded = t.toObject(t.decode(signed.details), { defaults: true });
+    return { currentIndex: decoded.currentIndex ?? 0, validIndexes: decoded.validIndexes ?? [] };
+  } catch {
+    return void 0;
+  }
+}
+var isKeyIndexValid = (keyIndex, decoded) => keyIndex !== void 0 && (decoded.validIndexes.includes(keyIndex) || keyIndex > decoded.currentIndex);
+
+// src/client/features/contact/tctoken.ts
+import { createHmac } from "crypto";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "fs";
+import { dirname } from "path";
+var computeCsToken = (salt, recipientLid) => new Uint8Array(createHmac("sha256", salt).update(recipientLid).digest());
+var BUCKET = 604800;
+var BUCKETS = 4;
+var isTcTokenExpired = (t, now = Date.now() / 1e3) => {
+  if (!t || Number.isNaN(t)) return true;
+  const cutoff = (Math.floor(now / BUCKET) - (BUCKETS - 1)) * BUCKET;
+  return t < cutoff;
+};
+var shouldIssueTcToken = (senderTs, now = Date.now() / 1e3) => senderTs === void 0 || Math.floor(now / BUCKET) > Math.floor(senderTs / BUCKET);
+var isRegularUser = (jid) => {
+  const [user = "", server2 = ""] = jid.split("@");
+  if (user === "0" || /^1313555\d{4}$|^131655500\d{2}$/.test(user)) return false;
+  return server2 === "s.whatsapp.net" || server2 === "lid" || server2 === "c.us";
+};
+var bare = (jid) => jid.replace(/:\d+@/, "@");
+var TcTokens = class {
+  constructor(path) {
+    this.path = path;
+    if (path && existsSync2(path)) {
+      try {
+        for (const [k, v] of Object.entries(
+          JSON.parse(readFileSync3(path, "utf8"))
+        ))
+          this.#data.set(k, v);
+      } catch {
+      }
+    }
+  }
+  path;
+  #data = /* @__PURE__ */ new Map();
+  #issuing = /* @__PURE__ */ new Set();
+  #save() {
+    if (!this.path) return;
+    mkdirSync2(dirname(this.path), { recursive: true, mode: 448 });
+    const tmp = `${this.path}.tmp`;
+    writeFileSync3(tmp, JSON.stringify(Object.fromEntries(this.#data)), { mode: 384 });
+    renameSync2(tmp, this.path);
+  }
+  /** The token to attach to a message for `jid`, if we hold a fresh one. */
+  tokenFor(jid) {
+    const e = this.#data.get(bare(jid));
+    if (!e?.token) return void 0;
+    if (isTcTokenExpired(e.t)) {
+      this.#data.set(bare(jid), {
+        token: "",
+        ...e.senderTs !== void 0 && { senderTs: e.senderTs }
+      });
+      this.#save();
+      return void 0;
+    }
+    return new Uint8Array(Buffer.from(e.token, "base64"));
+  }
+  /** Keep the tokens of a `<tokens>` node (an iq answer or a `privacy_token` notification). */
+  storeFrom(node, fallbackJid) {
+    const tokens = Array.isArray(node.content) ? node.content.find((c) => c.tag === "tokens") : void 0;
+    let stored = 0;
+    for (const n of Array.isArray(tokens?.content) ? tokens.content : []) {
+      if (n.tag !== "token" || n.attrs["type"] !== "trusted_contact") continue;
+      if (!(n.content instanceof Uint8Array)) continue;
+      const jid = bare(fallbackJid || n.attrs["jid"] || "");
+      const t = Number(n.attrs["t"] ?? 0);
+      if (!jid || !isRegularUser(jid) || !t) continue;
+      const old = this.#data.get(jid);
+      if (old?.t && old.t > t) continue;
+      this.#data.set(jid, { ...old, token: Buffer.from(n.content).toString("base64"), t });
+      stored++;
+    }
+    if (stored) this.#save();
+    return stored;
+  }
+  /**
+   * After a 1:1 message: give the contact our token (once per 7 days). Fire and forget; never throws.
+   * `request` is the iq channel; `storageJid` is the contact's address.
+   */
+  issueTo(jid, request, now = Date.now() / 1e3) {
+    const key = bare(jid);
+    if (!isRegularUser(key) || this.#issuing.has(key)) return;
+    if (!shouldIssueTcToken(this.#data.get(key)?.senderTs, now)) return;
+    this.#issuing.add(key);
+    const t = Math.floor(now);
+    void request({
+      tag: "iq",
+      attrs: { to: "s.whatsapp.net", type: "set", xmlns: "privacy" },
+      content: [
+        {
+          tag: "tokens",
+          attrs: {},
+          content: [{ tag: "token", attrs: { jid: key, t: String(t), type: "trusted_contact" } }]
+        }
+      ]
+    }).then((res) => {
+      this.storeFrom(res, key);
+      const e = this.#data.get(key);
+      this.#data.set(key, { token: "", ...e, senderTs: t });
+      this.#save();
+    }).catch(() => void 0).finally(() => this.#issuing.delete(key));
+  }
+};
+
+// src/client/reporting.ts
+import { createHmac as createHmac2, hkdfSync as hkdfSync2 } from "crypto";
+var IMG = { f: 17, s: [{ f: 21 }, { f: 22 }] };
+var FIELDS = [
+  { f: 1 },
+  { f: 3, s: [{ f: 2 }, { f: 3 }, { f: 8 }, { f: 11 }, IMG, { f: 25 }] },
+  { f: 4, s: [{ f: 1 }, { f: 16 }, IMG] },
+  { f: 5, s: [{ f: 3 }, { f: 4 }, { f: 5 }, { f: 16 }, IMG] },
+  { f: 6, s: [{ f: 1 }, IMG, { f: 30 }] },
+  { f: 7, s: [{ f: 2 }, { f: 7 }, { f: 10 }, IMG, { f: 20 }] },
+  { f: 8, s: [{ f: 2 }, { f: 7 }, { f: 9 }, IMG, { f: 21 }] },
+  { f: 9, s: [{ f: 2 }, { f: 6 }, { f: 7 }, { f: 13 }, IMG, { f: 20 }] },
+  { f: 12, s: [{ f: 1 }, { f: 2 }, { f: 14, m: true }, { f: 15 }] },
+  { f: 18, s: [{ f: 6 }, { f: 16 }, IMG] },
+  { f: 26, s: [{ f: 4 }, { f: 5 }, { f: 8 }, { f: 13 }, IMG] },
+  {
+    f: 28,
+    s: [{ f: 1 }, { f: 2 }, { f: 4 }, { f: 5 }, { f: 6 }, { f: 7, s: [{ f: 21 }, { f: 22 }] }]
+  },
+  { f: 37, s: [{ f: 1, m: true }] },
+  {
+    f: 49,
+    s: [
+      { f: 2 },
+      { f: 3, s: [{ f: 1 }, { f: 2 }] },
+      { f: 5, s: [{ f: 21 }, { f: 22 }] },
+      { f: 8, s: [{ f: 1 }, { f: 2 }] }
+    ]
+  },
+  { f: 53, s: [{ f: 1, m: true }] },
+  { f: 55, s: [{ f: 1, m: true }] },
+  { f: 58, s: [{ f: 1, m: true }] },
+  { f: 59, s: [{ f: 1, m: true }] },
+  {
+    f: 60,
+    s: [
+      { f: 2 },
+      { f: 3, s: [{ f: 1 }, { f: 2 }] },
+      { f: 5, s: [{ f: 21 }, { f: 22 }] },
+      { f: 8, s: [{ f: 1 }, { f: 2 }] }
+    ]
+  },
+  {
+    f: 64,
+    s: [
+      { f: 2 },
+      { f: 3, s: [{ f: 1 }, { f: 2 }] },
+      { f: 5, s: [{ f: 21 }, { f: 22 }] },
+      { f: 8, s: [{ f: 1 }, { f: 2 }] }
+    ]
+  },
+  { f: 66, s: [{ f: 2 }, { f: 6 }, { f: 7 }, { f: 13 }, IMG, { f: 20 }] },
+  { f: 74, s: [{ f: 1, m: true }] },
+  { f: 87, s: [{ f: 1, m: true }] },
+  { f: 88, s: [{ f: 1 }, { f: 2, s: [{ f: 1 }] }, { f: 3, s: [{ f: 21 }, { f: 22 }] }] },
+  { f: 92, s: [{ f: 1, m: true }] },
+  { f: 93, s: [{ f: 1, m: true }] },
+  { f: 94, s: [{ f: 1, m: true }] }
+];
+var compile = (fields) => new Map(fields.map((f) => [f.f, { m: f.m, children: f.s ? compile(f.s) : void 0 }]));
+var COMPILED = compile(FIELDS);
+var EMPTY = /* @__PURE__ */ new Map();
+function readVarint(buf, offset) {
+  let value = 0;
+  let bytes2 = 0;
+  let shift = 0;
+  while (offset + bytes2 < buf.length) {
+    const cur = buf[offset + bytes2];
+    value |= (cur & 127) << shift;
+    bytes2++;
+    if ((cur & 128) === 0) return { value, bytes: bytes2 };
+    shift += 7;
+    if (shift > 35) return void 0;
+  }
+  return void 0;
+}
+function writeVarint(value) {
+  const parts = [];
+  let rest = value >>> 0;
+  while (rest > 127) {
+    parts.push(rest & 127 | 128);
+    rest >>>= 7;
+  }
+  parts.push(rest);
+  return Buffer.from(parts);
+}
+function extract(data, cfg) {
+  const out = [];
+  let i = 0;
+  while (i < data.length) {
+    const tag = readVarint(data, i);
+    if (!tag) return void 0;
+    const num3 = tag.value >> 3;
+    const wire = tag.value & 7;
+    const start = i;
+    i += tag.bytes;
+    const field = cfg.get(num3);
+    const keepOrSkip = (end) => {
+      if (end > data.length) return false;
+      if (field) out.push({ num: num3, bytes: Buffer.from(data.subarray(start, end)) });
+      i = end;
+      return true;
+    };
+    if (wire === 0) {
+      const v = readVarint(data, i);
+      if (!v || !keepOrSkip(i + v.bytes)) return void 0;
+    } else if (wire === 1) {
+      if (!keepOrSkip(i + 8)) return void 0;
+    } else if (wire === 5) {
+      if (!keepOrSkip(i + 4)) return void 0;
+    } else if (wire === 2) {
+      const len = readVarint(data, i);
+      if (!len) return void 0;
+      const valStart = i + len.bytes;
+      const valEnd = valStart + len.value;
+      if (valEnd > data.length) return void 0;
+      if (!field) {
+        i = valEnd;
+      } else if (field.m || field.children) {
+        const sub = extract(data.subarray(valStart, valEnd), field.children ?? EMPTY);
+        if (!sub) return void 0;
+        if (sub.length > 0)
+          out.push({
+            num: num3,
+            bytes: Buffer.concat([writeVarint(tag.value), writeVarint(sub.length), sub])
+          });
+        i = valEnd;
+      } else {
+        out.push({ num: num3, bytes: Buffer.from(data.subarray(start, valEnd)) });
+        i = valEnd;
+      }
+    } else {
+      return void 0;
+    }
+  }
+  out.sort((a, b) => a.num - b.num);
+  return Buffer.concat(out.map((f) => f.bytes));
+}
+function reportableContent(encodedMessage) {
+  const c = extract(encodedMessage, COMPILED);
+  return c && c.length > 0 ? c : void 0;
+}
+function reportingNode(encodedMessage, messageSecret, key) {
+  const info = Buffer.concat([
+    Buffer.from(key.id),
+    Buffer.from(key.from),
+    Buffer.from(key.to),
+    Buffer.from("Report Token")
+  ]);
+  const secret = Buffer.from(hkdfSync2("sha256", messageSecret, Buffer.alloc(0), info, 32));
+  const content = extract(encodedMessage, COMPILED);
+  if (!content || content.length === 0) return void 0;
+  const token = createHmac2("sha256", secret).update(content).digest().subarray(0, 16);
+  return {
+    tag: "reporting",
+    attrs: {},
+    content: [{ tag: "reporting_token", attrs: { v: "2" }, content: token }]
+  };
+}
+
+// src/client/sender.ts
+var S_WHATSAPP_NET = "s.whatsapp.net";
+var SENT_CACHE_SIZE = 500;
+var MAX_RESEND_COUNT = 5;
+var RESEND_BUCKET_BURST = 20;
+var RESEND_BUCKET_REFILL_PER_MIN = 10;
+var RESEND_BUCKET_CACHE_SIZE = 500;
+var children = (n, tag) => Array.isArray(n.content) ? n.content.filter((c) => tag === void 0 || c.tag === tag) : [];
+function padRandomMax16(data) {
+  const n = (randomBytes2(1)[0] & 15) + 1;
+  return Buffer.concat([data, Buffer.alloc(n, n)]);
+}
+function generateMessageId(meId) {
+  const data = Buffer.alloc(8 + 20 + 16);
+  data.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1e3)));
+  const user = jidDecode(meId).user;
+  data.write(user, 8);
+  data.write("@c.us", 8 + user.length);
+  randomBytes2(16).copy(data, 28);
+  return "3EB0" + createHash3("sha256").update(data).digest("hex").toUpperCase().slice(0, 18);
+}
+function deviceOf(id = "") {
+  if (/^3A.{18}$/.test(id)) return "ios";
+  if (/^3E.{20}$/.test(id)) return "web";
+  if (/^(.{21}|.{32})$/.test(id)) return "android";
+  if (/^(3F|.{18}$)/.test(id)) return "desktop";
+  return "api";
+}
+function participantHash(jids) {
+  const rendered = jids.map((jid) => {
+    const { user, device, server: server2 } = jidDecode(jid);
+    return `${user}.0:${device}@${server2}`;
+  }).sort();
+  const digest = createHash3("sha256").update(rendered.join("")).digest();
+  return "2:" + digest.subarray(0, 6).toString("base64");
+}
+var Sender = class {
+  constructor(d) {
+    this.d = d;
+    this.#memory = d.senderKeyMemoryPath && existsSync3(d.senderKeyMemoryPath) ? JSON.parse(readFileSync4(d.senderKeyMemoryPath, "utf8")) : {};
+  }
+  d;
+  /** Recently sent messages, kept so a device that could not decrypt one can be answered (retry receipts). */
+  #sent = /* @__PURE__ */ new Map();
+  /** phone-number user -> LID user, learned from usync, so an answer from either identity counts as the same person. */
+  #lidAlias = /* @__PURE__ */ new Map();
+  /** Each user's primary device identity key, once an `assertSessions` ADV check has verified it: the
+   * trust anchor `getDevices` needs to verify that same user's `<key-index-list>`. Session-lifetime only -
+   * empty at startup, so key-index-list verification is skipped (not rejected) until it is populated. */
+  #primaryIdentities = /* @__PURE__ */ new Map();
+  /** Resends done per message+device (we do not trust the count in the receipt). */
+  #resends = /* @__PURE__ */ new Map();
+  /** Per-chat resend token bucket (aggregate anti-abuse cap); see `RESEND_BUCKET_BURST`. */
+  #resendBuckets = /* @__PURE__ */ new Map();
+  /** `group|senderKeyId` -> the devices that already got that sender key (keyed by the key's owner: see #groupStanza). */
+  #memory;
+  /** Send plain text to a user or group JID. Returns the message id. */
+  async sendText(to, text5) {
+    return this.sendMessage(to, { extendedTextMessage: { text: text5 } });
+  }
+  /** Send an arbitrary WAProto `Message` (plain object form). */
+  async sendMessage(to, message, opts = {}) {
+    const { creds } = this.d;
+    if (!creds.me) throw new Error("not paired");
+    await this.d.gate?.(to, message);
+    const id = opts.messageId ?? generateMessageId(creds.me.id);
+    const withSecret = withMessageSecret(message);
+    if (to.endsWith("@newsletter")) {
+      const { messageContextInfo: info, ...bare3 } = message;
+      const association = info?.messageAssociation;
+      const post = channelPost({
+        ...bare3,
+        ...association ? { messageContextInfo: { messageAssociation: association } } : {}
+      });
+      const stanza2 = {
+        tag: "message",
+        attrs: { id, to, type: messageType(post), ...opts.stanzaAttrs },
+        content: [
+          {
+            tag: "plaintext",
+            attrs: { ...opts.encAttrs },
+            content: encodeProto("Message", post)
+          },
+          ...opts.extraNodes ?? []
+        ]
+      };
+      this.d.logger.event("send.message", { id, to });
+      const ack = await this.d.receiver.sendAndWaitAck(stanza2);
+      opts.onAck?.(ack);
+      this.d.logger.event("send.acked", { id, to });
+      return id;
+    }
+    this.#remember(id, to, withSecret);
+    this.d.onSent?.(id, to, withSecret);
+    const stanza = to.endsWith("@g.us") || to === "status@broadcast" ? await this.#groupStanza(id, to, withSecret, opts) : await this.#directStanza(id, to, withSecret, opts);
+    this.d.logger.event("send.message", { id, to });
+    await this.d.receiver.sendAndWaitAck(stanza);
+    if (!to.endsWith("@g.us") && to !== "status@broadcast" && !message["protocolMessage"])
+      this.d.tc?.issueTo(this.d.lids.resolve(to), (n) => this.d.receiver.request(n));
+    this.d.logger.event("send.acked", { id, to });
+    return id;
+  }
+  /**
+   * Post a channel status: distinct from a normal channel post (`sendMessage` to the `@newsletter` jid),
+   * which WA Web sends as `<message>` with a bare `conversation`/media and no secret. A status keeps the
+   * full message shape (`extendedTextMessage`, not flattened to `conversation`) with a `messageSecret`
+   * (so later reactions/comments on it can use the usual add-on mechanism) and `contextInfo.statusAttributions:
+   * [{type:'NEWSLETTER_STATUS'}]` (what makes the server show it in followers' Status, confirmed against a
+   * real `<status to="...@newsletter" id=... type="text|media">` stanza captured from WA Web itself).
+   * Media needs `mediaId`: the `handle` field `uploadMedia`'s response carries when the upload's query
+   * string includes `media_id`/`server_thumb_gen` (confirmed against WA Web's own upload to the same
+   * `/newsletter/newsletter-image` path this client already posts normal channel media to).
+   * A voice note (`audioMessage.ptt`) is the one exception: the server rejects it (error 479) unless the
+   * stanza's own `type` says `text` and `<plaintext>` carries no `mediatype` - confirmed against a captured
+   * ptt channel status, and against this client's own first attempt getting 479 with `type="media"`.
+   */
+  async sendChannelStatus(channel, message, opts = {}) {
+    const { creds } = this.d;
+    if (!creds.me) throw new Error("not paired");
+    const id = opts.messageId ?? generateMessageId(creds.me.id);
+    const withSecret = withMessageSecret(message);
+    const field = Object.keys(withSecret).find((k) => k !== "messageContextInfo");
+    const body = withSecret[field];
+    const post = {
+      ...withSecret,
+      [field]: {
+        ...body,
+        contextInfo: {
+          ...body["contextInfo"],
+          statusAttributions: [{ type: "NEWSLETTER_STATUS" }]
+        }
+      }
+    };
+    const isPtt = !!post["audioMessage"]?.ptt;
+    const stanza = {
+      tag: "status",
+      attrs: {
+        id,
+        to: channel,
+        type: isPtt ? "text" : messageType(post),
+        ...opts.mediaId && { media_id: opts.mediaId },
+        ...opts.stanzaAttrs
+      },
+      content: [
+        {
+          tag: "plaintext",
+          attrs: isPtt ? {} : { ...opts.encAttrs },
+          content: encodeProto("Message", post)
+        },
+        ...opts.extraNodes ?? []
+      ]
+    };
+    this.d.logger.event("send.channel-status", { id, channel });
+    const ack = await this.d.receiver.sendAndWaitAck(stanza);
+    opts.onAck?.(ack);
+    this.d.logger.event("send.acked", { id, to: channel });
+    return id;
+  }
+  /**
+   * Send a "peer" message to our own primary phone (device 0): app-state key requests and similar
+   * device-to-device traffic. Wrapped as a deviceSentMessage like every message to our own devices.
+   */
+  async sendPeerMessage(message) {
+    const { creds, logger } = this.d;
+    if (!creds.me) throw new Error("not paired");
+    const meBare = `${jidDecode(creds.me.id).user}@${S_WHATSAPP_NET}`;
+    const id = generateMessageId(creds.me.id);
+    this.#sent.set(id, {
+      to: meBare,
+      message,
+      audience: /* @__PURE__ */ new Set([
+        jidDecode(creds.me.id).user,
+        ...creds.me.lid ? [jidDecode(creds.me.lid).user] : []
+      ]),
+      stanzaAttrs: { category: "peer", push_priority: "high_force" },
+      extraNodes: [{ tag: "meta", attrs: { appdata: "default" } }]
+    });
+    await this.assertSessions([meBare]);
+    const a = this.addr(meBare);
+    const body = { deviceSentMessage: { destinationJid: meBare, message } };
+    const enc2 = await this.d.cipher.encrypt(
+      a.name,
+      a.device,
+      padRandomMax16(encodeProto("Message", body))
+    );
+    const content = [
+      { tag: "enc", attrs: { v: "2", type: enc2.type }, content: enc2.ciphertext },
+      { tag: "meta", attrs: { appdata: "default" } }
+    ];
+    if (enc2.type === "pkmsg" && creds.account)
+      content.push({ tag: "device-identity", attrs: {}, content: creds.account });
+    logger.event("send.peer", { id, kind: Object.keys(message)[0] });
+    await this.d.receiver.sendAndWaitAck({
+      tag: "message",
+      attrs: { id, to: meBare, type: "text", category: "peer", push_priority: "high_force" },
+      content
+    });
+    return id;
+  }
+  /** Signal address for a device JID, through the LID mapping. */
+  addr(jid) {
+    return signalAddress(this.d.lids.resolve(jid));
+  }
+  /** Record who a message was actually sent to: only they may later ask for a resend. */
+  #setAudience(id, devices) {
+    const entry2 = this.#sent.get(id);
+    if (!entry2) return;
+    const users = new Set(devices.map((d) => d.user));
+    for (const u of [...users]) {
+      const alias = this.#lidAlias.get(u);
+      if (alias) users.add(alias);
+    }
+    entry2.audience = users;
+  }
+  #remember(id, to, message) {
+    this.#sent.set(id, { to, message });
+    if (this.#sent.size > SENT_CACHE_SIZE) this.#sent.delete(this.#sent.keys().next().value);
+  }
+  /** Take one resend token for `chat`, refilling lazily since the bucket's last use. `false` means throttled. */
+  #resendAllowed(chat) {
+    const now = Date.now();
+    const b = this.#resendBuckets.get(chat) ?? { tokens: RESEND_BUCKET_BURST, last: now };
+    b.tokens = Math.min(
+      RESEND_BUCKET_BURST,
+      b.tokens + (now - b.last) / 6e4 * RESEND_BUCKET_REFILL_PER_MIN
+    );
+    b.last = now;
+    const allowed = b.tokens >= 1;
+    if (allowed) b.tokens -= 1;
+    this.#resendBuckets.set(chat, b);
+    if (this.#resendBuckets.size > RESEND_BUCKET_CACHE_SIZE)
+      this.#resendBuckets.delete(this.#resendBuckets.keys().next().value);
+    return allowed;
+  }
+  /**
+   * A device told us (`<receipt type="retry">`) that it could not decrypt one of our messages: re-encrypt
+   * it for exactly that device, with a fresh session when the receipt carries a key bundle.
+   */
+  async handleRetryReceipt(receipt) {
+    const { creds, logger } = this.d;
+    const id = receipt.attrs["id"] ?? "";
+    const cached = this.#sent.get(id);
+    const target = receipt.attrs["participant"] ?? receipt.attrs["from"] ?? "";
+    if (!cached || !target) {
+      logger.event("retry.unknown-message", { id, target });
+      return false;
+    }
+    if (!receipt.attrs["from"]) return false;
+    const targetUser = jidDecode(target).user;
+    const chatOk = cached.to.endsWith("@g.us") ? receipt.attrs["from"] === cached.to && !!receipt.attrs["participant"] : true;
+    if (!chatOk || !cached.audience?.has(targetUser)) {
+      logger.event("retry.rejected", { id, target, reason: "not an original recipient" });
+      return false;
+    }
+    const retry = children(receipt, "retry")[0];
+    const claimed = Number(retry?.attrs["count"] ?? 1);
+    const resendKey = `${id}|${target}`;
+    const done = this.#resends.get(resendKey) ?? 0;
+    if (!(claimed >= 1) || done >= MAX_RESEND_COUNT) return false;
+    if (!this.#resendAllowed(cached.to)) {
+      logger.event("retry.throttled", { id, target, chat: cached.to });
+      return false;
+    }
+    this.#resends.set(resendKey, done + 1);
+    if (this.#resends.size > SENT_CACHE_SIZE * 4)
+      this.#resends.delete(this.#resends.keys().next().value);
+    const count = Math.min(Math.max(claimed, done + 1), MAX_RESEND_COUNT);
+    const keys = children(receipt, "keys")[0];
+    if (keys) {
+      const registration = children(receipt, "registration")[0]?.content;
+      const node = {
+        tag: "user",
+        attrs: { jid: target },
+        content: [
+          ...registration ? [{ tag: "registration", attrs: {}, content: registration }] : [],
+          ...Array.isArray(keys.content) ? keys.content.filter((c) => c.tag !== "device-identity") : []
+        ]
+      };
+      const a2 = this.addr(target);
+      await this.d.cipher.processPreKeyBundle(a2.name, a2.device, parseBundle(node));
+      logger.event("retry.session-from-keys", { id, target });
+    } else {
+      await this.assertSessions([target]);
+    }
+    const { user: meUser } = jidDecode(creds.me.id);
+    const targetIsMe = jidDecode(target).user === meUser || !!creds.me?.lid && jidDecode(target).user === jidDecode(creds.me.lid).user;
+    const body = targetIsMe ? {
+      deviceSentMessage: { destinationJid: cached.to, message: cached.message },
+      ...cached.message["messageContextInfo"] ? { messageContextInfo: cached.message["messageContextInfo"] } : {}
+    } : cached.message;
+    const a = this.addr(target);
+    const enc2 = await this.d.cipher.encrypt(
+      a.name,
+      a.device,
+      padRandomMax16(encodeProto("Message", body))
+    );
+    const isGroup = cached.to.endsWith("@g.us");
+    const attrs = {
+      id,
+      type: messageType(cached.message),
+      ...cached.stanzaAttrs
+    };
+    if (isGroup) {
+      attrs["to"] = cached.to;
+      attrs["participant"] = target;
+    } else {
+      attrs["to"] = target;
+      attrs["device_fanout"] = "false";
+      if (targetIsMe) attrs["recipient"] = cached.to;
+    }
+    const content = [
+      {
+        tag: "enc",
+        attrs: { v: "2", type: enc2.type, count: String(count) },
+        content: enc2.ciphertext
+      }
+    ];
+    if (creds.account) content.push({ tag: "device-identity", attrs: {}, content: creds.account });
+    if (cached.to.endsWith("@s.whatsapp.net")) content.push({ tag: "bot", attrs: { biz_bot: "1" } });
+    content.push(...cached.extraNodes ?? []);
+    await this.d.receiver.sendAndWaitAck({ tag: "message", attrs, content });
+    logger.event("retry.resent", { id, target, count });
+    return true;
+  }
+  // ---- devices -------------------------------------------------------------------------------
+  /** All devices (excluding this one) of the given users, via usync. */
+  async getDevices(userJids) {
+    const { creds, receiver } = this.d;
+    const me = jidDecode(creds.me.id);
+    const meLidUser = creds.me?.lid ? jidDecode(creds.me.lid).user : void 0;
+    const res = await receiver.request({
+      tag: "iq",
+      attrs: { to: S_WHATSAPP_NET, type: "get", xmlns: "usync" },
+      content: [
+        {
+          tag: "usync",
+          attrs: {
+            context: "message",
+            mode: "query",
+            sid: receiver.nextId(),
+            last: "true",
+            index: "0"
+          },
+          content: [
+            {
+              tag: "query",
+              attrs: {},
+              content: [
+                { tag: "devices", attrs: { version: "2" } },
+                { tag: "lid", attrs: {} }
+              ]
+            },
+            {
+              tag: "list",
+              attrs: {},
+              content: userJids.map((jid) => ({ tag: "user", attrs: { jid } }))
+            }
+          ]
+        }
+      ]
+    });
+    const list = children(children(children(res, "usync")[0] ?? res, "list")[0] ?? res, "user");
+    const out = [];
+    for (const user of list) {
+      const jid = user.attrs["jid"] ?? "";
+      const error = children(user, "error")[0];
+      if (error) {
+        this.d.logger.event("send.devices-error", { jid, code: error.attrs["code"] });
+        continue;
+      }
+      const { user: u, server: server2 } = jidDecode(jid);
+      const lid = children(user, "lid")[0]?.attrs["val"];
+      if (lid && server2 !== "lid") {
+        this.#lidAlias.set(u, jidDecode(lid).user);
+        this.d.lids.set(jid, lid);
+      }
+      const devicesNode = children(user, "devices")[0] ?? user;
+      const deviceList = children(children(devicesNode, "device-list")[0] ?? devicesNode, "device");
+      const keyIndexBytes = children(devicesNode, "key-index-list")[0]?.content;
+      const anchor = this.#primaryIdentities.get(u);
+      let decodedKeyIndex;
+      let keyIndexListInvalid = false;
+      if (anchor && keyIndexBytes instanceof Uint8Array) {
+        decodedKeyIndex = verifyKeyIndexList(keyIndexBytes, anchor);
+        if (!decodedKeyIndex) {
+          keyIndexListInvalid = true;
+          this.d.logger.event("send.key-index-list-rejected", { jid });
+        }
+      }
+      for (const dev of deviceList) {
+        const device = Number(dev.attrs["id"]);
+        if (device !== 0 && !dev.attrs["key-index"]) continue;
+        if (device !== 0 && keyIndexListInvalid) continue;
+        if (device !== 0 && decodedKeyIndex && !isKeyIndexValid(Number(dev.attrs["key-index"]), decodedKeyIndex))
+          continue;
+        if (device === 99) continue;
+        const isThisDevice = (u === me.user || u === meLidUser) && device === me.device;
+        if (isThisDevice) continue;
+        out.push({
+          jid: device === 0 ? `${u}@${server2}` : `${u}:${device}@${server2}`,
+          user: u,
+          device
+        });
+      }
+    }
+    this.d.logger.event("send.devices", { users: userJids, devices: out.map((o) => o.jid) });
+    return out;
+  }
+  /** Make sure a Signal session exists for each device, fetching pre-key bundles for the missing ones. */
+  async assertSessions(jids) {
+    const missing = [];
+    for (const jid of new Set(jids)) {
+      const a = this.addr(jid);
+      if (!await this.d.cipher.hasSession(a.name, a.device)) missing.push(jid);
+    }
+    if (!missing.length) return;
+    const res = await this.d.receiver.request({
+      tag: "iq",
+      attrs: { xmlns: "encrypt", type: "get", to: S_WHATSAPP_NET },
+      content: [
+        {
+          tag: "key",
+          attrs: {},
+          content: missing.map((jid) => ({
+            tag: "user",
+            attrs: { jid: this.d.lids.resolve(jid) }
+          }))
+        }
+      ]
+    });
+    const users = children(children(res, "list")[0] ?? res, "user");
+    const primaryAnchor = /* @__PURE__ */ new Map();
+    const byDevice = [...users].sort(
+      (x, y) => jidDecode(x.attrs["jid"] ?? "").device - jidDecode(y.attrs["jid"] ?? "").device
+    );
+    for (const user of byDevice) {
+      const jid = user.attrs["jid"] ?? "";
+      if (children(user, "error").length) {
+        this.d.logger.event("send.prekey-error", { jid, error: children(user, "error")[0]?.attrs });
+        continue;
+      }
+      const bundle = parseBundle(user);
+      const { user: u, device } = jidDecode(jid);
+      if (bundle.deviceIdentity) {
+        const result = validateAdvDeviceIdentity(
+          bundle.deviceIdentity,
+          bundle.identityKey,
+          device === 0 ? void 0 : primaryAnchor.get(u)
+        );
+        if (result === "invalid") {
+          this.d.logger.event("send.adv-rejected", { jid });
+          continue;
+        }
+        if (result === "no-account-key") this.d.logger.event("send.adv-unverified", { jid });
+        else if (device === 0) {
+          primaryAnchor.set(u, bundle.identityKey);
+          this.#primaryIdentities.set(u, bundle.identityKey);
+        }
+      }
+      const a = this.addr(jid);
+      await this.d.cipher.processPreKeyBundle(a.name, a.device, bundle);
+      this.d.logger.event("send.session-created", { jid });
+    }
+  }
+  /**
+   * Encrypt one message (e.g. a call key) separately for each device. Sessions are fetched first; a device that
+   * cannot be keyed is skipped, as the app does, so one broken device does not stop the rest.
+   */
+  async encryptForDevices(jids, message) {
+    await this.assertSessions(jids);
+    const plain = padRandomMax16(encodeProto("Message", message));
+    const out = [];
+    for (const jid of jids) {
+      try {
+        const a = this.addr(jid);
+        const enc2 = await this.d.cipher.encrypt(a.name, a.device, plain);
+        out.push({ jid, type: enc2.type, ciphertext: enc2.ciphertext });
+      } catch (e) {
+        this.d.logger.event("call.encrypt-skipped", { jid, error: e });
+      }
+    }
+    return out;
+  }
+  // ---- 1:1 -----------------------------------------------------------------------------------
+  async #directStanza(id, to, message, opts) {
+    const { creds } = this.d;
+    const meUser = jidDecode(creds.me.id).user;
+    const ownBare = `${meUser}@${S_WHATSAPP_NET}`;
+    const selfChat = jidDecode(to).user === meUser;
+    const toUser = jidDecode(to).user;
+    const mineOf = (ds) => ds.filter(
+      (d) => d.user === meUser || d.user === (creds.me?.lid ? jidDecode(creds.me.lid).user : "#")
+    );
+    const othersOf = (ds, mine2) => ds.filter((d) => !mine2.includes(d)).filter(
+      (d) => opts.devices === "primary" || opts.devices === "no-linked" ? d.device === 0 : true
+    );
+    const devices = await this.getDevices([.../* @__PURE__ */ new Set([ownBare, to])]);
+    let mine = mineOf(devices);
+    let others = othersOf(devices, mine);
+    if (!others.length && !selfChat) {
+      const toJid = jidDecode(to);
+      const altServer = toJid.server === "lid" ? S_WHATSAPP_NET : "lid";
+      const altUser = toJid.server === "lid" ? this.d.lids.pnUser(toJid.user) : this.d.lids.lidUser(toJid.user);
+      if (altUser) {
+        const altJid = toJid.device ? `${altUser}:${toJid.device}@${altServer}` : `${altUser}@${altServer}`;
+        const retryDevices = await this.getDevices([ownBare, altJid]);
+        mine = mineOf(retryDevices);
+        others = othersOf(retryDevices, mine);
+      }
+    }
+    if (!others.length && !selfChat) throw new Error(`no devices found for ${to} (user ${toUser})`);
+    const ownKept = opts.devices === "recipient" || opts.devices === "primary" ? [] : mine;
+    await this.assertSessions([...ownKept, ...others].map((d) => d.jid));
+    this.#setAudience(id, [...ownKept, ...others]);
+    const ownTargets = opts.devices === "recipient" || opts.devices === "primary" ? [] : mine;
+    const dsm = {
+      deviceSentMessage: { destinationJid: to, message },
+      ...message["messageContextInfo"] ? { messageContextInfo: message["messageContextInfo"] } : {}
+    };
+    const participants = [];
+    let needsIdentity = false;
+    for (const [targets, msg] of [
+      [ownTargets, dsm],
+      [others, message]
+    ]) {
+      const plain = padRandomMax16(encodeProto("Message", msg));
+      for (const t of targets) {
+        const a = this.addr(t.jid);
+        const enc2 = await this.d.cipher.encrypt(a.name, a.device, plain);
+        if (enc2.type === "pkmsg") needsIdentity = true;
+        const ownLid = creds.me?.lid ? jidDecode(creds.me.lid).user : void 0;
+        const jid = to.endsWith("@lid") && ownLid && (t.user === meUser || t.user === ownLid) ? t.device === 0 ? `${ownLid}@lid` : `${ownLid}:${t.device}@lid` : t.jid;
+        participants.push({
+          tag: "to",
+          attrs: { jid },
+          content: [
+            {
+              tag: "enc",
+              attrs: { v: "2", type: enc2.type, ...opts.encAttrs },
+              content: enc2.ciphertext
+            }
+          ]
+        });
+      }
+    }
+    const content = [{ tag: "participants", attrs: {}, content: participants }];
+    if (needsIdentity && creds.account)
+      content.push({ tag: "device-identity", attrs: {}, content: creds.account });
+    const reporting = this.#reporting(
+      id,
+      to.endsWith("@lid") && this.d.creds.me?.lid ? this.d.creds.me.lid : this.d.creds.me.id,
+      to,
+      message
+    );
+    if (reporting) content.push(reporting);
+    if (to.endsWith("@s.whatsapp.net")) content.push({ tag: "bot", attrs: { biz_bot: "1" } });
+    const tc = this.#tcToken(to);
+    if (tc) content.push({ tag: "tctoken", attrs: {}, content: tc });
+    else {
+      const cs = this.#csToken(to);
+      if (cs) content.push({ tag: "cstoken", attrs: {}, content: cs });
+    }
+    content.push(...opts.extraNodes ?? []);
+    return {
+      tag: "message",
+      attrs: {
+        id,
+        to,
+        type: messageType(message),
+        ...opts.devices && !selfChat && { device_fanout: "false" },
+        ...opts.stanzaAttrs
+      },
+      content
+    };
+  }
+  /** The trusted-contact token for a 1:1 message (kept under the LID address once that is known). */
+  #tcToken(to) {
+    if (!this.d.tc) return void 0;
+    const me = this.d.creds.me;
+    if (me && jidDecode(to).user === jidDecode(me.id).user) return void 0;
+    return this.d.tc.tokenFor(this.d.lids.resolve(to)) ?? this.d.tc.tokenFor(to);
+  }
+  /** `cstoken` fallback for a 1:1 message, when we hold no `tctoken` yet: needs the history-synced NCT salt
+   * and the recipient's account LID, neither of which we always have. */
+  #csToken(to) {
+    const salt = this.d.creds.nctSalt;
+    if (!salt) return void 0;
+    const me = this.d.creds.me;
+    if (me && jidDecode(to).user === jidDecode(me.id).user) return void 0;
+    const resolved = this.d.lids.resolve(to);
+    if (jidDecode(resolved).server !== "lid") return void 0;
+    return computeCsToken(salt, `${jidDecode(resolved).user}@lid`);
+  }
+  // ---- groups --------------------------------------------------------------------------------
+  /** Participant JIDs and addressing mode of a group. */
+  async groupParticipants(group) {
+    const res = await this.d.receiver.request({
+      tag: "iq",
+      attrs: { type: "get", xmlns: "w:g2", to: group },
+      content: [{ tag: "query", attrs: { request: "interactive" } }]
+    });
+    const g = children(res, "group")[0];
+    if (!g) throw new Error(`no group metadata for ${group}`);
+    for (const p of children(g, "participant")) {
+      const jid = p.attrs["jid"] ?? "";
+      const other = p.attrs["phone_number"] ?? p.attrs["lid"];
+      if (jid && other) this.d.lids.set(jid, other);
+    }
+    return {
+      participants: children(g, "participant").map((p) => p.attrs["jid"] ?? "").filter(Boolean),
+      addressingMode: g.attrs["addressing_mode"] ?? "lid"
+    };
+  }
+  async #groupStanza(id, group, message, opts) {
+    const { creds } = this.d;
+    const isStatus = group === "status@broadcast";
+    if (isStatus && !opts.statusRecipients?.length)
+      throw new Error("a status needs statusRecipients");
+    const { participants, addressingMode } = isStatus ? { participants: opts.statusRecipients, addressingMode: "lid" } : await this.groupParticipants(group);
+    const devices = await this.getDevices(participants);
+    this.#setAudience(id, devices);
+    const senderId = addressingMode === "lid" && creds.me?.lid ? creds.me.lid : creds.me.id;
+    const senderKeyId = signalAddressString(senderId);
+    const skdm = await this.d.cipher.createSenderKeyDistribution(group, senderKeyId);
+    const skmsg = await this.d.cipher.groupEncrypt(
+      group,
+      senderKeyId,
+      padRandomMax16(encodeProto("Message", message))
+    );
+    const memoryKey = `${group}|${senderKeyId}`;
+    const known = new Set(this.#memory[memoryKey] ?? []);
+    const fresh = devices.filter((d) => !known.has(d.jid));
+    const nodes = [];
+    let needsIdentity = false;
+    if (fresh.length) {
+      await this.assertSessions(fresh.map((d) => d.jid));
+      const dist = padRandomMax16(
+        encodeProto("Message", {
+          senderKeyDistributionMessage: {
+            groupId: group,
+            axolotlSenderKeyDistributionMessage: skdm
+          }
+        })
+      );
+      for (const t of fresh) {
+        const a = this.addr(t.jid);
+        const enc2 = await this.d.cipher.encrypt(a.name, a.device, dist);
+        if (enc2.type === "pkmsg") needsIdentity = true;
+        nodes.push({
+          tag: "to",
+          attrs: { jid: t.jid },
+          content: [
+            {
+              tag: "enc",
+              attrs: { v: "2", type: enc2.type, ...opts.encAttrs },
+              content: enc2.ciphertext
+            }
+          ]
+        });
+        known.add(t.jid);
+      }
+      for (const k of Object.keys(this.#memory))
+        if (k === group || k.startsWith(`${group}|`) && k !== memoryKey) delete this.#memory[k];
+      this.#memory[memoryKey] = [...known];
+      this.#saveMemory();
+    }
+    const content = [
+      { tag: "enc", attrs: { v: "2", type: "skmsg", ...opts.encAttrs }, content: skmsg }
+    ];
+    if (nodes.length) content.unshift({ tag: "participants", attrs: {}, content: nodes });
+    if (needsIdentity && creds.account)
+      content.push({ tag: "device-identity", attrs: {}, content: creds.account });
+    if (/^\d{1,15}-\d+@g\.us$/.test(group) && !message["reactionMessage"])
+      content.push({ tag: "multicast", attrs: {} });
+    const reporting = this.#reporting(id, senderId, group, message);
+    if (reporting) content.push(reporting);
+    if (isStatus && !opts.stanzaAttrs?.["edit"])
+      content.push({
+        tag: "meta",
+        attrs: { status_setting: opts.statusPrivacy ?? "contacts", session_scope: "status" }
+      });
+    content.push(...opts.extraNodes ?? []);
+    const phash = isStatus ? void 0 : participantHash([.../* @__PURE__ */ new Set([...devices.map((d) => d.jid), senderId])]);
+    return {
+      tag: "message",
+      attrs: {
+        id,
+        to: group,
+        type: messageType(message),
+        ...isStatus ? {} : { addressing_mode: addressingMode, phash },
+        ...opts.stanzaAttrs
+      },
+      content
+    };
+  }
+  /**
+   * Reporting token over the unpadded message. The key is bound to the sender and the receiver (the other user in a
+   * chat, the group in a group), both as plain user JIDs without a device: that is what a recipient derives when it
+   * reports the message, and what the server compares against.
+   */
+  #reporting(id, from, to, message) {
+    const secret = message["messageContextInfo"]?.messageSecret;
+    if (!secret || message["reactionMessage"]) return void 0;
+    return reportingNode(encodeProto("Message", message), secret, {
+      id,
+      from: from.replace(/:\d+@/, "@"),
+      to: to.replace(/:\d+@/, "@")
+    });
+  }
+  #saveMemory() {
+    const path = this.d.senderKeyMemoryPath;
+    if (!path) return;
+    mkdirSync3(dirname2(path), { recursive: true, mode: 448 });
+    writeFileSync4(`${path}.tmp`, JSON.stringify(this.#memory), { mode: 384 });
+    renameSync3(`${path}.tmp`, path);
+  }
+};
+function channelPost(message) {
+  const ext = message["extendedTextMessage"];
+  if (ext && typeof ext["text"] === "string" && Object.keys(ext).every((k) => k === "text")) {
+    const { extendedTextMessage: _drop, ...rest } = message;
+    void _drop;
+    return { ...rest, conversation: ext["text"] };
+  }
+  return message;
+}
+function withMessageSecret(message) {
+  if (message["reactionMessage"] || message["encReactionMessage"] || message["pollUpdateMessage"])
+    return message;
+  const info = message["messageContextInfo"] ?? {};
+  if (info["messageSecret"]) return message;
+  return { ...message, messageContextInfo: { ...info, messageSecret: randomBytes2(32) } };
+}
+function messageType(message) {
+  const q = message["questionMessage"]?.message;
+  if (q) return messageType(q);
+  if (message["reactionMessage"]) return "reaction";
+  if (message["pollCreationMessage"] || message["pollCreationMessageV2"] || message["pollCreationMessageV3"] || message["pollCreationMessageV5"])
+    return "poll";
+  if (message["pollCreationOptionImageMessage"]) return "media";
+  if (["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"].some(
+    (k) => message[k]
+  ))
+    return "media";
+  return "text";
+}
+function parseBundle(user) {
+  const bytes2 = (n, tag) => {
+    const c = n && children(n, tag)[0]?.content;
+    return c instanceof Uint8Array ? c : void 0;
+  };
+  const uint = (b) => b ? b.reduce((acc, x) => acc * 256 + x, 0) : NaN;
+  const skey = children(user, "skey")[0];
+  const key = children(user, "key")[0];
+  const identityKey = bytes2(user, "identity");
+  const signedPreKeyPublic = bytes2(skey, "value");
+  const signedPreKeySignature = bytes2(skey, "signature");
+  if (!identityKey || !signedPreKeyPublic || !signedPreKeySignature)
+    throw new Error("incomplete pre-key bundle");
+  const { device } = jidDecode(user.attrs["jid"] ?? "");
+  return {
+    registrationId: uint(bytes2(user, "registration")),
+    deviceId: device,
+    ...key && { preKeyId: uint(bytes2(key, "id")), preKeyPublic: bytes2(key, "value") },
+    signedPreKeyId: uint(bytes2(skey, "id")),
+    signedPreKeyPublic,
+    signedPreKeySignature,
+    identityKey,
+    deviceIdentity: bytes2(user, "device-identity")
+  };
+}
 
 // src/client/features/message/interactive.ts
 var quickReply = (displayText, id) => ({
@@ -4101,8 +5221,201 @@ function interactive(o) {
   };
 }
 
+// src/client/features/contact/fake-chat.ts
+import { randomBytes as randomBytes3 } from "crypto";
+import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync5, renameSync as renameSync4, writeFileSync as writeFileSync5 } from "fs";
+import { dirname as dirname3 } from "path";
+var MAX_ENTRIES = 5e3;
+var MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
+var SentMessageIds = class {
+  constructor(path) {
+    this.path = path;
+    if (path && existsSync4(path)) {
+      try {
+        const data = JSON.parse(readFileSync5(path, "utf8"));
+        for (const [id, t] of Object.entries(data)) this.#ids.set(id, t);
+      } catch {
+      }
+    }
+    this.#prune();
+  }
+  path;
+  #ids = /* @__PURE__ */ new Map();
+  add(id) {
+    this.#ids.set(id, Date.now());
+    this.#prune();
+    this.#save();
+  }
+  has(id) {
+    return this.#ids.has(id);
+  }
+  #prune() {
+    const cutoff = Date.now() - MAX_AGE_MS;
+    for (const [id, t] of this.#ids) if (t < cutoff) this.#ids.delete(id);
+    while (this.#ids.size > MAX_ENTRIES) this.#ids.delete(this.#ids.keys().next().value);
+  }
+  #save() {
+    if (!this.path) return;
+    mkdirSync4(dirname3(this.path), { recursive: true, mode: 448 });
+    const tmp = `${this.path}.tmp`;
+    writeFileSync5(tmp, JSON.stringify(Object.fromEntries(this.#ids)), { mode: 384 });
+    renameSync4(tmp, this.path);
+  }
+};
+function detectFakeChat(receipt, sentIds, isOwnAccount) {
+  if (!receipt.chat || receipt.chat.endsWith("@g.us") || isOwnAccount(receipt.chat))
+    return void 0;
+  const ids = receipt.ids.filter((id) => !sentIds.has(id));
+  if (!ids.length) return void 0;
+  return { jid: receipt.chat, ids, type: receipt.type };
+}
+function getFakeMsg(jid, msg) {
+  const inner = typeof msg === "string" ? { conversation: msg } : msg;
+  return {
+    message: { deviceSentMessage: { destinationJid: jid, message: inner } },
+    opts: { messageId: `FAKE${randomBytes3(8).toString("hex").toUpperCase()}` }
+  };
+}
+
+// src/client/features/message/sticker-metadata.ts
+import { randomUUID } from "crypto";
+var EXIF_HEADER = Buffer.from([
+  73,
+  73,
+  42,
+  0,
+  8,
+  0,
+  0,
+  0,
+  1,
+  0,
+  65,
+  87,
+  7,
+  0,
+  0,
+  0,
+  0,
+  0,
+  22,
+  0,
+  0,
+  0
+]);
+function parseRiff(webp) {
+  const buf = Buffer.from(webp);
+  if (buf.length < 12 || buf.toString("ascii", 0, 4) !== "RIFF" || buf.toString("ascii", 8, 12) !== "WEBP")
+    throw new Error("not a WebP image");
+  const chunks = [];
+  let offset = 12;
+  while (offset + 8 <= buf.length) {
+    const tag = buf.toString("ascii", offset, offset + 4);
+    const size = buf.readUInt32LE(offset + 4);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + size;
+    if (dataEnd > buf.length) throw new Error("truncated WebP chunk");
+    chunks.push({ tag, data: buf.subarray(dataStart, dataEnd) });
+    offset = dataEnd + size % 2;
+  }
+  return chunks;
+}
+function buildRiff(chunks) {
+  const parts = [];
+  for (const c of chunks) {
+    const header2 = Buffer.alloc(8);
+    header2.write(c.tag, 0, 4, "ascii");
+    header2.writeUInt32LE(c.data.length, 4);
+    parts.push(header2, c.data);
+    if (c.data.length % 2) parts.push(Buffer.from([0]));
+  }
+  const body = Buffer.concat(parts);
+  const out = Buffer.alloc(12 + body.length);
+  out.write("RIFF", 0, 4, "ascii");
+  out.writeUInt32LE(4 + body.length, 4);
+  out.write("WEBP", 8, 4, "ascii");
+  body.copy(out, 12);
+  return out;
+}
+function dimensionsOf(tag, data) {
+  if (tag === "VP8 ") {
+    if (data.length < 10 || data[3] !== 157 || data[4] !== 1 || data[5] !== 42)
+      throw new Error("invalid VP8 bitstream");
+    return { width: data.readUInt16LE(6) & 16383, height: data.readUInt16LE(8) & 16383 };
+  }
+  if (tag === "VP8L") {
+    if (data.length < 5 || data[0] !== 47) throw new Error("invalid VP8L bitstream");
+    const bits = data.readUInt32LE(1);
+    return { width: (bits & 16383) + 1, height: (bits >>> 14 & 16383) + 1 };
+  }
+  throw new Error("not a supported WebP image (no VP8/VP8L chunk)");
+}
+function buildExifPayload(metadata) {
+  const json = {
+    "sticker-pack-id": metadata.packId || randomUUID(),
+    "sticker-pack-name": metadata.packName,
+    "sticker-pack-publisher": metadata.publisher
+  };
+  if (metadata.emojis?.length) json["emojis"] = metadata.emojis;
+  if (metadata.androidAppStoreLink) json["android-app-store-link"] = metadata.androidAppStoreLink;
+  if (metadata.iosAppStoreLink) json["ios-app-store-link"] = metadata.iosAppStoreLink;
+  const jsonBytes = Buffer.from(JSON.stringify(json), "utf8");
+  const header2 = Buffer.from(EXIF_HEADER);
+  header2.writeUInt32LE(jsonBytes.length, 14);
+  return Buffer.concat([header2, jsonBytes]);
+}
+var isWhatsAppStickerExif = (exif) => exif.length > EXIF_HEADER.length && exif[0] === 73 && exif[1] === 73 && exif[2] === 42 && exif[3] === 0 && exif[10] === 65 && exif[11] === 87;
+function addStickerMetadata(webp, metadata) {
+  const chunks = parseRiff(webp).filter((c) => c.tag !== "EXIF");
+  const exifChunk = { tag: "EXIF", data: buildExifPayload(metadata) };
+  const vp8xIndex = chunks.findIndex((c) => c.tag === "VP8X");
+  let out;
+  if (vp8xIndex === -1) {
+    const image = chunks.find((c) => c.tag === "VP8 " || c.tag === "VP8L");
+    if (!image) throw new Error("not a supported WebP image (no VP8/VP8L chunk)");
+    const { width, height } = dimensionsOf(image.tag, image.data);
+    const vp8x = Buffer.alloc(10);
+    vp8x[0] = 8;
+    vp8x.writeUIntLE(width - 1, 4, 3);
+    vp8x.writeUIntLE(height - 1, 7, 3);
+    out = [{ tag: "VP8X", data: vp8x }, ...chunks, exifChunk];
+  } else {
+    out = [...chunks];
+    const vp8x = Buffer.from(out[vp8xIndex].data);
+    vp8x[0] = vp8x[0] | 8;
+    out[vp8xIndex] = { tag: "VP8X", data: vp8x };
+    const xmpIndex = out.findIndex((c) => c.tag === "XMP ");
+    if (xmpIndex === -1) out.push(exifChunk);
+    else out.splice(xmpIndex, 0, exifChunk);
+  }
+  return buildRiff(out);
+}
+function getStickerMetadata(webp) {
+  const exif = parseRiff(webp).find((c) => c.tag === "EXIF");
+  if (!exif || !isWhatsAppStickerExif(exif.data)) return void 0;
+  let json;
+  try {
+    json = JSON.parse(exif.data.subarray(EXIF_HEADER.length).toString("utf8"));
+  } catch {
+    return void 0;
+  }
+  const emojis = json["emojis"];
+  return {
+    ...typeof json["sticker-pack-id"] === "string" && { packId: json["sticker-pack-id"] },
+    packName: typeof json["sticker-pack-name"] === "string" ? json["sticker-pack-name"] : "",
+    publisher: typeof json["sticker-pack-publisher"] === "string" ? json["sticker-pack-publisher"] : "",
+    ...Array.isArray(emojis) && emojis.length && { emojis },
+    ...typeof json["android-app-store-link"] === "string" && {
+      androidAppStoreLink: json["android-app-store-link"]
+    },
+    ...typeof json["ios-app-store-link"] === "string" && {
+      iosAppStoreLink: json["ios-app-store-link"]
+    }
+  };
+}
+
 // src/client/features/call/room.ts
-var bare = (jid) => jid.replace(/:\d+@/, "@");
+var bare2 = (jid) => jid.replace(/:\d+@/, "@");
 var Room = class extends TypedEmitter {
   /** The link to hand out. */
   url;
@@ -4125,7 +5438,7 @@ var Room = class extends TypedEmitter {
     this.token = info.token;
     this.callId = info.callId;
     this.media = info.media;
-    this.#owner = bare(info.owner);
+    this.#owner = bare2(info.owner);
     this.#rule = o.admit ?? "all";
     this.#maxGuests = o.maxGuests ?? Number.POSITIVE_INFINITY;
     this.#off = host.on("call", (e) => void this.#handle(e));
@@ -4143,16 +5456,16 @@ var Room = class extends TypedEmitter {
   }
   /** Let a waiting person in. */
   async admit(jid) {
-    const p = this.#waiting.get(bare(jid)) ?? { jid, guest: false };
+    const p = this.#waiting.get(bare2(jid)) ?? { jid, guest: false };
     await this.#host.answerWaitingRoom(this.callId, jid, true);
-    this.#waiting.delete(bare(jid));
+    this.#waiting.delete(bare2(jid));
     this.emit("admitted", p);
   }
   /** Turn a waiting person away. */
   async deny(jid) {
-    const p = this.#waiting.get(bare(jid)) ?? { jid, guest: false };
+    const p = this.#waiting.get(bare2(jid)) ?? { jid, guest: false };
     await this.#host.answerWaitingRoom(this.callId, jid, false);
-    this.#waiting.delete(bare(jid));
+    this.#waiting.delete(bare2(jid));
     this.emit("denied", p);
   }
   /** Ask for approval (the default) or let everybody straight in. */
@@ -4178,14 +5491,14 @@ var Room = class extends TypedEmitter {
   async #handle(e) {
     if (this.#closed || e.callId !== this.callId) return;
     this.emit("trace", { kind: e.status, data: e.node ?? e });
-    if (e.status === "terminate" && (e.from === `${this.callId}@call` || bare(e.from) === this.#owner)) {
+    if (e.status === "terminate" && (e.from === `${this.callId}@call` || bare2(e.from) === this.#owner)) {
       this.#closed = true;
       this.#off?.();
       this.emit("closed", { reason: "terminated" });
       return;
     }
     for (const w of e.waitingRoom ?? []) {
-      const key = bare(w.jid);
+      const key = bare2(w.jid);
       if (key === this.#owner || w.state !== "waiting_room_joined" || this.#handled.has(key))
         continue;
       this.#handled.add(key);
@@ -4201,7 +5514,7 @@ var Room = class extends TypedEmitter {
       }
     }
     for (const r of e.roster ?? []) {
-      const key = bare(r.jid);
+      const key = bare2(r.jid);
       if (key === this.#owner) continue;
       const person = { jid: r.jid, guest: r.guest, ...r.name && { name: r.name } };
       if (r.state === "connected" && !this.#inside.has(key)) {
@@ -4401,7 +5714,7 @@ function parseButtonReply(message) {
 }
 
 // src/client/features/message/rich-response.ts
-import { randomBytes as randomBytes2, randomUUID } from "crypto";
+import { randomBytes as randomBytes4, randomUUID as randomUUID2 } from "crypto";
 var KEYWORDS = new Set(
   "break case catch continue debugger default delete do else finally for function if in instanceof new return switch this throw try typeof var void while with true false null undefined NaN Infinity class const let super extends export import yield static constructor of async await get set implements interface package private protected public enum throws transient".split(
     " "
@@ -4467,7 +5780,7 @@ var widget = (title, labels, toast) => ({
       label,
       state: "PENDING",
       kind: "OTHER",
-      tool_call_id: randomBytes2(8).toString("hex"),
+      tool_call_id: randomBytes4(8).toString("hex"),
       toast: { label: toast, __typename: "GenAI3PExtWidgetToast" },
       __typename: "GenAI3PExtWidgetCTA"
     })),
@@ -4566,7 +5879,7 @@ function richResponse(o) {
   if (!sections.length) sections.push(section({ text: "" }, "GenAIMarkdownTextUXPrimitive"));
   const data = {
     __typename: "GenAIUnifiedResponse",
-    response_id: o.responseId ?? randomUUID(),
+    response_id: o.responseId ?? randomUUID2(),
     sections
   };
   return {
@@ -4574,7 +5887,7 @@ function richResponse(o) {
       messageContextInfo: {
         deviceListMetadata: {},
         deviceListMetadataVersion: 2,
-        messageSecret: randomBytes2(32)
+        messageSecret: randomBytes4(32)
       },
       botForwardedMessage: {
         message: {
@@ -4598,168 +5911,6 @@ function richResponse(o) {
 
 // src/client/features/report/report.ts
 import { hkdfSync as hkdfSync3 } from "crypto";
-
-// src/client/reporting.ts
-import { createHmac, hkdfSync as hkdfSync2 } from "crypto";
-var IMG = { f: 17, s: [{ f: 21 }, { f: 22 }] };
-var FIELDS = [
-  { f: 1 },
-  { f: 3, s: [{ f: 2 }, { f: 3 }, { f: 8 }, { f: 11 }, IMG, { f: 25 }] },
-  { f: 4, s: [{ f: 1 }, { f: 16 }, IMG] },
-  { f: 5, s: [{ f: 3 }, { f: 4 }, { f: 5 }, { f: 16 }, IMG] },
-  { f: 6, s: [{ f: 1 }, IMG, { f: 30 }] },
-  { f: 7, s: [{ f: 2 }, { f: 7 }, { f: 10 }, IMG, { f: 20 }] },
-  { f: 8, s: [{ f: 2 }, { f: 7 }, { f: 9 }, IMG, { f: 21 }] },
-  { f: 9, s: [{ f: 2 }, { f: 6 }, { f: 7 }, { f: 13 }, IMG, { f: 20 }] },
-  { f: 12, s: [{ f: 1 }, { f: 2 }, { f: 14, m: true }, { f: 15 }] },
-  { f: 18, s: [{ f: 6 }, { f: 16 }, IMG] },
-  { f: 26, s: [{ f: 4 }, { f: 5 }, { f: 8 }, { f: 13 }, IMG] },
-  {
-    f: 28,
-    s: [{ f: 1 }, { f: 2 }, { f: 4 }, { f: 5 }, { f: 6 }, { f: 7, s: [{ f: 21 }, { f: 22 }] }]
-  },
-  { f: 37, s: [{ f: 1, m: true }] },
-  {
-    f: 49,
-    s: [
-      { f: 2 },
-      { f: 3, s: [{ f: 1 }, { f: 2 }] },
-      { f: 5, s: [{ f: 21 }, { f: 22 }] },
-      { f: 8, s: [{ f: 1 }, { f: 2 }] }
-    ]
-  },
-  { f: 53, s: [{ f: 1, m: true }] },
-  { f: 55, s: [{ f: 1, m: true }] },
-  { f: 58, s: [{ f: 1, m: true }] },
-  { f: 59, s: [{ f: 1, m: true }] },
-  {
-    f: 60,
-    s: [
-      { f: 2 },
-      { f: 3, s: [{ f: 1 }, { f: 2 }] },
-      { f: 5, s: [{ f: 21 }, { f: 22 }] },
-      { f: 8, s: [{ f: 1 }, { f: 2 }] }
-    ]
-  },
-  {
-    f: 64,
-    s: [
-      { f: 2 },
-      { f: 3, s: [{ f: 1 }, { f: 2 }] },
-      { f: 5, s: [{ f: 21 }, { f: 22 }] },
-      { f: 8, s: [{ f: 1 }, { f: 2 }] }
-    ]
-  },
-  { f: 66, s: [{ f: 2 }, { f: 6 }, { f: 7 }, { f: 13 }, IMG, { f: 20 }] },
-  { f: 74, s: [{ f: 1, m: true }] },
-  { f: 87, s: [{ f: 1, m: true }] },
-  { f: 88, s: [{ f: 1 }, { f: 2, s: [{ f: 1 }] }, { f: 3, s: [{ f: 21 }, { f: 22 }] }] },
-  { f: 92, s: [{ f: 1, m: true }] },
-  { f: 93, s: [{ f: 1, m: true }] },
-  { f: 94, s: [{ f: 1, m: true }] }
-];
-var compile = (fields) => new Map(fields.map((f) => [f.f, { m: f.m, children: f.s ? compile(f.s) : void 0 }]));
-var COMPILED = compile(FIELDS);
-var EMPTY = /* @__PURE__ */ new Map();
-function readVarint(buf, offset) {
-  let value = 0;
-  let bytes2 = 0;
-  let shift = 0;
-  while (offset + bytes2 < buf.length) {
-    const cur = buf[offset + bytes2];
-    value |= (cur & 127) << shift;
-    bytes2++;
-    if ((cur & 128) === 0) return { value, bytes: bytes2 };
-    shift += 7;
-    if (shift > 35) return void 0;
-  }
-  return void 0;
-}
-function writeVarint(value) {
-  const parts = [];
-  let rest = value >>> 0;
-  while (rest > 127) {
-    parts.push(rest & 127 | 128);
-    rest >>>= 7;
-  }
-  parts.push(rest);
-  return Buffer.from(parts);
-}
-function extract(data, cfg) {
-  const out = [];
-  let i = 0;
-  while (i < data.length) {
-    const tag = readVarint(data, i);
-    if (!tag) return void 0;
-    const num3 = tag.value >> 3;
-    const wire = tag.value & 7;
-    const start = i;
-    i += tag.bytes;
-    const field = cfg.get(num3);
-    const keepOrSkip = (end) => {
-      if (end > data.length) return false;
-      if (field) out.push({ num: num3, bytes: Buffer.from(data.subarray(start, end)) });
-      i = end;
-      return true;
-    };
-    if (wire === 0) {
-      const v = readVarint(data, i);
-      if (!v || !keepOrSkip(i + v.bytes)) return void 0;
-    } else if (wire === 1) {
-      if (!keepOrSkip(i + 8)) return void 0;
-    } else if (wire === 5) {
-      if (!keepOrSkip(i + 4)) return void 0;
-    } else if (wire === 2) {
-      const len = readVarint(data, i);
-      if (!len) return void 0;
-      const valStart = i + len.bytes;
-      const valEnd = valStart + len.value;
-      if (valEnd > data.length) return void 0;
-      if (!field) {
-        i = valEnd;
-      } else if (field.m || field.children) {
-        const sub = extract(data.subarray(valStart, valEnd), field.children ?? EMPTY);
-        if (!sub) return void 0;
-        if (sub.length > 0)
-          out.push({
-            num: num3,
-            bytes: Buffer.concat([writeVarint(tag.value), writeVarint(sub.length), sub])
-          });
-        i = valEnd;
-      } else {
-        out.push({ num: num3, bytes: Buffer.from(data.subarray(start, valEnd)) });
-        i = valEnd;
-      }
-    } else {
-      return void 0;
-    }
-  }
-  out.sort((a, b) => a.num - b.num);
-  return Buffer.concat(out.map((f) => f.bytes));
-}
-function reportableContent(encodedMessage) {
-  const c = extract(encodedMessage, COMPILED);
-  return c && c.length > 0 ? c : void 0;
-}
-function reportingNode(encodedMessage, messageSecret, key) {
-  const info = Buffer.concat([
-    Buffer.from(key.id),
-    Buffer.from(key.from),
-    Buffer.from(key.to),
-    Buffer.from("Report Token")
-  ]);
-  const secret = Buffer.from(hkdfSync2("sha256", messageSecret, Buffer.alloc(0), info, 32));
-  const content = extract(encodedMessage, COMPILED);
-  if (!content || content.length === 0) return void 0;
-  const token = createHmac("sha256", secret).update(content).digest().subarray(0, 16);
-  return {
-    tag: "reporting",
-    attrs: {},
-    content: [{ tag: "reporting_token", attrs: { v: "2" }, content: token }]
-  };
-}
-
-// src/client/features/report/report.ts
 var REPORT_FLOWS = {
   /** Report from the open chat. */
   chat: "chat",
@@ -11817,15 +12968,49 @@ async function sendContent(client, jid, content, options = {}) {
 }
 
 // src/client/server-failure.ts
+var byCode = (code) => code === "401" ? "logged-out" : code === "403" ? "forbidden" : void 0;
 function classifyServerFailure(node) {
-  const byCode = (code) => code === "401" ? "logged-out" : code === "403" ? "forbidden" : void 0;
-  if (node.tag === "failure") return byCode(node.attrs["reason"]);
+  if (node.tag === "failure") {
+    const reason = node.attrs["reason"];
+    if (reason === "500" || reason === "503") return void 0;
+    return byCode(reason) ?? "rejected";
+  }
   if (node.tag !== "stream:error") return void 0;
   const conflict = Array.isArray(node.content) ? node.content.find((c) => c.tag === "conflict") : void 0;
   const type = conflict?.attrs["type"];
   if (type === "device_removed") return "logged-out";
   if (type === "replaced") return "replaced";
-  return byCode(node.attrs["code"]);
+  const code = node.attrs["code"];
+  if (code === "409") return "replaced";
+  if (code === "516") return "logged-out";
+  return byCode(code);
+}
+function streamErrorReconnectHint(node) {
+  if (node.tag !== "stream:error") return void 0;
+  const code = node.attrs["code"];
+  if (code === "515") return "immediate";
+  if (code === "429") return "penalty";
+  return void 0;
+}
+
+// src/client/reconnect-backoff.ts
+var MAX_MS = 9e5;
+var BACKOFF_MAX_ATTEMPTS = 64;
+var BACKOFF_STABLE_RESET_MS = 3e4;
+function fibonacciBackoffMs(attempt) {
+  let a = 1e3;
+  let b = 1e3;
+  for (let i = 0; i < attempt; i++) {
+    if (a >= MAX_MS) break;
+    const next = Math.min(a + b, MAX_MS);
+    a = b;
+    b = next;
+  }
+  return Math.min(a, MAX_MS);
+}
+function backoffDelayMs(baseMs, random = Math.random) {
+  const spread = Math.floor(baseMs / 10);
+  return baseMs - spread + Math.floor(random() * (2 * spread + 1));
 }
 
 // src/client/auth-dir.ts
@@ -11839,13 +13024,13 @@ function resolveAuthDir(o) {
 }
 
 // src/client/client.ts
-import { randomBytes as randomBytes12 } from "crypto";
+import { randomBytes as randomBytes13 } from "crypto";
 import { join as join5 } from "path";
 
 // src/auth/creds.ts
-import { randomBytes as randomBytes3, randomInt } from "crypto";
-import { chmodSync, existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "fs";
-import { dirname } from "path";
+import { randomBytes as randomBytes5, randomInt } from "crypto";
+import { chmodSync, existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync6, writeFileSync as writeFileSync6 } from "fs";
+import { dirname as dirname4 } from "path";
 function initAuthCreds() {
   const signedIdentityKey = newIdentityKeyPair();
   const spk = newSignedPreKey(signedIdentityKey.privateKey, 1);
@@ -11860,7 +13045,7 @@ function initAuthCreds() {
     },
     signedPreKeyAt: Date.now(),
     registrationId: randomInt(1, 16380),
-    advSecretKey: randomBytes3(32).toString("base64"),
+    advSecretKey: randomBytes5(32).toString("base64"),
     nextPreKeyId: 1,
     pairingEphemeralKey: newIdentityKeyPair()
   };
@@ -11879,13 +13064,13 @@ function reviver(_k, v) {
   return v;
 }
 function saveAuthCreds(path, creds) {
-  mkdirSync2(dirname(path), { recursive: true, mode: 448 });
-  writeFileSync3(path, JSON.stringify(creds, replacer, 2), { mode: 384 });
+  mkdirSync5(dirname4(path), { recursive: true, mode: 448 });
+  writeFileSync6(path, JSON.stringify(creds, replacer, 2), { mode: 384 });
   chmodSync(path, 384);
 }
 function loadAuthCreds(path) {
-  if (!existsSync2(path)) return void 0;
-  const creds = JSON.parse(readFileSync3(path, "utf8"), reviver);
+  if (!existsSync5(path)) return void 0;
+  const creds = JSON.parse(readFileSync6(path, "utf8"), reviver);
   creds.nextPreKeyId ??= 1;
   creds.pairingEphemeralKey ??= newIdentityKeyPair();
   return creds;
@@ -11893,11 +13078,11 @@ function loadAuthCreds(path) {
 
 // src/auth/file-signal-storage.ts
 import {
-  mkdirSync as mkdirSync3,
-  readFileSync as readFileSync4,
-  renameSync as renameSync2,
+  mkdirSync as mkdirSync6,
+  readFileSync as readFileSync7,
+  renameSync as renameSync5,
   rmSync,
-  writeFileSync as writeFileSync4,
+  writeFileSync as writeFileSync7,
   fsyncSync,
   openSync as openSync2,
   closeSync as closeSync2
@@ -11909,7 +13094,7 @@ var FileSignalStorage = class {
     this.identity = identity;
     this.registrationId = registrationId;
     for (const sub of ["sessions", "identities", "prekeys", "signed-prekeys", "sender-keys"])
-      mkdirSync3(join3(dir, sub), { recursive: true, mode: 448 });
+      mkdirSync6(join3(dir, sub), { recursive: true, mode: 448 });
   }
   dir;
   identity;
@@ -11919,7 +13104,7 @@ var FileSignalStorage = class {
   }
   #read(kind, id) {
     try {
-      return new Uint8Array(readFileSync4(this.#path(kind, id)));
+      return new Uint8Array(readFileSync7(this.#path(kind, id)));
     } catch (e) {
       if (e.code === "ENOENT") return void 0;
       throw e;
@@ -11928,14 +13113,14 @@ var FileSignalStorage = class {
   #write(kind, id, data) {
     const target = this.#path(kind, id);
     const tmp = `${target}.tmp`;
-    writeFileSync4(tmp, data, { mode: 384 });
+    writeFileSync7(tmp, data, { mode: 384 });
     const fd = openSync2(tmp, "r");
     try {
       fsyncSync(fd);
     } finally {
       closeSync2(fd);
     }
-    renameSync2(tmp, target);
+    renameSync5(tmp, target);
   }
   getIdentityKeyPair() {
     return Promise.resolve(this.identity);
@@ -11955,6 +13140,10 @@ var FileSignalStorage = class {
   }
   storeSession(name, device, record) {
     this.#write("sessions", `${name}.${device}`, record);
+    return Promise.resolve();
+  }
+  removeSession(name, device) {
+    rmSync(this.#path("sessions", `${name}.${device}`), { force: true });
     return Promise.resolve();
   }
   loadPreKey(id) {
@@ -11993,6 +13182,7 @@ var FileSignalStorage = class {
 import WebSocket from "ws";
 var WA_WS_URL = "wss://web.whatsapp.com/ws/chat";
 var WA_ORIGIN = "https://web.whatsapp.com";
+var NOISE_HANDSHAKE_RESPONSE_TIMEOUT_MS = 2e4;
 var USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 async function loggedFetch(logger, url, headers = {}) {
   const started = Date.now();
@@ -12017,13 +13207,14 @@ async function loggedFetch(logger, url, headers = {}) {
   }
 }
 var Connection = class {
-  constructor(logger, creds, clientPayload, events, url = WA_WS_URL, userAgent = USER_AGENT) {
+  constructor(logger, creds, clientPayload, events, url = WA_WS_URL, userAgent = USER_AGENT, handshakeTimeoutMs = NOISE_HANDSHAKE_RESPONSE_TIMEOUT_MS) {
     this.logger = logger;
     this.creds = creds;
     this.clientPayload = clientPayload;
     this.events = events;
     this.url = url;
     this.userAgent = userAgent;
+    this.handshakeTimeoutMs = handshakeTimeoutMs;
     ensureWasm();
     this.#decoder = new FrameDecoder();
   }
@@ -12033,12 +13224,14 @@ var Connection = class {
   events;
   url;
   userAgent;
+  handshakeTimeoutMs;
   #ws;
   #state = "idle";
   #hs;
   #transport;
   #decoder;
   #firstFrameSent = false;
+  #handshakeTimer;
   get state() {
     return this.#state;
   }
@@ -12078,6 +13271,10 @@ var Connection = class {
         this.logger.event("noise.client-hello", { length: hello.length });
         this.#sendRaw(encodeFrame(hello, connHeader()), "client-hello (with conn header)");
         this.#firstFrameSent = true;
+        this.#handshakeTimer = setTimeout(() => {
+          this.logger.event("noise.handshake-timeout", { ms: this.handshakeTimeoutMs });
+          this.close("handshake-timeout");
+        }, this.handshakeTimeoutMs);
       } catch (error) {
         this.logger.event("noise.error", error);
         this.#finish("handshake-start-failed", void 0, error);
@@ -12098,6 +13295,7 @@ var Connection = class {
   }
   #onFrame(frame) {
     if (this.#state === "handshake") {
+      clearTimeout(this.#handshakeTimer);
       const hs = this.#hs;
       const finish = hs.readServerHelloAndBuildClientFinish(frame);
       this.logger.event("noise.server-hello-verified", { clientFinishLength: finish.length });
@@ -12134,6 +13332,7 @@ var Connection = class {
   }
   #finish(reason, code, error) {
     if (this.#state === "closed") return;
+    clearTimeout(this.#handshakeTimer);
     this.#state = "closed";
     this.logger.event("connection.closed", {
       reason,
@@ -12151,7 +13350,7 @@ var Connection = class {
 
 // src/client/guest.ts
 import { execFile } from "child_process";
-import { randomBytes as randomBytes4, randomUUID as randomUUID2 } from "crypto";
+import { randomBytes as randomBytes6, randomUUID as randomUUID3 } from "crypto";
 
 // src/client/fingerprint.ts
 import { randomInt as randomInt2 } from "crypto";
@@ -12201,15 +13400,15 @@ var percentEncodeBytes = (b) => {
 };
 function newGuestSession() {
   return {
-    accessSessionId: randomUUID2(),
-    expid: randomBytes4(16).toString("base64url"),
+    accessSessionId: randomUUID3(),
+    expid: randomBytes6(16).toString("base64url"),
     fingerprint: randomFingerprint()
   };
 }
 async function guestReg(creds, config, o) {
   const [lc, lg] = o.locale ?? ["DE", "DE"];
   const fp = o.fingerprint ?? randomFingerprint();
-  const idBytes = randomBytes4(20);
+  const idBytes = randomBytes6(20);
   const q = (k, v) => `${k}=${encodeURIComponent(v)}`;
   const query = [
     q("mcc", "310"),
@@ -12217,8 +13416,8 @@ async function guestReg(creds, config, o) {
     q("lc", lc),
     q("lg", lg),
     q("tos_version", "1"),
-    q("device_id", randomUUID2()),
-    q("access_session_id", o.accessSessionId ?? randomUUID2()),
+    q("device_id", randomUUID3()),
+    q("access_session_id", o.accessSessionId ?? randomUUID3()),
     q("authkey", b64url(creds.noiseKey.publicKey)),
     q("e_regid", b64url(be(creds.registrationId, 4))),
     q("e_keytype", b64url(Buffer.from([5]))),
@@ -12343,7 +13542,7 @@ function curlGet(url, headers) {
 }
 
 // src/client/pairing.ts
-import { createHash as createHash3, createHmac as createHmac2, timingSafeEqual } from "crypto";
+import { createHash as createHash4, createHmac as createHmac3, timingSafeEqual } from "crypto";
 var DEFAULT_CONFIG = {
   version: [2, 3e3, 1050701434],
   browser: ["Windows", "Desktop"],
@@ -12396,7 +13595,7 @@ function registrationPayload(creds, config) {
     passive: false,
     pull: false,
     devicePairingData: {
-      buildHash: createHash3("md5").update(config.version.join(".")).digest(),
+      buildHash: createHash4("md5").update(config.version.join(".")).digest(),
       deviceProps,
       eRegid: be2(creds.registrationId, 4),
       eKeytype: Buffer.from([5]),
@@ -12440,9 +13639,9 @@ function qrString(ref, creds) {
     creds.advSecretKey
   ].join(",");
 }
-var ACCOUNT_SIG_PREFIX = Buffer.from([6, 0]);
-var DEVICE_SIG_PREFIX = Buffer.from([6, 1]);
-var HOSTED_ACCOUNT_SIG_PREFIX = Buffer.from([6, 5]);
+var ACCOUNT_SIG_PREFIX2 = Buffer.from([6, 0]);
+var DEVICE_SIG_PREFIX2 = Buffer.from([6, 1]);
+var HOSTED_ACCOUNT_SIG_PREFIX2 = Buffer.from([6, 5]);
 var child = (n, tag) => Array.isArray(n.content) ? n.content.find((c) => c.tag === tag) : void 0;
 function handlePairSuccess(stanza, creds) {
   const success = child(stanza, "pair-success");
@@ -12458,8 +13657,8 @@ function handlePairSuccess(stanza, creds) {
     defaults: true
   });
   const hostedType = protoRoot().lookupEnum("proto.ADVEncryptionType").values["HOSTED"];
-  const prefix = hm.accountType === hostedType ? HOSTED_ACCOUNT_SIG_PREFIX : Buffer.alloc(0);
-  const expected = createHmac2("sha256", Buffer.from(creds.advSecretKey, "base64")).update(Buffer.concat([prefix, hm.details])).digest();
+  const prefix = hm.accountType === hostedType ? HOSTED_ACCOUNT_SIG_PREFIX2 : Buffer.alloc(0);
+  const expected = createHmac3("sha256", Buffer.from(creds.advSecretKey, "base64")).update(Buffer.concat([prefix, hm.details])).digest();
   if (expected.length !== hm.hmac.length || !timingSafeEqual(expected, hm.hmac)) {
     throw new Error("Invalid account signature (HMAC)");
   }
@@ -12473,7 +13672,7 @@ function handlePairSuccess(stanza, creds) {
     enums: Number,
     defaults: true
   });
-  const accountPrefix = deviceIdentity.deviceType === hostedType ? HOSTED_ACCOUNT_SIG_PREFIX : ACCOUNT_SIG_PREFIX;
+  const accountPrefix = deviceIdentity.deviceType === hostedType ? HOSTED_ACCOUNT_SIG_PREFIX2 : ACCOUNT_SIG_PREFIX2;
   const accountMsg = Buffer.concat([
     accountPrefix,
     account.details,
@@ -12483,7 +13682,7 @@ function handlePairSuccess(stanza, creds) {
     throw new Error("Failed to verify account signature");
   }
   const deviceMsg = Buffer.concat([
-    DEVICE_SIG_PREFIX,
+    DEVICE_SIG_PREFIX2,
     account.details,
     creds.signedIdentityKey.publicKey,
     account.accountSignatureKey
@@ -12622,7 +13821,7 @@ function callAck(node) {
 }
 
 // src/client/features/message/comment.ts
-import { createCipheriv, createDecipheriv as createDecipheriv2, hkdfSync as hkdfSync4, randomBytes as randomBytes5 } from "crypto";
+import { createCipheriv, createDecipheriv as createDecipheriv2, hkdfSync as hkdfSync4, randomBytes as randomBytes7 } from "crypto";
 var keyFor = (c) => Buffer.from(
   hkdfSync4(
     "sha256",
@@ -12638,7 +13837,7 @@ var keyFor = (c) => Buffer.from(
   )
 );
 function encryptAddon(body, c) {
-  const iv = randomBytes5(12);
+  const iv = randomBytes7(12);
   const cipher = createCipheriv("aes-256-gcm", keyFor(c), iv);
   const plain = encodeProto("Message", body);
   const out = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
@@ -12653,9 +13852,9 @@ function decryptAddon(enc2, c) {
   const T = protoType("Message");
   return T.toObject(T.decode(plain), { bytes: Buffer, longs: Number });
 }
-function commentMessage(parent, text4, ctx) {
+function commentMessage(parent, text5, ctx) {
   const enc2 = encryptAddon(
-    { extendedTextMessage: { text: text4 } },
+    { extendedTextMessage: { text: text5 } },
     { ...ctx, parentMsgId: parent.id, useCase: "Enc Comment" }
   );
   return {
@@ -12668,12 +13867,19 @@ function commentMessage(parent, text4, ctx) {
       },
       ...enc2
     },
-    messageContextInfo: { messageSecret: randomBytes5(32) }
+    messageContextInfo: { messageSecret: randomBytes7(32) }
   };
 }
+var SECRET_ENC_USE_CASE = {
+  EVENT_EDIT: "Event Edit",
+  MESSAGE_EDIT: "Message Edit",
+  POLL_EDIT: "Poll Edit",
+  POLL_ADD_OPTION: "Poll Add Option"
+};
+var decryptSecretEncrypted = (enc2, kind, ctx) => decryptAddon(enc2, { ...ctx, useCase: SECRET_ENC_USE_CASE[kind] });
 
 // src/client/features/message/event-message.ts
-import { createCipheriv as createCipheriv2, createDecipheriv as createDecipheriv3, hkdfSync as hkdfSync5, randomBytes as randomBytes6 } from "crypto";
+import { createCipheriv as createCipheriv2, createDecipheriv as createDecipheriv3, hkdfSync as hkdfSync5, randomBytes as randomBytes8 } from "crypto";
 var seconds = (t) => t === void 0 ? void 0 : Math.floor(t instanceof Date ? t.getTime() / 1e3 : t);
 function eventMessage(o) {
   if (!o.name.trim()) throw new Error("an event needs a name");
@@ -12689,7 +13895,7 @@ function eventMessage(o) {
       ...o.extraGuestsAllowed !== void 0 && { extraGuestsAllowed: o.extraGuestsAllowed },
       isScheduleCall: o.isScheduledCall ?? false
     },
-    messageContextInfo: { messageSecret: randomBytes6(32) }
+    messageContextInfo: { messageSecret: randomBytes8(32) }
   };
 }
 var keyFor2 = (c) => Buffer.from(
@@ -12716,7 +13922,7 @@ function encryptEventResponse(response, c, now = Date.now()) {
       ...response.extraGuestCount !== void 0 && { extraGuestCount: response.extraGuestCount }
     })
   ).finish();
-  const iv = randomBytes6(12);
+  const iv = randomBytes8(12);
   const cipher = createCipheriv2("aes-256-gcm", keyFor2(c), iv);
   cipher.setAAD(aadFor(c));
   const body = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
@@ -12755,17 +13961,26 @@ var MAX_SECRETS_PER_CHAT = 20;
 var MessageSecrets = class {
   #byId = /* @__PURE__ */ new Map();
   #byChat = /* @__PURE__ */ new Map();
+  /** Who actually sent the message this id's secret belongs to (ourselves, for `rememberOwn`), and in
+   * which chat - set alongside the secret so a later secret-encrypted edit can be bound to its real
+   * author instead of trusting whoever the *editing* envelope claims to be. */
+  #originById = /* @__PURE__ */ new Map();
   /** The secret stored for exactly this message id (no chat-wide fallback). */
   byId(id) {
     return this.#byId.get(id);
+  }
+  /** Who sent this id's message, and in which chat - as recorded when its secret was first seen. */
+  originOf(id) {
+    return this.#originById.get(id);
   }
   /** Is a secret already stored for this id? (First write wins: a later message with the same id cannot replace it.) */
   has(id) {
     return this.#byId.has(id);
   }
-  set(id, secret, chat) {
+  set(id, secret, chat, author) {
     const buf = Buffer.from(secret);
     this.#byId.set(id, buf);
+    if (author && chat) this.#originById.set(id, { author, chat });
     if (!chat) return;
     const list = (this.#byChat.get(chat) ?? []).filter((e) => e.id !== id && !e.secret.equals(buf));
     list.unshift({ id, secret: buf });
@@ -12848,18 +14063,65 @@ function extractMetaAiText(message) {
 }
 
 // src/client/receiver.ts
-var S_WHATSAPP_NET = "s.whatsapp.net";
+var S_WHATSAPP_NET2 = "s.whatsapp.net";
 var MIN_PREKEY_COUNT = 5;
 var UPLOAD_PREKEY_COUNT = 30;
 var MAX_RETRIES = 5;
 var REQUEST_TIMEOUT_MS = 2e4;
-var children = (n, tag) => Array.isArray(n.content) ? n.content.filter((c) => tag === void 0 || c.tag === tag) : [];
+var SECRET_ENC_TYPE_BY_NUMBER = {
+  1: "EVENT_EDIT",
+  2: "MESSAGE_EDIT",
+  4: "POLL_EDIT",
+  5: "POLL_ADD_OPTION"
+};
+function withAddressingFallback(lids, a, b, attempt) {
+  const altA = lids.swap(a);
+  const altB = lids.swap(b);
+  const tried = /* @__PURE__ */ new Set([`${a}\0${b}`]);
+  const combos = [[a, b]];
+  for (const [ca, cb] of [
+    [altA, b],
+    [a, altB],
+    [altA, altB]
+  ]) {
+    if (ca === void 0 || cb === void 0) continue;
+    const key = `${ca}\0${cb}`;
+    if (tried.has(key)) continue;
+    tried.add(key);
+    combos.push([ca, cb]);
+  }
+  let lastError;
+  for (const [ca, cb] of combos) {
+    try {
+      return attempt(ca, cb);
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError;
+}
+var children2 = (n, tag) => Array.isArray(n.content) ? n.content.filter((c) => tag === void 0 || c.tag === tag) : [];
 function noteLidFromAttrs(attrs, lids) {
   const acting = attrs["participant"] ?? attrs["from"];
   if (!acting) return;
   const isLid = attrs["addressing_mode"] === "lid" || acting.endsWith("@lid");
   const alt = isLid ? attrs["participant_pn"] ?? attrs["sender_pn"] ?? attrs["peer_recipient_pn"] : attrs["participant_lid"] ?? attrs["sender_lid"] ?? attrs["peer_recipient_lid"];
   if (alt) lids.set(acting, alt);
+}
+function applyLidMigrationMapping(encodedPayload, lids) {
+  let mappings;
+  try {
+    const t = protoType("LIDMigrationMappingSyncPayload");
+    const decoded = t.toObject(t.decode(encodedPayload), { longs: String, defaults: true });
+    mappings = decoded.pnToLidMappings ?? [];
+  } catch {
+    return;
+  }
+  for (const m of mappings) {
+    const lid = m.latestLid && m.latestLid !== "0" ? m.latestLid : m.assignedLid;
+    if (!m.pn || m.pn === "0" || !lid || lid === "0") continue;
+    lids.set(`${lid}@lid`, `${m.pn}@s.whatsapp.net`);
+  }
 }
 var be3 = (n, len) => {
   const b = Buffer.alloc(len);
@@ -12873,14 +14135,14 @@ function unpadRandomMax16(data) {
   return data.subarray(0, data.length - pad);
 }
 function buildAck(node, meId) {
-  const attrs = {
-    id: node.attrs["id"] ?? "",
-    to: node.attrs["from"] ?? "",
-    class: node.tag
-  };
-  if (node.attrs["participant"]) attrs["participant"] = node.attrs["participant"];
+  const from = node.attrs["from"] ?? "";
+  const participant = node.attrs["participant"];
+  const isEncryptNotification = node.tag === "notification" && node.attrs["type"] === "encrypt";
+  const omitParticipant = node.tag === "receipt" && participant === from;
+  const attrs = { id: node.attrs["id"] ?? "", to: from, class: node.tag };
+  if (participant && !omitParticipant) attrs["participant"] = participant;
   if (node.attrs["recipient"]) attrs["recipient"] = node.attrs["recipient"];
-  if (node.attrs["type"]) attrs["type"] = node.attrs["type"];
+  if (node.attrs["type"] && !isEncryptNotification) attrs["type"] = node.attrs["type"];
   if (node.tag === "message" && meId) attrs["from"] = meId;
   return { tag: "ack", attrs };
 }
@@ -12925,7 +14187,7 @@ var Receiver = class {
       }
       return false;
     }
-    if (node.tag === "ack" && node.attrs["class"] === "message") {
+    if (node.tag === "ack" && (node.attrs["class"] === "message" || node.attrs["class"] === "status")) {
       const p = this.#acks.get(node.attrs["id"] ?? "");
       if (p) {
         this.#acks.delete(node.attrs["id"]);
@@ -12961,7 +14223,7 @@ var Receiver = class {
     this.#ownIds.add(id);
     if (this.#ownIds.size > 2e3) this.#ownIds.delete(this.#ownIds.values().next().value);
     const secret = message["messageContextInfo"]?.messageSecret;
-    if (secret) this.#secrets.set(id, secret, chat);
+    if (secret) this.#secrets.set(id, secret, chat, this.d.creds.me?.id ?? "");
     this.#notePoll(id, message, this.d.creds.me?.id ?? "", true);
   }
   /** Polls are identified by who created them *and* the id: two different peers may use the same id. */
@@ -13065,19 +14327,52 @@ var Receiver = class {
   async ensurePreKeys() {
     const res = await this.request({
       tag: "iq",
-      attrs: { xmlns: "encrypt", type: "get", to: S_WHATSAPP_NET },
+      attrs: { xmlns: "encrypt", type: "get", to: S_WHATSAPP_NET2 },
       content: [{ tag: "count", attrs: {} }]
     });
-    const count = Number(children(res, "count")[0]?.attrs["value"] ?? 0);
+    const count = Number(children2(res, "count")[0]?.attrs["value"] ?? 0);
     this.d.logger.event("prekeys.server-count", { count });
     if (count < MIN_PREKEY_COUNT) await this.uploadPreKeys(UPLOAD_PREKEY_COUNT);
+  }
+  /**
+   * Ask the server for its own record of our uploaded key bundle (`<iq xmlns="encrypt"><digest/></iq>`,
+   * `WAWebHandleDigestKey`): a 404 means it has none at all (the record was lost server-side, or never
+   * made it through), so the bundle is re-uploaded. Any other outcome - a mismatched registration id, a
+   * malformed response, a transient server error - is only logged: WA Web itself never re-uploads for
+   * those, trusting the ordinary low-prekey-count path (`ensurePreKeys`) to refresh things eventually.
+   */
+  async validateDigestKey() {
+    let res;
+    try {
+      res = await this.request({
+        tag: "iq",
+        attrs: { xmlns: "encrypt", type: "get", to: S_WHATSAPP_NET2 },
+        content: [{ tag: "digest", attrs: {} }]
+      });
+    } catch (e) {
+      if (/"code":"404"/.test(e.message)) {
+        this.d.logger.event("prekeys.digest-missing", {});
+        await this.uploadPreKeys(UPLOAD_PREKEY_COUNT);
+      } else {
+        this.d.logger.event("prekeys.digest-check-failed", e);
+      }
+      return;
+    }
+    const digest = children2(res, "digest")[0];
+    const regBytes = digest && children2(digest, "registration")[0]?.content;
+    const regId = regBytes instanceof Uint8Array ? regBytes.reduce((acc, b) => acc * 256 + b, 0) : void 0;
+    if (regId !== void 0 && regId !== this.d.creds.registrationId)
+      this.d.logger.event("prekeys.digest-reg-id-mismatch", {
+        server: regId,
+        local: this.d.creds.registrationId
+      });
   }
   async uploadPreKeys(count) {
     const keys = await this.#generatePreKeys(count);
     const { creds } = this.d;
     const node = {
       tag: "iq",
-      attrs: { xmlns: "encrypt", type: "set", to: S_WHATSAPP_NET },
+      attrs: { xmlns: "encrypt", type: "set", to: S_WHATSAPP_NET2 },
       content: [
         { tag: "registration", attrs: {}, content: be3(creds.registrationId, 4) },
         { tag: "type", attrs: {}, content: Buffer.from([5]) },
@@ -13097,18 +14392,49 @@ var Receiver = class {
     this.d.saveCreds();
     return keys;
   }
+  /**
+   * `<notification type="encrypt"><identity/></notification>`: the peer's primary device was re-registered
+   * (e.g. WhatsApp reinstalled) and got a new identity key. Drop our stored session for it (under the PN
+   * and LID forms, whichever we know) so the next send rebuilds it via a fresh, ADV-verified prekey fetch
+   * instead of silently encrypting to - or failing to decrypt from - the old identity. A companion device's
+   * own identity change does not affect this (only the primary's matters), and neither does our own (that
+   * would break our other devices' sessions with us).
+   */
+  async #handleIdentityChange(node) {
+    const from = node.attrs["from"];
+    if (!from) return;
+    let decoded;
+    try {
+      decoded = jidDecode(from);
+    } catch {
+      return;
+    }
+    if (decoded.device !== 0) return;
+    const { creds, storage, lids, logger } = this.d;
+    const pnUser = decoded.server === "lid" ? lids.pnUser(decoded.user) : decoded.user;
+    const lidUser = decoded.server === "lid" ? decoded.user : lids.lidUser(decoded.user);
+    const targets = new Set([decoded.user, pnUser, lidUser].filter((u) => !!u));
+    const isMe = [...targets].some(
+      (u) => creds.me && jidDecode(creds.me.id).user === u || creds.me?.lid && jidDecode(creds.me.lid).user === u
+    );
+    if (isMe) return;
+    for (const user of targets) await storage.removeSession(user, 0);
+    logger.event("identity.changed", { from });
+    this.d.onIdentityChange?.(from);
+  }
   // ---- incoming stanzas -----------------------------------------------------------------------
   async #process(node) {
     const meId = this.d.creds.me?.id;
     noteLidFromAttrs(node.attrs, this.d.lids);
     if (node.tag === "notification") {
       if (node.attrs["type"] === "encrypt") {
-        const count = children(node, "count")[0];
+        const count = children2(node, "count")[0];
         if (count && Number(count.attrs["value"]) < MIN_PREKEY_COUNT) {
           await this.uploadPreKeys(UPLOAD_PREKEY_COUNT).catch(
             (e) => this.d.logger.event("prekeys.upload-failed", e)
           );
         }
+        if (children2(node, "identity")[0]) await this.#handleIdentityChange(node);
       }
       this.#sendSafe(buildAck(node, meId));
       this.d.onNotification?.(node);
@@ -13127,8 +14453,8 @@ var Receiver = class {
     const id = node.attrs["id"] ?? "";
     const participant = node.attrs["participant"];
     const author = participant ?? from;
-    const plaintexts = children(node, "plaintext").filter((e) => e.content instanceof Uint8Array);
-    const encs = children(node, "enc").filter((e) => e.content instanceof Uint8Array);
+    const plaintexts = children2(node, "plaintext").filter((e) => e.content instanceof Uint8Array);
+    const encs = children2(node, "enc").filter((e) => e.content instanceof Uint8Array);
     const isGroupEnc = (e) => e.attrs["type"] === "skmsg" || e.attrs["type"] === "frskmsg";
     const ordered = [
       ...plaintexts.map((p) => ({ ...p, attrs: { ...p.attrs, type: "plaintext" } })),
@@ -13147,15 +14473,17 @@ var Receiver = class {
         const msg = await this.#decodeAndApply(node, plain, author, id, from, type === "msmsg");
         decrypted++;
         logger.event("message.decrypted", { id, from, participant, type, message: msg.json });
+        if (id && msg.json["deviceSentMessage"] && this.#isOwnAccount(author))
+          this.d.onOwnDeviceSent?.(id);
         const decoded = { id, from, message: msg.json };
         if (participant) decoded.participant = participant;
         const ts = Number(node.attrs["t"]);
         if (ts) decoded.timestamp = ts;
         if (node.attrs["notify"]) decoded.pushName = node.attrs["notify"];
-        const rep = children(node, "reporting")[0];
+        const rep = children2(node, "reporting")[0];
         if (rep) {
-          const tag = children(rep, "reporting_tag")[0]?.content;
-          const tok = children(rep, "reporting_token")[0];
+          const tag = children2(rep, "reporting_tag")[0]?.content;
+          const tok = children2(rep, "reporting_token")[0];
           decoded.reporting = {
             ...tag instanceof Uint8Array && { tag },
             ...tok?.content instanceof Uint8Array && { token: tok.content },
@@ -13168,7 +14496,7 @@ var Receiver = class {
         logger.event("message.decrypt-failed", { id, from, participant, type, error });
       }
     }
-    const unavailable = children(node, "unavailable")[0];
+    const unavailable = children2(node, "unavailable")[0];
     if (unavailable && ordered.length === 0 && id && from) {
       const ts = Number(node.attrs["t"]);
       this.d.onUnavailable?.({
@@ -13227,9 +14555,19 @@ var Receiver = class {
     let lastError = "poll vote did not decrypt";
     for (const secret of secrets) {
       try {
-        const hashes = decryptPollVote(
-          { encPayload: new Uint8Array(vote.encPayload), encIv: new Uint8Array(vote.encIv) },
-          { pollCreatorJid: creator, pollMsgId: key.id, pollSecret: secret, voterJid: voter }
+        const hashes = withAddressingFallback(
+          this.d.lids,
+          creator,
+          voter,
+          (creatorJid, voterJid) => decryptPollVote(
+            { encPayload: new Uint8Array(vote.encPayload), encIv: new Uint8Array(vote.encIv) },
+            {
+              pollCreatorJid: creatorJid,
+              pollMsgId: key.id,
+              pollSecret: secret,
+              voterJid
+            }
+          )
         );
         const names = poll2 ? hashes.map((h) => poll2.options.find((n) => pollOptionHash(n) === h)).filter((n) => !!n) : void 0;
         return { pollId: key.id, selected: hashes, ...names && { options: names } };
@@ -13257,15 +14595,14 @@ var Receiver = class {
       if (!secret) return { kind: useCase, targetId: key.id, error: "parent secret unknown" };
       const strip = (j) => j.replace(/:\d+@/, "@");
       try {
-        const message = decryptAddon(
-          { encPayload: new Uint8Array(enc2.encPayload), encIv: new Uint8Array(enc2.encIv) },
-          {
-            parentMsgId: key.id,
-            parentSenderJid: strip(parentSender),
-            modifierJid: strip(who),
-            secret,
-            useCase
-          }
+        const message = withAddressingFallback(
+          this.d.lids,
+          strip(parentSender),
+          strip(who),
+          (parentSenderJid, modifierJid) => decryptAddon(
+            { encPayload: new Uint8Array(enc2.encPayload), encIv: new Uint8Array(enc2.encIv) },
+            { parentMsgId: key.id, parentSenderJid, modifierJid, secret, useCase }
+          )
         );
         return { kind: useCase, targetId: key.id, message };
       } catch (e) {
@@ -13282,13 +14619,69 @@ var Receiver = class {
     const secret = this.#secrets.byId(key.id);
     if (!secret) return { eventId: key.id, error: "event secret unknown" };
     try {
-      const r = decryptEventResponse(
-        { encPayload: new Uint8Array(enc2.encPayload), encIv: new Uint8Array(enc2.encIv) },
-        { eventMsgId: key.id, eventCreatorJid: creator, responderJid: responder, secret }
+      const r = withAddressingFallback(
+        this.d.lids,
+        creator,
+        responder,
+        (eventCreatorJid, responderJid) => decryptEventResponse(
+          { encPayload: new Uint8Array(enc2.encPayload), encIv: new Uint8Array(enc2.encIv) },
+          { eventMsgId: key.id, eventCreatorJid, responderJid, secret }
+        )
       );
       return { eventId: key.id, ...r };
     } catch (e) {
       return { eventId: key.id, error: e.message };
+    }
+  }
+  /**
+   * `secretEncryptedMessage`: an event/message/poll edit, or a poll-add-option, via the same add-on
+   * mechanism as `#addon`. `MESSAGE_SCHEDULE` and anything else `comment.ts`'s `SecretEncType` doesn't name
+   * are not this client's concern yet (see `ConditionalRevealMessage` for the former) and are skipped.
+   */
+  #secretEncrypted(raw, who, chat) {
+    const enc2 = raw["secretEncryptedMessage"];
+    const key = enc2?.targetMessageKey;
+    if (!key?.id || !enc2?.encPayload || !enc2?.encIv) return void 0;
+    const kind = SECRET_ENC_TYPE_BY_NUMBER[Number(enc2.secretEncType)];
+    if (!kind) return void 0;
+    const secret = this.#secrets.byId(key.id);
+    if (!secret) return { kind, targetId: key.id, error: "parent secret unknown" };
+    const strip = (j) => j.replace(/:\d+@/, "@");
+    let parentSender;
+    if (kind === "POLL_ADD_OPTION") {
+      const claimedCreator = key.fromMe ? this.d.creds.me?.id ?? "" : key.participant ?? key.remoteJid ?? chat;
+      const creator = this.#polls.get(this.#pollKey(claimedCreator, key.id))?.creator;
+      if (!creator) return { kind, targetId: key.id, error: "poll unknown" };
+      parentSender = creator;
+    } else {
+      const origin = this.#secrets.originOf(key.id);
+      if (!origin || origin.chat !== chat)
+        return { kind, targetId: key.id, error: "parent unknown" };
+      try {
+        if (jidDecode(strip(origin.author)).user !== jidDecode(strip(who)).user) {
+          const swapped = this.d.lids.swap(strip(who));
+          if (!swapped || jidDecode(swapped).user !== jidDecode(strip(origin.author)).user)
+            return { kind, targetId: key.id, error: "editor is not the author" };
+        }
+      } catch {
+        return { kind, targetId: key.id, error: "editor is not the author" };
+      }
+      parentSender = origin.author;
+    }
+    try {
+      const message = withAddressingFallback(
+        this.d.lids,
+        strip(parentSender),
+        strip(who),
+        (parentSenderJid, modifierJid) => decryptSecretEncrypted(
+          { encPayload: new Uint8Array(enc2.encPayload), encIv: new Uint8Array(enc2.encIv) },
+          kind,
+          { parentMsgId: key.id, parentSenderJid, modifierJid, secret }
+        )
+      );
+      return { kind, targetId: key.id, message };
+    } catch (e) {
+      return { kind, targetId: key.id, error: e.message };
     }
   }
   /** A peer-category stanza (the phone talking to its linked devices) from our own account. */
@@ -13313,8 +14706,8 @@ var Receiver = class {
   /** Meta AI reply: decrypt with the secret of the message it answers (see meta-ai.ts). */
   #decryptMsmsg(node, author, data) {
     const { creds } = this.d;
-    const meta = children(node, "meta")[0]?.attrs ?? {};
-    const bot = children(node, "bot")[0]?.attrs ?? {};
+    const meta = children2(node, "meta")[0]?.attrs ?? {};
+    const bot = children2(node, "bot")[0]?.attrs ?? {};
     const botEditTargetId = bot["edit_target_id"] || void 0;
     const candidates = this.#secrets.candidates(
       [botEditTargetId, meta["target_id"], node.attrs["id"]],
@@ -13368,7 +14761,7 @@ var Receiver = class {
     const raw = T.toObject(decoded, { bytes: Buffer });
     const secret = raw.messageContextInfo?.messageSecret;
     if (secret && !this.#ownIds.has(id) && !this.#secrets.has(id))
-      this.#secrets.set(id, secret, chat);
+      this.#secrets.set(id, secret, chat, author);
     const shared = raw.protocolMessage?.appStateSyncKeyShare?.keys;
     if (shared?.length && this.d.onAppStateKeys && !this.#isOwnPeer(node, author)) {
       this.d.logger.event("appstate.key-share-rejected", { author, count: shared.length });
@@ -13377,6 +14770,14 @@ var Receiver = class {
         (k) => k.keyId?.keyId && k.keyData?.keyData ? [{ keyId: new Uint8Array(k.keyId.keyId), keyData: new Uint8Array(k.keyData.keyData) }] : []
       );
       if (keys.length) this.d.onAppStateKeys(keys);
+    }
+    const migrationPayload = raw.protocolMessage?.lidMigrationMappingSyncMessage?.encodedMappingPayload;
+    if (migrationPayload) {
+      if (this.#isOwnPeer(node, author)) {
+        applyLidMigrationMapping(new Uint8Array(migrationPayload), this.d.lids);
+      } else {
+        this.d.logger.event("lid-migration.rejected", { author });
+      }
     }
     const pdo = raw.protocolMessage?.peerDataOperationRequestResponseMessage?.peerDataOperationResult;
     if (pdo?.length && this.d.onResentMessage) {
@@ -13432,8 +14833,10 @@ var Receiver = class {
     if (addon) asJson["addon"] = addon;
     const rsvp = this.#eventResponse(raw, author, chat);
     if (rsvp) asJson["eventResponse"] = rsvp;
-    const text4 = lenient ? extractMetaAiText(asJson) : void 0;
-    return { json: text4 !== void 0 ? { ...asJson, metaAiText: text4 } : asJson };
+    const secretEdit = this.#secretEncrypted(raw, author, chat);
+    if (secretEdit) asJson["secretEdit"] = secretEdit;
+    const text5 = lenient ? extractMetaAiText(asJson) : void 0;
+    return { json: text5 !== void 0 ? { ...asJson, metaAiText: text5 } : asJson };
   }
   /** Ask the sender to re-encrypt for us; from the 2nd attempt on, include our key bundle. */
   async #sendRetry(node) {
@@ -13508,638 +14911,14 @@ var xmppSignedPreKey = (creds) => ({
   ]
 });
 
-// src/client/sender.ts
-import { createHash as createHash4, randomBytes as randomBytes7 } from "crypto";
-import { existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync5, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "fs";
-import { dirname as dirname2 } from "path";
-var S_WHATSAPP_NET2 = "s.whatsapp.net";
-var SENT_CACHE_SIZE = 500;
-var MAX_RESEND_COUNT = 5;
-var children2 = (n, tag) => Array.isArray(n.content) ? n.content.filter((c) => tag === void 0 || c.tag === tag) : [];
-function padRandomMax16(data) {
-  const n = (randomBytes7(1)[0] & 15) + 1;
-  return Buffer.concat([data, Buffer.alloc(n, n)]);
-}
-function generateMessageId(meId) {
-  const data = Buffer.alloc(8 + 20 + 16);
-  data.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1e3)));
-  const user = jidDecode(meId).user;
-  data.write(user, 8);
-  data.write("@c.us", 8 + user.length);
-  randomBytes7(16).copy(data, 28);
-  return "3EB0" + createHash4("sha256").update(data).digest("hex").toUpperCase().slice(0, 18);
-}
-var Sender = class {
-  constructor(d) {
-    this.d = d;
-    this.#memory = d.senderKeyMemoryPath && existsSync3(d.senderKeyMemoryPath) ? JSON.parse(readFileSync5(d.senderKeyMemoryPath, "utf8")) : {};
-  }
-  d;
-  /** Recently sent messages, kept so a device that could not decrypt one can be answered (retry receipts). */
-  #sent = /* @__PURE__ */ new Map();
-  /** phone-number user -> LID user, learned from usync, so an answer from either identity counts as the same person. */
-  #lidAlias = /* @__PURE__ */ new Map();
-  /** Resends done per message+device (we do not trust the count in the receipt). */
-  #resends = /* @__PURE__ */ new Map();
-  /** `group|senderKeyId` -> the devices that already got that sender key (keyed by the key's owner: see #groupStanza). */
-  #memory;
-  /** Send plain text to a user or group JID. Returns the message id. */
-  async sendText(to, text4) {
-    return this.sendMessage(to, { extendedTextMessage: { text: text4 } });
-  }
-  /** Send an arbitrary WAProto `Message` (plain object form). */
-  async sendMessage(to, message, opts = {}) {
-    const { creds } = this.d;
-    if (!creds.me) throw new Error("not paired");
-    await this.d.gate?.(to, message);
-    const id = opts.messageId ?? generateMessageId(creds.me.id);
-    const withSecret = withMessageSecret(message);
-    if (to.endsWith("@newsletter")) {
-      const { messageContextInfo: info, ...bare3 } = message;
-      const association = info?.messageAssociation;
-      const post = channelPost({
-        ...bare3,
-        ...association ? { messageContextInfo: { messageAssociation: association } } : {}
-      });
-      const stanza2 = {
-        tag: "message",
-        attrs: { id, to, type: messageType(post), ...opts.stanzaAttrs },
-        content: [
-          {
-            tag: "plaintext",
-            attrs: { ...opts.encAttrs },
-            content: encodeProto("Message", post)
-          },
-          ...opts.extraNodes ?? []
-        ]
-      };
-      this.d.logger.event("send.message", { id, to });
-      const ack = await this.d.receiver.sendAndWaitAck(stanza2);
-      opts.onAck?.(ack);
-      this.d.logger.event("send.acked", { id, to });
-      return id;
-    }
-    this.#remember(id, to, withSecret);
-    this.d.onSent?.(id, to, withSecret);
-    const stanza = to.endsWith("@g.us") || to === "status@broadcast" ? await this.#groupStanza(id, to, withSecret, opts) : await this.#directStanza(id, to, withSecret, opts);
-    this.d.logger.event("send.message", { id, to });
-    await this.d.receiver.sendAndWaitAck(stanza);
-    if (!to.endsWith("@g.us") && to !== "status@broadcast" && !message["protocolMessage"])
-      this.d.tc?.issueTo(this.d.lids.resolve(to), (n) => this.d.receiver.request(n));
-    this.d.logger.event("send.acked", { id, to });
-    return id;
-  }
-  /**
-   * Send a "peer" message to our own primary phone (device 0): app-state key requests and similar
-   * device-to-device traffic. Wrapped as a deviceSentMessage like every message to our own devices.
-   */
-  async sendPeerMessage(message) {
-    const { creds, logger } = this.d;
-    if (!creds.me) throw new Error("not paired");
-    const meBare = `${jidDecode(creds.me.id).user}@${S_WHATSAPP_NET2}`;
-    const id = generateMessageId(creds.me.id);
-    this.#sent.set(id, {
-      to: meBare,
-      message,
-      audience: /* @__PURE__ */ new Set([
-        jidDecode(creds.me.id).user,
-        ...creds.me.lid ? [jidDecode(creds.me.lid).user] : []
-      ]),
-      stanzaAttrs: { category: "peer", push_priority: "high_force" },
-      extraNodes: [{ tag: "meta", attrs: { appdata: "default" } }]
-    });
-    await this.assertSessions([meBare]);
-    const a = this.addr(meBare);
-    const body = { deviceSentMessage: { destinationJid: meBare, message } };
-    const enc2 = await this.d.cipher.encrypt(
-      a.name,
-      a.device,
-      padRandomMax16(encodeProto("Message", body))
-    );
-    const content = [
-      { tag: "enc", attrs: { v: "2", type: enc2.type }, content: enc2.ciphertext },
-      { tag: "meta", attrs: { appdata: "default" } }
-    ];
-    if (enc2.type === "pkmsg" && creds.account)
-      content.push({ tag: "device-identity", attrs: {}, content: creds.account });
-    logger.event("send.peer", { id, kind: Object.keys(message)[0] });
-    await this.d.receiver.sendAndWaitAck({
-      tag: "message",
-      attrs: { id, to: meBare, type: "text", category: "peer", push_priority: "high_force" },
-      content
-    });
-    return id;
-  }
-  /** Signal address for a device JID, through the LID mapping. */
-  addr(jid) {
-    return signalAddress(this.d.lids.resolve(jid));
-  }
-  /** Record who a message was actually sent to: only they may later ask for a resend. */
-  #setAudience(id, devices) {
-    const entry2 = this.#sent.get(id);
-    if (!entry2) return;
-    const users = new Set(devices.map((d) => d.user));
-    for (const u of [...users]) {
-      const alias = this.#lidAlias.get(u);
-      if (alias) users.add(alias);
-    }
-    entry2.audience = users;
-  }
-  #remember(id, to, message) {
-    this.#sent.set(id, { to, message });
-    if (this.#sent.size > SENT_CACHE_SIZE) this.#sent.delete(this.#sent.keys().next().value);
-  }
-  /**
-   * A device told us (`<receipt type="retry">`) that it could not decrypt one of our messages: re-encrypt
-   * it for exactly that device, with a fresh session when the receipt carries a key bundle.
-   */
-  async handleRetryReceipt(receipt) {
-    const { creds, logger } = this.d;
-    const id = receipt.attrs["id"] ?? "";
-    const cached = this.#sent.get(id);
-    const target = receipt.attrs["participant"] ?? receipt.attrs["from"] ?? "";
-    if (!cached || !target) {
-      logger.event("retry.unknown-message", { id, target });
-      return false;
-    }
-    if (!receipt.attrs["from"]) return false;
-    const targetUser = jidDecode(target).user;
-    const chatOk = cached.to.endsWith("@g.us") ? receipt.attrs["from"] === cached.to && !!receipt.attrs["participant"] : true;
-    if (!chatOk || !cached.audience?.has(targetUser)) {
-      logger.event("retry.rejected", { id, target, reason: "not an original recipient" });
-      return false;
-    }
-    const retry = children2(receipt, "retry")[0];
-    const claimed = Number(retry?.attrs["count"] ?? 1);
-    const resendKey = `${id}|${target}`;
-    const done = this.#resends.get(resendKey) ?? 0;
-    if (!(claimed >= 1) || done >= MAX_RESEND_COUNT) return false;
-    this.#resends.set(resendKey, done + 1);
-    if (this.#resends.size > SENT_CACHE_SIZE * 4)
-      this.#resends.delete(this.#resends.keys().next().value);
-    const count = Math.min(Math.max(claimed, done + 1), MAX_RESEND_COUNT);
-    const keys = children2(receipt, "keys")[0];
-    if (keys) {
-      const registration = children2(receipt, "registration")[0]?.content;
-      const node = {
-        tag: "user",
-        attrs: { jid: target },
-        content: [
-          ...registration ? [{ tag: "registration", attrs: {}, content: registration }] : [],
-          ...Array.isArray(keys.content) ? keys.content.filter((c) => c.tag !== "device-identity") : []
-        ]
-      };
-      const a2 = this.addr(target);
-      await this.d.cipher.processPreKeyBundle(a2.name, a2.device, parseBundle(node));
-      logger.event("retry.session-from-keys", { id, target });
-    } else {
-      await this.assertSessions([target]);
-    }
-    const { user: meUser } = jidDecode(creds.me.id);
-    const targetIsMe = jidDecode(target).user === meUser || !!creds.me?.lid && jidDecode(target).user === jidDecode(creds.me.lid).user;
-    const body = targetIsMe ? {
-      deviceSentMessage: { destinationJid: cached.to, message: cached.message },
-      ...cached.message["messageContextInfo"] ? { messageContextInfo: cached.message["messageContextInfo"] } : {}
-    } : cached.message;
-    const a = this.addr(target);
-    const enc2 = await this.d.cipher.encrypt(
-      a.name,
-      a.device,
-      padRandomMax16(encodeProto("Message", body))
-    );
-    const isGroup = cached.to.endsWith("@g.us");
-    const attrs = {
-      id,
-      type: messageType(cached.message),
-      ...cached.stanzaAttrs
-    };
-    if (isGroup) {
-      attrs["to"] = cached.to;
-      attrs["participant"] = target;
-    } else {
-      attrs["to"] = target;
-      attrs["device_fanout"] = "false";
-      if (targetIsMe) attrs["recipient"] = cached.to;
-    }
-    const content = [
-      {
-        tag: "enc",
-        attrs: { v: "2", type: enc2.type, count: String(count) },
-        content: enc2.ciphertext
-      }
-    ];
-    if (creds.account) content.push({ tag: "device-identity", attrs: {}, content: creds.account });
-    if (cached.to.endsWith("@s.whatsapp.net")) content.push({ tag: "bot", attrs: { biz_bot: "1" } });
-    content.push(...cached.extraNodes ?? []);
-    await this.d.receiver.sendAndWaitAck({ tag: "message", attrs, content });
-    logger.event("retry.resent", { id, target, count });
-    return true;
-  }
-  // ---- devices -------------------------------------------------------------------------------
-  /** All devices (excluding this one) of the given users, via usync. */
-  async getDevices(userJids) {
-    const { creds, receiver } = this.d;
-    const me = jidDecode(creds.me.id);
-    const meLidUser = creds.me?.lid ? jidDecode(creds.me.lid).user : void 0;
-    const res = await receiver.request({
-      tag: "iq",
-      attrs: { to: S_WHATSAPP_NET2, type: "get", xmlns: "usync" },
-      content: [
-        {
-          tag: "usync",
-          attrs: {
-            context: "message",
-            mode: "query",
-            sid: receiver.nextId(),
-            last: "true",
-            index: "0"
-          },
-          content: [
-            {
-              tag: "query",
-              attrs: {},
-              content: [
-                { tag: "devices", attrs: { version: "2" } },
-                { tag: "lid", attrs: {} }
-              ]
-            },
-            {
-              tag: "list",
-              attrs: {},
-              content: userJids.map((jid) => ({ tag: "user", attrs: { jid } }))
-            }
-          ]
-        }
-      ]
-    });
-    const list = children2(children2(children2(res, "usync")[0] ?? res, "list")[0] ?? res, "user");
-    const out = [];
-    for (const user of list) {
-      const jid = user.attrs["jid"] ?? "";
-      const error = children2(user, "error")[0];
-      if (error) {
-        this.d.logger.event("send.devices-error", { jid, code: error.attrs["code"] });
-        continue;
-      }
-      const { user: u, server: server2 } = jidDecode(jid);
-      const lid = children2(user, "lid")[0]?.attrs["val"];
-      if (lid && server2 !== "lid") {
-        this.#lidAlias.set(u, jidDecode(lid).user);
-        this.d.lids.set(jid, lid);
-      }
-      const deviceList = children2(
-        children2(children2(user, "devices")[0] ?? user, "device-list")[0] ?? user,
-        "device"
-      );
-      for (const dev of deviceList) {
-        const device = Number(dev.attrs["id"]);
-        if (device !== 0 && !dev.attrs["key-index"]) continue;
-        if (device === 99) continue;
-        const isThisDevice = (u === me.user || u === meLidUser) && device === me.device;
-        if (isThisDevice) continue;
-        out.push({
-          jid: device === 0 ? `${u}@${server2}` : `${u}:${device}@${server2}`,
-          user: u,
-          device
-        });
-      }
-    }
-    this.d.logger.event("send.devices", { users: userJids, devices: out.map((o) => o.jid) });
-    return out;
-  }
-  /** Make sure a Signal session exists for each device, fetching pre-key bundles for the missing ones. */
-  async assertSessions(jids) {
-    const missing = [];
-    for (const jid of new Set(jids)) {
-      const a = this.addr(jid);
-      if (!await this.d.cipher.hasSession(a.name, a.device)) missing.push(jid);
-    }
-    if (!missing.length) return;
-    const res = await this.d.receiver.request({
-      tag: "iq",
-      attrs: { xmlns: "encrypt", type: "get", to: S_WHATSAPP_NET2 },
-      content: [
-        {
-          tag: "key",
-          attrs: {},
-          content: missing.map((jid) => ({
-            tag: "user",
-            attrs: { jid: this.d.lids.resolve(jid) }
-          }))
-        }
-      ]
-    });
-    for (const user of children2(children2(res, "list")[0] ?? res, "user")) {
-      const jid = user.attrs["jid"] ?? "";
-      if (children2(user, "error").length) {
-        this.d.logger.event("send.prekey-error", { jid, error: children2(user, "error")[0]?.attrs });
-        continue;
-      }
-      const bundle = parseBundle(user);
-      const a = this.addr(jid);
-      await this.d.cipher.processPreKeyBundle(a.name, a.device, bundle);
-      this.d.logger.event("send.session-created", { jid });
-    }
-  }
-  /**
-   * Encrypt one message (e.g. a call key) separately for each device. Sessions are fetched first; a device that
-   * cannot be keyed is skipped, as the app does, so one broken device does not stop the rest.
-   */
-  async encryptForDevices(jids, message) {
-    await this.assertSessions(jids);
-    const plain = padRandomMax16(encodeProto("Message", message));
-    const out = [];
-    for (const jid of jids) {
-      try {
-        const a = this.addr(jid);
-        const enc2 = await this.d.cipher.encrypt(a.name, a.device, plain);
-        out.push({ jid, type: enc2.type, ciphertext: enc2.ciphertext });
-      } catch (e) {
-        this.d.logger.event("call.encrypt-skipped", { jid, error: e });
-      }
-    }
-    return out;
-  }
-  // ---- 1:1 -----------------------------------------------------------------------------------
-  async #directStanza(id, to, message, opts) {
-    const { creds } = this.d;
-    const meUser = jidDecode(creds.me.id).user;
-    const ownBare = `${meUser}@${S_WHATSAPP_NET2}`;
-    const selfChat = jidDecode(to).user === meUser;
-    const toUser = jidDecode(to).user;
-    const mineOf = (ds) => ds.filter(
-      (d) => d.user === meUser || d.user === (creds.me?.lid ? jidDecode(creds.me.lid).user : "#")
-    );
-    const othersOf = (ds, mine2) => ds.filter((d) => !mine2.includes(d)).filter(
-      (d) => opts.devices === "primary" || opts.devices === "no-linked" ? d.device === 0 : true
-    );
-    const devices = await this.getDevices([.../* @__PURE__ */ new Set([ownBare, to])]);
-    let mine = mineOf(devices);
-    let others = othersOf(devices, mine);
-    if (!others.length && !selfChat) {
-      const toJid = jidDecode(to);
-      const altServer = toJid.server === "lid" ? S_WHATSAPP_NET2 : "lid";
-      const altUser = toJid.server === "lid" ? this.d.lids.pnUser(toJid.user) : this.d.lids.lidUser(toJid.user);
-      if (altUser) {
-        const altJid = toJid.device ? `${altUser}:${toJid.device}@${altServer}` : `${altUser}@${altServer}`;
-        const retryDevices = await this.getDevices([ownBare, altJid]);
-        mine = mineOf(retryDevices);
-        others = othersOf(retryDevices, mine);
-      }
-    }
-    if (!others.length && !selfChat) throw new Error(`no devices found for ${to} (user ${toUser})`);
-    const ownKept = opts.devices === "recipient" || opts.devices === "primary" ? [] : mine;
-    await this.assertSessions([...ownKept, ...others].map((d) => d.jid));
-    this.#setAudience(id, [...ownKept, ...others]);
-    const ownTargets = opts.devices === "recipient" || opts.devices === "primary" ? [] : mine;
-    const dsm = {
-      deviceSentMessage: { destinationJid: to, message },
-      ...message["messageContextInfo"] ? { messageContextInfo: message["messageContextInfo"] } : {}
-    };
-    const participants = [];
-    let needsIdentity = false;
-    for (const [targets, msg] of [
-      [ownTargets, dsm],
-      [others, message]
-    ]) {
-      const plain = padRandomMax16(encodeProto("Message", msg));
-      for (const t of targets) {
-        const a = this.addr(t.jid);
-        const enc2 = await this.d.cipher.encrypt(a.name, a.device, plain);
-        if (enc2.type === "pkmsg") needsIdentity = true;
-        const ownLid = creds.me?.lid ? jidDecode(creds.me.lid).user : void 0;
-        const jid = to.endsWith("@lid") && ownLid && (t.user === meUser || t.user === ownLid) ? t.device === 0 ? `${ownLid}@lid` : `${ownLid}:${t.device}@lid` : t.jid;
-        participants.push({
-          tag: "to",
-          attrs: { jid },
-          content: [
-            {
-              tag: "enc",
-              attrs: { v: "2", type: enc2.type, ...opts.encAttrs },
-              content: enc2.ciphertext
-            }
-          ]
-        });
-      }
-    }
-    const content = [{ tag: "participants", attrs: {}, content: participants }];
-    if (needsIdentity && creds.account)
-      content.push({ tag: "device-identity", attrs: {}, content: creds.account });
-    const reporting = this.#reporting(
-      id,
-      to.endsWith("@lid") && this.d.creds.me?.lid ? this.d.creds.me.lid : this.d.creds.me.id,
-      to,
-      message
-    );
-    if (reporting) content.push(reporting);
-    if (to.endsWith("@s.whatsapp.net")) content.push({ tag: "bot", attrs: { biz_bot: "1" } });
-    const tc = this.#tcToken(to);
-    if (tc) content.push({ tag: "tctoken", attrs: {}, content: tc });
-    content.push(...opts.extraNodes ?? []);
-    return {
-      tag: "message",
-      attrs: {
-        id,
-        to,
-        type: messageType(message),
-        ...opts.devices && !selfChat && { device_fanout: "false" },
-        ...opts.stanzaAttrs
-      },
-      content
-    };
-  }
-  /** The trusted-contact token for a 1:1 message (kept under the LID address once that is known). */
-  #tcToken(to) {
-    if (!this.d.tc) return void 0;
-    const me = this.d.creds.me;
-    if (me && jidDecode(to).user === jidDecode(me.id).user) return void 0;
-    return this.d.tc.tokenFor(this.d.lids.resolve(to)) ?? this.d.tc.tokenFor(to);
-  }
-  // ---- groups --------------------------------------------------------------------------------
-  /** Participant JIDs and addressing mode of a group. */
-  async groupParticipants(group) {
-    const res = await this.d.receiver.request({
-      tag: "iq",
-      attrs: { type: "get", xmlns: "w:g2", to: group },
-      content: [{ tag: "query", attrs: { request: "interactive" } }]
-    });
-    const g = children2(res, "group")[0];
-    if (!g) throw new Error(`no group metadata for ${group}`);
-    for (const p of children2(g, "participant")) {
-      const jid = p.attrs["jid"] ?? "";
-      const other = p.attrs["phone_number"] ?? p.attrs["lid"];
-      if (jid && other) this.d.lids.set(jid, other);
-    }
-    return {
-      participants: children2(g, "participant").map((p) => p.attrs["jid"] ?? "").filter(Boolean),
-      addressingMode: g.attrs["addressing_mode"] ?? "lid"
-    };
-  }
-  async #groupStanza(id, group, message, opts) {
-    const { creds } = this.d;
-    const isStatus = group === "status@broadcast";
-    if (isStatus && !opts.statusRecipients?.length)
-      throw new Error("a status needs statusRecipients");
-    const { participants, addressingMode } = isStatus ? { participants: opts.statusRecipients, addressingMode: "lid" } : await this.groupParticipants(group);
-    const devices = await this.getDevices(participants);
-    this.#setAudience(id, devices);
-    const senderId = addressingMode === "lid" && creds.me?.lid ? creds.me.lid : creds.me.id;
-    const senderKeyId = signalAddressString(senderId);
-    const skdm = await this.d.cipher.createSenderKeyDistribution(group, senderKeyId);
-    const skmsg = await this.d.cipher.groupEncrypt(
-      group,
-      senderKeyId,
-      padRandomMax16(encodeProto("Message", message))
-    );
-    const memoryKey = `${group}|${senderKeyId}`;
-    const known = new Set(this.#memory[memoryKey] ?? []);
-    const fresh = devices.filter((d) => !known.has(d.jid));
-    const nodes = [];
-    let needsIdentity = false;
-    if (fresh.length) {
-      await this.assertSessions(fresh.map((d) => d.jid));
-      const dist = padRandomMax16(
-        encodeProto("Message", {
-          senderKeyDistributionMessage: {
-            groupId: group,
-            axolotlSenderKeyDistributionMessage: skdm
-          }
-        })
-      );
-      for (const t of fresh) {
-        const a = this.addr(t.jid);
-        const enc2 = await this.d.cipher.encrypt(a.name, a.device, dist);
-        if (enc2.type === "pkmsg") needsIdentity = true;
-        nodes.push({
-          tag: "to",
-          attrs: { jid: t.jid },
-          content: [
-            {
-              tag: "enc",
-              attrs: { v: "2", type: enc2.type, ...opts.encAttrs },
-              content: enc2.ciphertext
-            }
-          ]
-        });
-        known.add(t.jid);
-      }
-      for (const k of Object.keys(this.#memory))
-        if (k === group || k.startsWith(`${group}|`) && k !== memoryKey) delete this.#memory[k];
-      this.#memory[memoryKey] = [...known];
-      this.#saveMemory();
-    }
-    const content = [
-      { tag: "enc", attrs: { v: "2", type: "skmsg", ...opts.encAttrs }, content: skmsg }
-    ];
-    if (nodes.length) content.unshift({ tag: "participants", attrs: {}, content: nodes });
-    if (needsIdentity && creds.account)
-      content.push({ tag: "device-identity", attrs: {}, content: creds.account });
-    if (/^\d{1,15}-\d+@g\.us$/.test(group) && !message["reactionMessage"])
-      content.push({ tag: "multicast", attrs: {} });
-    const reporting = this.#reporting(id, senderId, group, message);
-    if (reporting) content.push(reporting);
-    if (isStatus && !opts.stanzaAttrs?.["edit"])
-      content.push({
-        tag: "meta",
-        attrs: { status_setting: opts.statusPrivacy ?? "contacts", session_scope: "status" }
-      });
-    content.push(...opts.extraNodes ?? []);
-    return {
-      tag: "message",
-      attrs: {
-        id,
-        to: group,
-        type: messageType(message),
-        ...isStatus ? {} : { addressing_mode: addressingMode },
-        ...opts.stanzaAttrs
-      },
-      content
-    };
-  }
-  /**
-   * Reporting token over the unpadded message. The key is bound to the sender and the receiver (the other user in a
-   * chat, the group in a group), both as plain user JIDs without a device: that is what a recipient derives when it
-   * reports the message, and what the server compares against.
-   */
-  #reporting(id, from, to, message) {
-    const secret = message["messageContextInfo"]?.messageSecret;
-    if (!secret || message["reactionMessage"]) return void 0;
-    return reportingNode(encodeProto("Message", message), secret, {
-      id,
-      from: from.replace(/:\d+@/, "@"),
-      to: to.replace(/:\d+@/, "@")
-    });
-  }
-  #saveMemory() {
-    const path = this.d.senderKeyMemoryPath;
-    if (!path) return;
-    mkdirSync4(dirname2(path), { recursive: true, mode: 448 });
-    writeFileSync5(`${path}.tmp`, JSON.stringify(this.#memory), { mode: 384 });
-    renameSync3(`${path}.tmp`, path);
-  }
-};
-function channelPost(message) {
-  const ext = message["extendedTextMessage"];
-  if (ext && typeof ext["text"] === "string" && Object.keys(ext).every((k) => k === "text")) {
-    const { extendedTextMessage: _drop, ...rest } = message;
-    void _drop;
-    return { ...rest, conversation: ext["text"] };
-  }
-  return message;
-}
-function withMessageSecret(message) {
-  if (message["reactionMessage"] || message["encReactionMessage"] || message["pollUpdateMessage"])
-    return message;
-  const info = message["messageContextInfo"] ?? {};
-  if (info["messageSecret"]) return message;
-  return { ...message, messageContextInfo: { ...info, messageSecret: randomBytes7(32) } };
-}
-function messageType(message) {
-  const q = message["questionMessage"]?.message;
-  if (q) return messageType(q);
-  if (message["reactionMessage"]) return "reaction";
-  if (message["pollCreationMessage"] || message["pollCreationMessageV2"] || message["pollCreationMessageV3"] || message["pollCreationMessageV5"])
-    return "poll";
-  if (message["pollCreationOptionImageMessage"]) return "media";
-  if (["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"].some(
-    (k) => message[k]
-  ))
-    return "media";
-  return "text";
-}
-function parseBundle(user) {
-  const bytes2 = (n, tag) => {
-    const c = n && children2(n, tag)[0]?.content;
-    return c instanceof Uint8Array ? c : void 0;
-  };
-  const uint = (b) => b ? b.reduce((acc, x) => acc * 256 + x, 0) : NaN;
-  const skey = children2(user, "skey")[0];
-  const key = children2(user, "key")[0];
-  const identityKey = bytes2(user, "identity");
-  const signedPreKeyPublic = bytes2(skey, "value");
-  const signedPreKeySignature = bytes2(skey, "signature");
-  if (!identityKey || !signedPreKeyPublic || !signedPreKeySignature)
-    throw new Error("incomplete pre-key bundle");
-  const { device } = jidDecode(user.attrs["jid"] ?? "");
-  return {
-    registrationId: uint(bytes2(user, "registration")),
-    deviceId: device,
-    ...key && { preKeyId: uint(bytes2(key, "id")), preKeyPublic: bytes2(key, "value") },
-    signedPreKeyId: uint(bytes2(skey, "id")),
-    signedPreKeyPublic,
-    signedPreKeySignature,
-    identityKey
-  };
-}
-
 // src/client/features/chat/appstate-sync.ts
 import {
-  mkdirSync as mkdirSync5,
-  readFileSync as readFileSync6,
+  mkdirSync as mkdirSync7,
+  readFileSync as readFileSync8,
   readdirSync,
-  renameSync as renameSync4,
-  writeFileSync as writeFileSync6,
-  existsSync as existsSync4,
+  renameSync as renameSync6,
+  writeFileSync as writeFileSync8,
+  existsSync as existsSync6,
   rmSync as rmSync2
 } from "fs";
 import { join as join4 } from "path";
@@ -14149,9 +14928,9 @@ import {
   createCipheriv as createCipheriv3,
   createDecipheriv as createDecipheriv5,
   createHash as createHash5,
-  createHmac as createHmac3,
+  createHmac as createHmac4,
   hkdfSync as hkdfSync7,
-  randomBytes as randomBytes8,
+  randomBytes as randomBytes9,
   timingSafeEqual as timingSafeEqual2
 } from "crypto";
 var HKDF_LABEL = {
@@ -14189,11 +14968,11 @@ function mediaKeys(mediaKey, type) {
   );
   return { iv: okm.subarray(0, 16), cipherKey: okm.subarray(16, 48), macKey: okm.subarray(48, 80) };
 }
-function encryptMedia(plain, type, mediaKey = randomBytes8(32)) {
+function encryptMedia(plain, type, mediaKey = randomBytes9(32)) {
   const { iv, cipherKey, macKey } = mediaKeys(mediaKey, type);
   const cipher = createCipheriv3("aes-256-cbc", cipherKey, iv);
   const body = Buffer.concat([cipher.update(plain), cipher.final()]);
-  const mac = createHmac3("sha256", macKey).update(iv).update(body).digest().subarray(0, MAC_LENGTH);
+  const mac = createHmac4("sha256", macKey).update(iv).update(body).digest().subarray(0, MAC_LENGTH);
   const encrypted = Buffer.concat([body, mac]);
   return {
     mediaKey,
@@ -14231,7 +15010,7 @@ function decryptMedia(encrypted, mediaKey, type, expect = {}) {
   const { iv, cipherKey, macKey } = mediaKeys(mediaKey, type);
   const body = Buffer.from(encrypted.subarray(0, encrypted.length - MAC_LENGTH));
   const mac = Buffer.from(encrypted.subarray(encrypted.length - MAC_LENGTH));
-  const expectedMac = createHmac3("sha256", macKey).update(iv).update(body).digest().subarray(0, MAC_LENGTH);
+  const expectedMac = createHmac4("sha256", macKey).update(iv).update(body).digest().subarray(0, MAC_LENGTH);
   if (!timingSafeEqualSafe(expectedMac, mac)) throw new Error("media MAC mismatch");
   const d = createDecipheriv5("aes-256-cbc", cipherKey, iv);
   const plain = Buffer.concat([d.update(body), d.final()]);
@@ -14257,11 +15036,12 @@ var pollOptionHash2 = (name, imageSha256) => createHash5("sha256").update(
   createHash5("sha256").update(name, "utf8").digest("hex") + Buffer.from(imageSha256).toString("base64"),
   "utf8"
 ).digest("hex");
-async function uploadMedia(conn, type, media, fetchImpl = fetch, channel = false, pathOverride) {
+async function uploadMedia(conn, type, media, fetchImpl = fetch, channel = false, pathOverride, extraQuery) {
   const token = uploadToken(media.fileEncSha256);
+  const query = extraQuery ? "&" + Object.entries(extraQuery).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&") : "";
   let lastError;
   for (const host of conn.hosts) {
-    const url = `https://${host}${pathOverride ?? (channel ? NEWSLETTER_PATH[type] : UPLOAD_PATH[type])}/${token}?auth=${encodeURIComponent(conn.auth)}&token=${token}`;
+    const url = `https://${host}${pathOverride ?? (channel ? NEWSLETTER_PATH[type] : UPLOAD_PATH[type])}/${token}?auth=${encodeURIComponent(conn.auth)}&token=${token}${query}`;
     try {
       const res = await fetchImpl(url, {
         method: "POST",
@@ -14274,6 +15054,7 @@ async function uploadMedia(conn, type, media, fetchImpl = fetch, channel = false
         return {
           url: json.url,
           directPath: json.direct_path,
+          ...json.handle && { handle: json.handle },
           ...t?.thumbnail_direct_path && t.thumbnail_sha256 && {
             thumbnail: {
               directPath: t.thumbnail_direct_path,
@@ -14292,21 +15073,24 @@ async function uploadMedia(conn, type, media, fetchImpl = fetch, channel = false
   throw new Error("media upload failed on all hosts", { cause: lastError });
 }
 var MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024;
-function safeMediaUrls(ref) {
+function safeMediaUrls(ref, extraHosts = []) {
   const urls = [];
+  const hosts = [MEDIA_HOST, ...extraHosts];
   const dp = ref.directPath;
   if (dp !== void 0) {
     if (!dp.startsWith("/") || dp.startsWith("//") || /[\\@\s]|\.\.|[\u0000-\u001f]/.test(dp))
       throw new Error("unsafe media directPath");
-    const u = new URL(dp, `https://${MEDIA_HOST}`);
-    if (u.hostname !== MEDIA_HOST || u.protocol !== "https:" || u.username || u.password || u.port)
-      throw new Error("unsafe media directPath");
-    urls.push(u.toString());
+    for (const host of hosts) {
+      const u = new URL(dp, `https://${host}`);
+      if (u.hostname !== host || u.protocol !== "https:" || u.username || u.password || u.port)
+        throw new Error("unsafe media directPath");
+      urls.push(u.toString());
+    }
   }
   if (ref.url) {
     try {
       const u = new URL(ref.url);
-      const okHost = u.hostname === MEDIA_HOST || u.hostname.endsWith(".whatsapp.net");
+      const okHost = u.hostname === MEDIA_HOST || u.hostname.endsWith(".whatsapp.net") || hosts.includes(u.hostname);
       if (u.protocol === "https:" && okHost && !u.username && !u.password && !u.port)
         urls.push(u.toString());
     } catch {
@@ -14333,8 +15117,8 @@ async function readCapped(res, limit) {
   }
   return Buffer.concat(chunks);
 }
-async function downloadMedia(ref, type, fetchImpl = fetch) {
-  const urls = safeMediaUrls(ref);
+async function downloadMedia(ref, type, fetchImpl = fetch, extraHosts = []) {
+  const urls = safeMediaUrls(ref, extraHosts);
   if (!urls.length)
     throw new Error("media message has neither a usable directPath nor a WhatsApp https url");
   const limit = Math.min(
@@ -14473,13 +15257,13 @@ var b64 = (b) => Buffer.from(b).toString("base64");
 var AppStateSync = class {
   constructor(d) {
     this.d = d;
-    mkdirSync5(join4(d.dir, "keys"), { recursive: true, mode: 448 });
+    mkdirSync7(join4(d.dir, "keys"), { recursive: true, mode: 448 });
     for (const f of readdirSync(join4(d.dir, "keys"))) {
       if (f === ".latest") continue;
-      this.#keys.set(decodeURIComponent(f), new Uint8Array(readFileSync6(join4(d.dir, "keys", f))));
+      this.#keys.set(decodeURIComponent(f), new Uint8Array(readFileSync8(join4(d.dir, "keys", f))));
     }
     const latest = join4(d.dir, "keys", ".latest");
-    if (existsSync4(latest)) this.#latestKeyId = readFileSync6(latest, "utf8");
+    if (existsSync6(latest)) this.#latestKeyId = readFileSync8(latest, "utf8");
   }
   d;
   #keys = /* @__PURE__ */ new Map();
@@ -14590,7 +15374,7 @@ var AppStateSync = class {
     let c = this.#collections.get(name);
     if (!c) {
       const p = join4(this.d.dir, `${name}.state`);
-      c = existsSync4(p) ? restoreAppStateCollection(name, new Uint8Array(readFileSync6(p))) : newAppStateCollection(name);
+      c = existsSync6(p) ? restoreAppStateCollection(name, new Uint8Array(readFileSync8(p))) : newAppStateCollection(name);
       this.#collections.set(name, c);
     }
     return c;
@@ -14601,7 +15385,7 @@ var AppStateSync = class {
     if (!m) {
       const p = join4(this.d.dir, `${name}.macs.json`);
       m = new Map(
-        existsSync4(p) ? Object.entries(JSON.parse(readFileSync6(p, "utf8"))) : []
+        existsSync6(p) ? Object.entries(JSON.parse(readFileSync8(p, "utf8"))) : []
       );
       this.#macs.set(name, m);
     }
@@ -14616,8 +15400,8 @@ var AppStateSync = class {
     );
   }
   #write(path, data) {
-    writeFileSync6(`${path}.tmp`, data, { mode: 384 });
-    renameSync4(`${path}.tmp`, path);
+    writeFileSync8(`${path}.tmp`, data, { mode: 384 });
+    renameSync6(`${path}.tmp`, path);
   }
   #missing = /* @__PURE__ */ new Map();
   #requestedAt = /* @__PURE__ */ new Map();
@@ -14712,10 +15496,10 @@ var AppStateSync = class {
   async #applyCollection(name, node) {
     const c = this.#collection(name);
     const macs = this.#macsOf(name);
-    const kids10 = (n, tag) => Array.isArray(n.content) ? n.content.filter((x) => x.tag === tag) : [];
+    const kids11 = (n, tag) => Array.isArray(n.content) ? n.content.filter((x) => x.tag === tag) : [];
     const events = [];
     const download = this.d.download ?? downloadMedia;
-    const snapshotNode = kids10(node, "snapshot")[0];
+    const snapshotNode = kids11(node, "snapshot")[0];
     if (snapshotNode?.content instanceof Uint8Array) {
       const ref = protoType("ExternalBlobReference").toObject(
         protoType("ExternalBlobReference").decode(snapshotNode.content),
@@ -14732,8 +15516,8 @@ var AppStateSync = class {
         mutations: res.mutations.length
       });
     }
-    const patchesNode = kids10(node, "patches")[0] ?? node;
-    for (const p of kids10(patchesNode, "patch")) {
+    const patchesNode = kids11(node, "patches")[0] ?? node;
+    for (const p of kids11(patchesNode, "patch")) {
       if (!(p.content instanceof Uint8Array)) continue;
       const bytes2 = this.#withVersion(
         await this.#withExternalMutations(p.content, download),
@@ -14984,6 +15768,15 @@ var usernameProtocol = {
   query: { tag: "username", attrs: {} }
 };
 var lidProtocol = { name: "lid", query: { tag: "lid", attrs: {} } };
+var botProfileProtocol = {
+  name: "bot",
+  query: { tag: "bot", attrs: {}, content: [{ tag: "profile", attrs: { v: "1" } }] },
+  user: (u) => ({
+    tag: "bot",
+    attrs: {},
+    content: [{ tag: "profile", attrs: { persona_id: u.personaId ?? "" } }]
+  })
+};
 async function usync(request, sid, context, protocols, users) {
   const res = await request({
     tag: "iq",
@@ -15092,11 +15885,11 @@ async function profilePictureUrl(request, jid, type = "preview") {
     throw e;
   }
 }
-async function updateStatus(request, text4) {
+async function updateStatus(request, text5) {
   await request({
     tag: "iq",
     attrs: { to: "s.whatsapp.net", type: "set", xmlns: "status" },
-    content: [{ tag: "status", attrs: {}, content: Buffer.from(text4, "utf8") }]
+    content: [{ tag: "status", attrs: {}, content: Buffer.from(text5, "utf8") }]
   });
 }
 async function fetchBlocklist(request) {
@@ -15192,6 +15985,94 @@ async function findUserByUsername(request, sid, username, pin2) {
   return { jid: e.id, exists: e.nodes["contact"]?.attrs["type"] === "in" };
 }
 
+// src/client/features/account/security-code.ts
+import { createHash as createHash6 } from "crypto";
+var serializeIdentityKey = (key) => Buffer.concat([Buffer.from([5]), key]);
+var PN_PREFIXES = [
+  "1",
+  "7",
+  "20",
+  "27",
+  "30",
+  "31",
+  "32",
+  "33",
+  "34",
+  "36",
+  "39",
+  "40",
+  "41",
+  "43",
+  "44",
+  "45",
+  "46",
+  "47",
+  "48",
+  "49",
+  "51",
+  "52",
+  "53",
+  "54",
+  "55",
+  "56",
+  "57",
+  "58",
+  "60",
+  "61",
+  "62",
+  "63",
+  "64",
+  "65",
+  "66",
+  "81",
+  "82",
+  "84",
+  "86",
+  "90",
+  "91",
+  "92",
+  "93",
+  "94",
+  "95",
+  "98"
+];
+function securityCodeIdentifier(version, user) {
+  if (!user || !/^\d+$/.test(user))
+    throw new Error("security codes require a numeric phone-number or LID user");
+  if (version === "V4") return user;
+  const prefix = PN_PREFIXES.find((p) => user.startsWith(p) && user.length >= p.length + 4);
+  if (prefix) return prefix + user.slice(user.length - Math.min(user.length - prefix.length, 6));
+  if (user.length >= 7)
+    return user.slice(0, 3) + user.slice(user.length - Math.min(user.length - 3, 6));
+  return `${user}@c.us`;
+}
+function half(identifier, keys) {
+  if (!keys.length)
+    throw new Error("security codes require at least one public identity key per account");
+  const serialized = keys.map(serializeIdentityKey).sort(Buffer.compare);
+  let digest = createHash6("sha512").update(Buffer.from([0, 0])).update(Buffer.concat(serialized)).update(identifier, "utf8").update(Buffer.concat(serialized)).digest();
+  for (let i = 1; i < 5200; i++) {
+    const h = createHash6("sha512").update(digest);
+    for (const key of serialized) h.update(key);
+    digest = h.digest();
+  }
+  let result = "";
+  for (let i = 0; i < 30; i += 5) {
+    let value = 0n;
+    for (let j = i; j < i + 5; j++) value = value << 8n | BigInt(digest[j]);
+    result += String(value % 100000n).padStart(5, "0");
+  }
+  return result;
+}
+function numericSecurityCode(version, local, localKeys, remote, remoteKeys) {
+  const halves = [
+    half(securityCodeIdentifier(version, local), localKeys),
+    half(securityCodeIdentifier(version, remote), remoteKeys)
+  ];
+  halves.sort();
+  return halves.join("");
+}
+
 // src/client/features/message/events.ts
 var kids2 = (n, tag) => Array.isArray(n.content) ? n.content.filter((c) => tag === void 0 || c.tag === tag) : [];
 var digits = (v) => v && /^\d{1,12}$/.test(v) ? Number(v) : void 0;
@@ -15199,11 +16080,14 @@ function parseReceipt(node) {
   const ids = [node.attrs["id"] ?? ""];
   for (const list of kids2(node, "list"))
     for (const item of kids2(list, "item")) if (item.attrs["id"]) ids.push(item.attrs["id"]);
+  const type = node.attrs["type"] ?? "delivery";
+  const error = kids2(node, "error")[0];
+  const downgraded = type === "delivery" && error?.attrs["reason"] === "lid" && error.attrs["type"] === "feature-incapable" ? "sent" : type;
   return {
     chat: node.attrs["from"] ?? "",
     ...node.attrs["participant"] && { participant: node.attrs["participant"] },
     ids: ids.filter(Boolean),
-    type: node.attrs["type"] ?? "delivery",
+    type: downgraded,
     ...digits(node.attrs["t"]) !== void 0 && { timestamp: digits(node.attrs["t"]) }
   };
 }
@@ -15379,6 +16263,52 @@ async function getCollections(request, jid, limit = 51) {
     ...childText(c, "name") !== void 0 && { name: childText(c, "name") },
     products: kids3(c, "product").map(parseProduct)
   }));
+}
+var amount = (value, currency) => {
+  const n = typeof value === "number" ? value : typeof value === "string" && value !== "" ? Number(value) : NaN;
+  return Number.isFinite(n) && currency ? { amount1000: n, currency } : void 0;
+};
+async function getOrder(mex, jid, orderId, token) {
+  const data = await mex(
+    "26593811266898374",
+    {
+      request: {
+        order: {
+          id: orderId,
+          jid,
+          token: { sensitive_string_value: token },
+          image_dimensions: { width: 100, height: 100 }
+        }
+      }
+    },
+    "xwa_checkout_get_order_info"
+  );
+  const order = data.order;
+  if (!order) throw new Error("order query returned no order");
+  const details = order.price_details;
+  return {
+    products: (order.products ?? []).map((p) => ({
+      ...p.id !== void 0 && { id: p.id },
+      ...p.name !== void 0 && { name: p.name },
+      ...amount(p.price, p.currency) && { price: amount(p.price, p.currency) },
+      ...p.quantity !== void 0 && !Number.isNaN(+p.quantity) && { quantity: +p.quantity },
+      imageUrls: (p.media?.images ?? []).map((i) => i.request_image_url ?? "").filter(Boolean),
+      variantProperties: p.variant_info?.variant_properties ?? []
+    })),
+    ...details && {
+      priceDetails: {
+        ...amount(details.subtotal_amount, details.currency) && {
+          subtotal: amount(details.subtotal_amount, details.currency)
+        },
+        ...amount(details.total_amount, details.currency) && {
+          total: amount(details.total_amount, details.currency)
+        }
+      }
+    },
+    ...order.creation_time_stamp !== void 0 && {
+      creationTimestamp: Number(order.creation_time_stamp)
+    }
+  };
 }
 
 // src/client/features/group/groups.ts
@@ -15789,8 +16719,28 @@ function parseGroupNotification(node) {
       action: c.tag,
       ...participants.length && { participants }
     };
-    if (c.tag === "subject" && c.attrs["subject"]) n.subject = c.attrs["subject"];
+    if (c.tag === "subject") {
+      if (c.attrs["subject"]) n.subject = c.attrs["subject"];
+      if (c.attrs["s_o"]) n.subjectOwner = c.attrs["s_o"];
+      if (c.attrs["s_o_pn"]) n.subjectOwnerPn = c.attrs["s_o_pn"];
+      if (c.attrs["s_o_username"]) n.subjectOwnerUsername = c.attrs["s_o_username"];
+      if (c.attrs["s_t"]) n.subjectTime = Number(c.attrs["s_t"]);
+    }
     if (c.tag === "description") n.description = text2(kids4(c, "body")[0]) ?? "";
+    if (c.tag === "locked" && c.attrs["threshold"]) n.threshold = c.attrs["threshold"];
+    if (c.tag === "ephemeral" || c.tag === "not_ephemeral") {
+      n.action = "ephemeral";
+      n.expiration = Number(c.attrs["expiration"] ?? 0);
+      if (c.attrs["trigger"]) n.trigger = Number(c.attrs["trigger"]);
+    }
+    if (c.tag === "growth_locked") {
+      n.expiration = Number(c.attrs["expiration"] ?? 0);
+      n.lockType = c.attrs["type"] ?? "";
+    }
+    if (c.tag === "membership_approval_request" || c.tag === "created_membership_requests") {
+      if (c.attrs["request_method"]) n.requestMethod = c.attrs["request_method"];
+      if (c.attrs["parent_group_jid"]) n.parentGroupJid = c.attrs["parent_group_jid"];
+    }
     out.push(n);
   }
   return out;
@@ -15830,7 +16780,7 @@ var Communities = class {
   revokeInvite = (jid) => this.#groups.revokeInvite(jid);
   inviteInfo = (code) => this.#groups.inviteInfo(code);
   setSubject = (jid, subject) => this.#groups.setSubject(jid, subject);
-  setDescription = (jid, text4) => this.#groups.setDescription(jid, text4);
+  setDescription = (jid, text5) => this.#groups.setDescription(jid, text5);
   setEphemeral = (jid, seconds2) => this.#groups.setEphemeral(jid, seconds2);
   updateParticipants = (jid, participants, action) => this.#groups.updateParticipants(jid, participants, action);
   setting = (jid, setting) => this.#groups.setting(jid, setting);
@@ -15997,14 +16947,14 @@ var Communities = class {
 };
 
 // src/client/lid-map.ts
-import { existsSync as existsSync5, mkdirSync as mkdirSync6, readFileSync as readFileSync7, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "fs";
-import { dirname as dirname3 } from "path";
+import { existsSync as existsSync7, mkdirSync as mkdirSync8, readFileSync as readFileSync9, renameSync as renameSync7, writeFileSync as writeFileSync9 } from "fs";
+import { dirname as dirname5 } from "path";
 var LidMap = class {
   constructor(path) {
     this.path = path;
-    if (path && existsSync5(path)) {
+    if (path && existsSync7(path)) {
       for (const [pn, lid] of Object.entries(
-        JSON.parse(readFileSync7(path, "utf8"))
+        JSON.parse(readFileSync9(path, "utf8"))
       )) {
         this.#pnToLid.set(pn, lid);
         this.#lidToPn.set(lid, pn);
@@ -16052,13 +17002,38 @@ var LidMap = class {
     if (!lid) return jid;
     return d.device ? `${lid}:${d.device}@lid` : `${lid}@lid`;
   }
+  /**
+   * The other addressing form of a bare (device-less) user JID - the LID for a phone number we know the
+   * mapping for, or the phone number for a LID we know it for - or `undefined` when no mapping is known
+   * yet, or `jid` isn't one of those two servers. Used to retry a secret-encrypted add-on (a poll vote, a
+   * comment, a reaction, an RSVP) under the alternate namespace when the sender addressed it differently
+   * than we did: the HKDF/HMAC info that keys these is the exact JID string, so PN and LID never decrypt
+   * each other's.
+   */
+  swap(jid) {
+    let d;
+    try {
+      d = jidDecode(jid);
+    } catch {
+      return void 0;
+    }
+    if (d.server === "s.whatsapp.net") {
+      const lid = this.#pnToLid.get(d.user);
+      return lid ? `${lid}@lid` : void 0;
+    }
+    if (d.server === "lid") {
+      const pn = this.#lidToPn.get(d.user);
+      return pn ? `${pn}@s.whatsapp.net` : void 0;
+    }
+    return void 0;
+  }
   #save() {
     if (!this.path) return;
-    mkdirSync6(dirname3(this.path), { recursive: true, mode: 448 });
-    writeFileSync7(`${this.path}.tmp`, JSON.stringify(Object.fromEntries(this.#pnToLid)), {
+    mkdirSync8(dirname5(this.path), { recursive: true, mode: 448 });
+    writeFileSync9(`${this.path}.tmp`, JSON.stringify(Object.fromEntries(this.#pnToLid)), {
       mode: 384
     });
-    renameSync5(`${this.path}.tmp`, this.path);
+    renameSync7(`${this.path}.tmp`, this.path);
   }
 };
 
@@ -16071,7 +17046,7 @@ import {
   diffieHellman,
   hkdfSync as hkdfSync8,
   pbkdf2,
-  randomBytes as randomBytes9
+  randomBytes as randomBytes10
 } from "crypto";
 import { promisify } from "util";
 var pbkdf2Async = promisify(pbkdf2);
@@ -16081,7 +17056,7 @@ function generatePairingCode() {
   let value = 0;
   let bits = 0;
   let out = "";
-  for (const byte of randomBytes9(5)) {
+  for (const byte of randomBytes10(5)) {
     value = value << 8 | byte;
     bits += 8;
     while (bits >= 5) {
@@ -16144,8 +17119,8 @@ var ctr = (decrypt, data, key, iv) => {
   return Buffer.concat([c.update(data), c.final()]);
 };
 async function companionHello(creds, phoneNumber, code, browser = ["Windows", "Desktop"]) {
-  const salt = randomBytes9(32);
-  const iv = randomBytes9(16);
+  const salt = randomBytes10(32);
+  const iv = randomBytes10(16);
   const wrapped = Buffer.concat([
     salt,
     iv,
@@ -16199,12 +17174,12 @@ async function companionFinish(notification, creds, phoneNumber, code) {
     wrapped.subarray(32, 48)
   );
   const companionShared = sharedKey(creds.pairingEphemeralKey.privateKey, primaryEphemeral);
-  const random = randomBytes9(32);
-  const salt = randomBytes9(32);
+  const random = randomBytes10(32);
+  const salt = randomBytes10(32);
   const bundleKey = Buffer.from(
     hkdfSync8("sha256", companionShared, salt, "link_code_pairing_key_bundle_encryption_key", 32)
   );
-  const iv = randomBytes9(12);
+  const iv = randomBytes10(12);
   const gcm = createCipheriv4("aes-256-gcm", bundleKey, iv);
   const body = Buffer.concat([
     gcm.update(Buffer.concat([creds.signedIdentityKey.publicKey, primaryIdentity, random])),
@@ -16276,7 +17251,44 @@ function parseHistory(compressed) {
           ...num2(w["messageTimestamp"]) !== void 0 && {
             timestamp: num2(w["messageTimestamp"])
           },
-          ...w["pushName"] && { pushName: w["pushName"] }
+          ...w["pushName"] && { pushName: w["pushName"] },
+          ...w["messageStubType"] && { stubType: w["messageStubType"] },
+          ...w["messageStubParameters"]?.length && {
+            stubParameters: w["messageStubParameters"]
+          },
+          ...w["userReceipt"]?.length && {
+            userReceipts: w["userReceipt"].filter((r) => r.userJid).map((r) => ({
+              userJid: r.userJid,
+              ...num2(r.receiptTimestamp) !== void 0 && {
+                receiptTimestamp: num2(r.receiptTimestamp)
+              },
+              ...num2(r.readTimestamp) !== void 0 && {
+                readTimestamp: num2(r.readTimestamp)
+              },
+              ...num2(r.playedTimestamp) !== void 0 && {
+                playedTimestamp: num2(r.playedTimestamp)
+              },
+              ...r.pendingDeviceJid?.length && { pendingDeviceJid: r.pendingDeviceJid },
+              ...r.deliveredDeviceJid?.length && {
+                deliveredDeviceJid: r.deliveredDeviceJid
+              }
+            }))
+          },
+          ...w["scheduledMessageMetadata"] && {
+            scheduledMessage: {
+              ...w["scheduledMessageMetadata"].revealKeyId && {
+                revealKeyId: w["scheduledMessageMetadata"].revealKeyId
+              },
+              ...typeof w["scheduledMessageMetadata"].revealKey === "string" && w["scheduledMessageMetadata"].revealKey.length > 0 && {
+                revealKey: new Uint8Array(
+                  Buffer.from(w["scheduledMessageMetadata"].revealKey, "base64")
+                )
+              },
+              ...num2(w["scheduledMessageMetadata"].scheduledTime) !== void 0 && {
+                scheduledTime: num2(w["scheduledMessageMetadata"].scheduledTime)
+              }
+            }
+          }
         }
       ];
     });
@@ -16302,7 +17314,10 @@ function parseHistory(compressed) {
     ...num2(h["chunkOrder"]) !== void 0 && { chunkOrder: num2(h["chunkOrder"]) },
     chats,
     pushNames: (h["pushnames"] ?? []).filter((p) => p.id && p.pushname).map((p) => ({ id: p.id, name: p.pushname })),
-    lidMappings: (h["phoneNumberToLidMappings"] ?? []).filter((m) => m.lidJid && m.pnJid).map((m) => ({ lid: m.lidJid, pn: m.pnJid }))
+    lidMappings: (h["phoneNumberToLidMappings"] ?? []).filter((m) => m.lidJid && m.pnJid).map((m) => ({ lid: m.lidJid, pn: m.pnJid })),
+    ...typeof h["nctSalt"] === "string" && h["nctSalt"].length > 0 && { nctSalt: new Uint8Array(Buffer.from(h["nctSalt"], "base64")) },
+    ...h["globalSettings"] && { globalSettings: h["globalSettings"] },
+    ...h["callLogRecords"]?.length && { callLogRecords: h["callLogRecords"] }
   };
 }
 async function loadHistory(n, download = downloadMedia) {
@@ -16341,8 +17356,8 @@ async function mexQuery(request, id, queryId, variables, dataPath) {
   const result = Array.isArray(res.content) ? res.content.find((c) => c.tag === "result") : void 0;
   const raw = result?.content;
   if (!raw) throw new MexError("empty w:mex response", 400, res);
-  const text4 = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf8");
-  const data = JSON.parse(text4);
+  const text5 = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf8");
+  const data = JSON.parse(text5);
   if (data.errors?.length) {
     const first = data.errors[0];
     throw new MexError(
@@ -16711,7 +17726,7 @@ var Newsletters = class {
   );
   // ---- finding channels ----
   /** Search the channel directory by words. */
-  search = (text4, limit = 20, cursor) => this.directorySearch(text4, { limit, ...cursor && { cursor } });
+  search = (text5, limit = 20, cursor) => this.directorySearch(text5, { limit, ...cursor && { cursor } });
   /** The directory by view: `RECOMMENDED`, `NEW`, `POPULAR`, `FEATURED` or `TRENDING`. */
   directoryList = (o = {}) => this.mex(
     NEWSLETTER_QUERY.DIRECTORY_LIST,
@@ -16726,11 +17741,11 @@ var Newsletters = class {
     },
     "xwa2_newsletters_directory_list"
   );
-  directorySearch = (text4, o = {}) => this.mex(
+  directorySearch = (text5, o = {}) => this.mex(
     NEWSLETTER_QUERY.DIRECTORY_SEARCH,
     {
       input: {
-        search_text: text4,
+        search_text: text5,
         categories: o.categories ?? [],
         limit: o.limit ?? 20,
         ...o.cursor && { start_cursor: o.cursor }
@@ -16850,9 +17865,38 @@ function parseChannelStatus(node, decode) {
     }
   };
 }
+function parseNewsletterLiveUpdate(node) {
+  const newsletter = node.attrs["from"];
+  if (!newsletter) return void 0;
+  const liveUpdates = childOf(node, "live_updates");
+  const messagesNode = liveUpdates && childOf(liveUpdates, "messages");
+  const msgNodes = Array.isArray(messagesNode?.content) ? messagesNode.content.filter((c) => c.tag === "message") : [];
+  const messages = msgNodes.map((m) => {
+    const serverId = Number(m.attrs["server_id"]);
+    if (!serverId) return void 0;
+    const reactions = childOf(m, "reactions");
+    const votes = childOf(m, "votes");
+    const forwards = childOf(m, "forwards_count");
+    return {
+      serverId,
+      ...forwards?.attrs["count"] && { forwardsCount: Number(forwards.attrs["count"]) },
+      ...Array.isArray(reactions?.content) && {
+        reactions: reactions.content.filter((r) => r.tag === "reaction" && r.attrs["code"]).map((r) => ({ code: r.attrs["code"], count: Number(r.attrs["count"] ?? 0) }))
+      },
+      ...Array.isArray(votes?.content) && {
+        votes: votes.content.filter((v) => v.tag === "vote" && v.content instanceof Uint8Array && v.attrs["count"]).map((v) => ({
+          optionHash: Buffer.from(v.content).toString("hex"),
+          count: Number(v.attrs["count"])
+        }))
+      }
+    };
+  }).filter((m) => !!m);
+  if (!messages.length) return void 0;
+  return { newsletter, messages };
+}
 
 // src/client/features/contact/username.ts
-import { randomUUID as randomUUID3 } from "crypto";
+import { randomUUID as randomUUID4 } from "crypto";
 var USERNAME_QUERY = {
   CHECK: "26122779627399568",
   CHECK_MULTI: "27134626522840286",
@@ -16866,7 +17910,7 @@ var Usernames = class {
     this.mex = mex;
   }
   mex;
-  async check(username, includeSuggestions = true, sessionId = randomUUID3()) {
+  async check(username, includeSuggestions = true, sessionId = randomUUID4()) {
     const data = await this.mex(
       USERNAME_QUERY.CHECK,
       {
@@ -16895,7 +17939,7 @@ var Usernames = class {
       username,
       reserved: true,
       source: o.source ?? "USER_INPUT",
-      session_id: o.sessionId ?? randomUUID3(),
+      session_id: o.sessionId ?? randomUUID4(),
       ...o.pin && { pin: o.pin }
     },
     "xwa2_username_set"
@@ -16913,6 +17957,92 @@ var Usernames = class {
   /** Set (or with `null` clear) the 4-digit PIN others need to message you by username. */
   setPin = (pin2) => this.mex(USERNAME_QUERY.PIN_SET, pin2 != null ? { pin: pin2 } : {}, "xwa2_username_pin_set");
 };
+
+// src/client/features/contact/notifications.ts
+var kids6 = (n, tag) => Array.isArray(n.content) ? n.content.filter((c) => !tag || c.tag === tag) : [];
+var textOf2 = (n) => {
+  if (typeof n?.content === "string") return n.content;
+  if (n?.content instanceof Uint8Array) return Buffer.from(n.content).toString("utf8");
+  return void 0;
+};
+function parsePictureNotification(node) {
+  const from = node.attrs["from"];
+  if (!from) return void 0;
+  const timestamp = node.attrs["t"] ? Number(node.attrs["t"]) : void 0;
+  const set = kids6(node, "set")[0];
+  if (set) {
+    return {
+      jid: set.attrs["jid"] ?? from,
+      ...set.attrs["author"] && { author: set.attrs["author"] },
+      removed: false,
+      ...set.attrs["id"] && { pictureId: set.attrs["id"] },
+      ...timestamp !== void 0 && { timestamp }
+    };
+  }
+  const del = kids6(node, "delete")[0];
+  if (del) {
+    return {
+      jid: del.attrs["jid"] ?? from,
+      ...del.attrs["author"] && { author: del.attrs["author"] },
+      removed: true,
+      ...timestamp !== void 0 && { timestamp }
+    };
+  }
+  if (kids6(node).length === 0)
+    return { jid: from, removed: true, ...timestamp !== void 0 && { timestamp } };
+  return void 0;
+}
+function parseStatusNotification(node) {
+  const from = node.attrs["from"];
+  const set = kids6(node, "set")[0];
+  if (!from || !set) return void 0;
+  return {
+    jid: from,
+    status: textOf2(set) ?? "",
+    ...node.attrs["t"] && { timestamp: Number(node.attrs["t"]) }
+  };
+}
+function parseDisappearingModeNotification(node) {
+  const from = node.attrs["from"];
+  const dm = kids6(node, "disappearing_mode")[0];
+  if (!from || !dm?.attrs["t"]) return void 0;
+  return {
+    jid: from,
+    duration: Number(dm.attrs["duration"] ?? 0),
+    settingTimestamp: Number(dm.attrs["t"])
+  };
+}
+function parseContactsNotification(node) {
+  const child4 = kids6(node)[0];
+  if (!child4) return void 0;
+  const timestamp = node.attrs["t"] ? Number(node.attrs["t"]) : void 0;
+  if (child4.tag === "update") {
+    const jid = child4.attrs["jid"];
+    if (!jid) return void 0;
+    return { action: "update", jid, ...timestamp !== void 0 && { timestamp } };
+  }
+  if (child4.tag === "modify") {
+    const oldJid = child4.attrs["old"];
+    const newJid = child4.attrs["new"];
+    if (!oldJid || !newJid) return void 0;
+    return {
+      action: "number-changed",
+      oldJid,
+      newJid,
+      ...child4.attrs["old_lid"] && { oldLid: child4.attrs["old_lid"] },
+      ...child4.attrs["new_lid"] && { newLid: child4.attrs["new_lid"] },
+      ...timestamp !== void 0 && { timestamp }
+    };
+  }
+  if (child4.tag === "sync") {
+    return {
+      action: "sync-requested",
+      ...child4.attrs["after"] && { after: Number(child4.attrs["after"]) },
+      ...timestamp !== void 0 && { timestamp }
+    };
+  }
+  return void 0;
+}
 
 // src/client/features/account/account.ts
 var removeDeviceNode = (jid, reason = "user_initiated") => ({
@@ -16973,12 +18103,12 @@ var Account = class {
 };
 
 // src/client/features/message/media-retry.ts
-import { createCipheriv as createCipheriv5, createDecipheriv as createDecipheriv7, hkdfSync as hkdfSync9, randomBytes as randomBytes10 } from "crypto";
+import { createCipheriv as createCipheriv5, createDecipheriv as createDecipheriv7, hkdfSync as hkdfSync9, randomBytes as randomBytes11 } from "crypto";
 var retryKey = (mediaKey) => Buffer.from(
   hkdfSync9("sha256", mediaKey, Buffer.alloc(0), "WhatsApp Media Retry Notification", 32)
 );
 function mediaRetryRequest(key, mediaKey, meId) {
-  const iv = randomBytes10(12);
+  const iv = randomBytes11(12);
   const c = createCipheriv5("aes-256-gcm", retryKey(mediaKey), iv);
   c.setAAD(Buffer.from(key.id));
   const body = Buffer.concat([
@@ -17012,8 +18142,8 @@ function mediaRetryRequest(key, mediaKey, meId) {
 }
 var bytes = (n) => n && n.content instanceof Uint8Array ? n.content : void 0;
 function decodeMediaRetryNode(node) {
-  const kids10 = Array.isArray(node.content) ? node.content : [];
-  const rmr = kids10.find((c) => c.tag === "rmr");
+  const kids11 = Array.isArray(node.content) ? node.content : [];
+  const rmr = kids11.find((c) => c.tag === "rmr");
   if (!rmr) return void 0;
   const event = {
     key: {
@@ -17023,9 +18153,9 @@ function decodeMediaRetryNode(node) {
       ...rmr.attrs["participant"] && { participant: rmr.attrs["participant"] }
     }
   };
-  const error = kids10.find((c) => c.tag === "error");
+  const error = kids11.find((c) => c.tag === "error");
   if (error) return { ...event, error: { code: Number(error.attrs["code"] ?? 0) } };
-  const enc2 = kids10.find((c) => c.tag === "encrypt");
+  const enc2 = kids11.find((c) => c.tag === "encrypt");
   const sub = Array.isArray(enc2?.content) ? enc2.content : [];
   const ciphertext = bytes(sub.find((c) => c.tag === "enc_p"));
   const iv = bytes(sub.find((c) => c.tag === "enc_iv"));
@@ -17042,109 +18172,8 @@ function decryptMediaRetry(media, mediaKey, msgId) {
   return { result: n.result ?? "GENERAL_ERROR", ...n.directPath && { directPath: n.directPath } };
 }
 
-// src/client/features/contact/tctoken.ts
-import { existsSync as existsSync6, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "fs";
-import { dirname as dirname4 } from "path";
-var BUCKET = 604800;
-var BUCKETS = 4;
-var isTcTokenExpired = (t, now = Date.now() / 1e3) => {
-  if (!t || Number.isNaN(t)) return true;
-  const cutoff = (Math.floor(now / BUCKET) - (BUCKETS - 1)) * BUCKET;
-  return t < cutoff;
-};
-var shouldIssueTcToken = (senderTs, now = Date.now() / 1e3) => senderTs === void 0 || Math.floor(now / BUCKET) > Math.floor(senderTs / BUCKET);
-var isRegularUser = (jid) => {
-  const [user = "", server2 = ""] = jid.split("@");
-  if (user === "0" || /^1313555\d{4}$|^131655500\d{2}$/.test(user)) return false;
-  return server2 === "s.whatsapp.net" || server2 === "lid" || server2 === "c.us";
-};
-var bare2 = (jid) => jid.replace(/:\d+@/, "@");
-var TcTokens = class {
-  constructor(path) {
-    this.path = path;
-    if (path && existsSync6(path)) {
-      try {
-        for (const [k, v] of Object.entries(
-          JSON.parse(readFileSync8(path, "utf8"))
-        ))
-          this.#data.set(k, v);
-      } catch {
-      }
-    }
-  }
-  path;
-  #data = /* @__PURE__ */ new Map();
-  #issuing = /* @__PURE__ */ new Set();
-  #save() {
-    if (!this.path) return;
-    mkdirSync7(dirname4(this.path), { recursive: true, mode: 448 });
-    const tmp = `${this.path}.tmp`;
-    writeFileSync8(tmp, JSON.stringify(Object.fromEntries(this.#data)), { mode: 384 });
-    renameSync6(tmp, this.path);
-  }
-  /** The token to attach to a message for `jid`, if we hold a fresh one. */
-  tokenFor(jid) {
-    const e = this.#data.get(bare2(jid));
-    if (!e?.token) return void 0;
-    if (isTcTokenExpired(e.t)) {
-      this.#data.set(bare2(jid), {
-        token: "",
-        ...e.senderTs !== void 0 && { senderTs: e.senderTs }
-      });
-      this.#save();
-      return void 0;
-    }
-    return new Uint8Array(Buffer.from(e.token, "base64"));
-  }
-  /** Keep the tokens of a `<tokens>` node (an iq answer or a `privacy_token` notification). */
-  storeFrom(node, fallbackJid) {
-    const tokens = Array.isArray(node.content) ? node.content.find((c) => c.tag === "tokens") : void 0;
-    let stored = 0;
-    for (const n of Array.isArray(tokens?.content) ? tokens.content : []) {
-      if (n.tag !== "token" || n.attrs["type"] !== "trusted_contact") continue;
-      if (!(n.content instanceof Uint8Array)) continue;
-      const jid = bare2(fallbackJid || n.attrs["jid"] || "");
-      const t = Number(n.attrs["t"] ?? 0);
-      if (!jid || !isRegularUser(jid) || !t) continue;
-      const old = this.#data.get(jid);
-      if (old?.t && old.t > t) continue;
-      this.#data.set(jid, { ...old, token: Buffer.from(n.content).toString("base64"), t });
-      stored++;
-    }
-    if (stored) this.#save();
-    return stored;
-  }
-  /**
-   * After a 1:1 message: give the contact our token (once per 7 days). Fire and forget; never throws.
-   * `request` is the iq channel; `storageJid` is the contact's address.
-   */
-  issueTo(jid, request, now = Date.now() / 1e3) {
-    const key = bare2(jid);
-    if (!isRegularUser(key) || this.#issuing.has(key)) return;
-    if (!shouldIssueTcToken(this.#data.get(key)?.senderTs, now)) return;
-    this.#issuing.add(key);
-    const t = Math.floor(now);
-    void request({
-      tag: "iq",
-      attrs: { to: "s.whatsapp.net", type: "set", xmlns: "privacy" },
-      content: [
-        {
-          tag: "tokens",
-          attrs: {},
-          content: [{ tag: "token", attrs: { jid: key, t: String(t), type: "trusted_contact" } }]
-        }
-      ]
-    }).then((res) => {
-      this.storeFrom(res, key);
-      const e = this.#data.get(key);
-      this.#data.set(key, { token: "", ...e, senderTs: t });
-      this.#save();
-    }).catch(() => void 0).finally(() => this.#issuing.delete(key));
-  }
-};
-
 // src/client/features/message/sticker-pack.ts
-import { createHash as createHash6, randomUUID as randomUUID4 } from "crypto";
+import { createHash as createHash7, randomUUID as randomUUID5 } from "crypto";
 var MAX_STICKERS = 60;
 var CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -17215,7 +18244,7 @@ function createStickerPackZip(packId, stickers, cover) {
   const files = [{ name: trayIconFileName, data: cover }];
   const seen = /* @__PURE__ */ new Set();
   const list = stickers.map((s) => {
-    const name = `${createHash6("sha256").update(s.data).digest("base64url")}.webp`;
+    const name = `${createHash7("sha256").update(s.data).digest("base64url")}.webp`;
     if (!seen.has(name)) {
       seen.add(name);
       files.push({ name, data: s.data });
@@ -17231,10 +18260,10 @@ function createStickerPackZip(packId, stickers, cover) {
   });
   return { zip: zipStore(files), stickers: list, trayIconFileName };
 }
-var newPackId = () => randomUUID4().toUpperCase();
+var newPackId = () => randomUUID5().toUpperCase();
 
 // src/client/features/contact/bots.ts
-var kids6 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
+var kids7 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
 var entry = (n) => {
   const jid = n.attrs["jid"];
   const personaId = n.attrs["persona_id"];
@@ -17252,17 +18281,18 @@ var botListRequest = () => ({
   content: [{ tag: "bot", attrs: { v: "2" } }]
 });
 function parseBotList(res) {
-  const bot = kids6(res, "bot")[0];
+  const bot = kids7(res, "bot")[0];
   if (!bot) throw new Error("no <bot> in the bot directory answer");
-  const sections = kids6(bot, "section").map((s) => ({
+  const sections = kids7(bot, "section").map((s) => ({
     name: s.attrs["name"] ?? "",
     type: s.attrs["type"] ?? "all",
     ...s.attrs["display_type"] && { displayType: s.attrs["display_type"] },
-    bots: kids6(s, "bot").map(entry).filter((e) => !!e)
+    bots: kids7(s, "bot").map(entry).filter((e) => !!e)
   }));
-  const d = kids6(bot, "default")[0];
+  const d = kids7(bot, "default")[0];
   const defaultBot = d?.attrs["jid"] && d.attrs["persona_id"] ? { jid: d.attrs["jid"], personaId: d.attrs["persona_id"] } : void 0;
-  const bots = sections.flatMap((s) => s.bots);
+  const seen = /* @__PURE__ */ new Set();
+  const bots = sections.flatMap((s) => s.bots).filter((b) => seen.has(b.jid) ? false : seen.add(b.jid));
   if (defaultBot && !bots.some((b) => b.jid === defaultBot.jid))
     bots.unshift({ jid: defaultBot.jid, personaId: defaultBot.personaId });
   return {
@@ -17273,6 +18303,45 @@ function parseBotList(res) {
   };
 }
 var listBots = async (request) => parseBotList(await request(botListRequest()));
+var text3 = (n) => !n ? void 0 : typeof n.content === "string" ? n.content : n.content instanceof Uint8Array ? Buffer.from(n.content).toString("utf8") : void 0;
+async function fetchBotProfile(request, sid, jid, personaId) {
+  const [entry2] = await usync(
+    request,
+    sid,
+    "interactive",
+    [botProfileProtocol],
+    [{ jid, personaId }]
+  );
+  const profile = kids7(entry2?.nodes["bot"], "profile")[0];
+  if (!profile) return void 0;
+  const commandsNode = kids7(profile, "commands")[0];
+  const promptsNode = kids7(profile, "prompts")[0];
+  return {
+    jid: entry2.id,
+    ...profile.attrs["persona_id"] && { personaId: profile.attrs["persona_id"] },
+    ...text3(kids7(profile, "name")[0]) !== void 0 && { name: text3(kids7(profile, "name")[0]) },
+    ...text3(kids7(profile, "attributes")[0]) !== void 0 && {
+      attributes: text3(kids7(profile, "attributes")[0])
+    },
+    ...text3(kids7(profile, "description")[0]) !== void 0 && {
+      description: text3(kids7(profile, "description")[0])
+    },
+    ...text3(kids7(profile, "category")[0]) !== void 0 && {
+      category: text3(kids7(profile, "category")[0])
+    },
+    isDefault: kids7(profile, "default").length > 0,
+    commands: kids7(commandsNode, "command").map((c) => ({
+      name: text3(kids7(c, "name")[0]) ?? "",
+      description: text3(kids7(c, "description")[0]) ?? ""
+    })),
+    prompts: kids7(promptsNode, "prompt").map(
+      (p) => [text3(kids7(p, "emoji")[0]), text3(kids7(p, "text")[0])].filter(Boolean).join(" ")
+    ),
+    ...text3(kids7(commandsNode, "description")[0]) !== void 0 && {
+      commandsDescription: text3(kids7(commandsNode, "description")[0])
+    }
+  };
+}
 
 // src/client/features/contact/prekey-rotation.ts
 var SIGNED_PRE_KEY_INTERVAL_MS = 27 * 24 * 60 * 60 * 1e3;
@@ -17305,7 +18374,7 @@ var IDS2 = {
   REACHOUT_TIMELOCK: "23983697327930364",
   NEW_CHAT_CAP: "27910975521856601"
 };
-var kids7 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
+var kids8 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
 var abPropsRequest = (o = {}) => ({
   tag: "iq",
   attrs: { to: "s.whatsapp.net", type: "get", xmlns: "abt" },
@@ -17321,9 +18390,9 @@ var abPropsRequest = (o = {}) => ({
   ]
 });
 function parseAbProps(res) {
-  const p = kids7(res, "props")[0];
+  const p = kids8(res, "props")[0];
   const props = {};
-  for (const n of kids7(p, "prop"))
+  for (const n of kids8(p, "prop"))
     if (n.attrs["config_code"] !== void 0)
       props[n.attrs["config_code"]] = n.attrs["config_value"] ?? "";
   return {
@@ -17372,15 +18441,15 @@ var IDS3 = {
   APPEAL_PRODUCT: "29276343172013990",
   APPEAL_COLLECTION: "9971242039605207"
 };
-var text3 = (tag, v) => ({ tag, attrs: {}, content: Buffer.from(v) });
-var kids8 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
+var text4 = (tag, v) => ({ tag, attrs: {}, content: Buffer.from(v) });
+var kids9 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
 function productNode(id, p) {
   const attrs = {};
   const content = [];
-  if (id !== void 0) content.push(text3("id", id));
-  if (p.name !== void 0) content.push(text3("name", p.name));
-  if (p.description !== void 0) content.push(text3("description", p.description));
-  if (p.retailerId !== void 0) content.push(text3("retailer_id", p.retailerId));
+  if (id !== void 0) content.push(text4("id", id));
+  if (p.name !== void 0) content.push(text4("name", p.name));
+  if (p.description !== void 0) content.push(text4("description", p.description));
+  if (p.retailerId !== void 0) content.push(text4("retailer_id", p.retailerId));
   if (p.images?.length)
     content.push({
       tag: "media",
@@ -17388,18 +18457,18 @@ function productNode(id, p) {
       content: p.images.map((img) => ({
         tag: "image",
         attrs: {},
-        content: [text3("url", img.url)]
+        content: [text4("url", img.url)]
       }))
     });
-  if (p.price !== void 0) content.push(text3("price", String(p.price)));
-  if (p.currency !== void 0) content.push(text3("currency", p.currency));
+  if (p.price !== void 0) content.push(text4("price", String(p.price)));
+  if (p.currency !== void 0) content.push(text4("currency", p.currency));
   if ("originCountryCode" in p) {
     if (p.originCountryCode === void 0) attrs["compliance_category"] = "COUNTRY_ORIGIN_EXEMPT";
     else
       content.push({
         tag: "compliance_info",
         attrs: {},
-        content: [text3("country_code_origin", p.originCountryCode)]
+        content: [text4("country_code_origin", p.originCountryCode)]
       });
   }
   if (p.isHidden !== void 0) attrs["is_hidden"] = String(p.isHidden);
@@ -17420,11 +18489,11 @@ var Business = class {
         {
           tag: op,
           attrs: { v: "1" },
-          content: [node, text3("width", "100"), text3("height", "100")]
+          content: [node, text4("width", "100"), text4("height", "100")]
         }
       ]
     });
-    const product = kids8(kids8(res, op)[0], "product")[0];
+    const product = kids9(kids9(res, op)[0], "product")[0];
     if (!product) throw new Error(`${op}: no product in the answer`);
     return parseProduct(product);
   }
@@ -17444,12 +18513,12 @@ var Business = class {
           content: productIds.map((id) => ({
             tag: "product",
             attrs: {},
-            content: [text3("id", id)]
+            content: [text4("id", id)]
           }))
         }
       ]
     });
-    return { deleted: +(kids8(res, "product_catalog_delete")[0]?.attrs["deleted_count"] ?? 0) };
+    return { deleted: +(kids9(res, "product_catalog_delete")[0]?.attrs["deleted_count"] ?? 0) };
   }
   /** Catalog and collection changes go through GraphQL; `input` is the server's input object. */
   createCatalog = (input2) => this.mex(IDS3.CREATE_CATALOG, { input: input2 }, "xfb_whatsapp_catalog_create");
@@ -17490,12 +18559,12 @@ var Business = class {
       attrs: { xmlns: "w:biz", to: "s.whatsapp.net", type: "get" },
       content: [{ tag: "broadcast_list_quota", attrs: {}, content: [] }]
     });
-    const find = (tag) => kids8(res, tag)[0] ?? kids8(kids8(res, "broadcast_list_quota")[0], tag)[0];
+    const find = (tag) => kids9(res, tag)[0] ?? kids9(kids9(res, "broadcast_list_quota")[0], tag)[0];
     const limits = find("limits");
     const frame = find("timeframe");
     if (!limits) return null;
     const num3 = (n, key) => {
-      const child4 = kids8(n, key)[0]?.content;
+      const child4 = kids9(n, key)[0]?.content;
       const raw = n?.attrs[key] ?? (typeof child4 === "string" ? child4 : child4 && Buffer.from(child4).toString());
       return parseInt(raw ?? "0", 10) || 0;
     };
@@ -17653,7 +18722,7 @@ var IDS4 = {
   REMINDER_CREATE: "32149118614673399",
   REMINDER_DELETE: "25462476600019778"
 };
-var kids9 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => tag === void 0 || c.tag === tag) : [];
+var kids10 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => tag === void 0 || c.tag === tag) : [];
 var iq = (xmlns, type, content) => ({
   tag: "iq",
   attrs: { to: "s.whatsapp.net", xmlns, type },
@@ -17704,13 +18773,13 @@ var Privacy = class {
         { tag: "query", attrs: {}, content: [{ tag: "blocking_status", attrs: {} }] }
       ])
     );
-    return (kids9(res, "blocking")[0] ?? kids9(kids9(res, "query")[0], "blocking")[0])?.attrs["status"];
+    return (kids10(res, "blocking")[0] ?? kids10(kids10(res, "query")[0], "blocking")[0])?.attrs["status"];
   }
   async setBlocking(action) {
     const res = await this.request(
       iq("w:comms:chat", "set", [{ tag: "blocking", attrs: { action } }])
     );
-    return kids9(res, "blocking")[0]?.attrs["status"];
+    return kids10(res, "blocking")[0]?.attrs["status"];
   }
   /** The server's "opt out" list. Returned as the raw answer. */
   optOutList = () => this.request(iq("optoutlist", "get"));
@@ -17718,7 +18787,7 @@ var Privacy = class {
     const res = await this.request(
       iq("urn:xmpp:whatsapp:push", "get", [{ tag: "settings", attrs: {} }])
     );
-    return kids9(res, "settings")[0]?.attrs;
+    return kids10(res, "settings")[0]?.attrs;
   }
   async setPushConfig(config) {
     await this.request(iq("urn:xmpp:whatsapp:push", "set", [{ tag: "config", attrs: config }]));
@@ -17728,12 +18797,12 @@ var Privacy = class {
     const res = await this.request(
       iq("tos", "get", [{ tag: "get_user_disclosures", attrs: { t: String(since) } }])
     );
-    return kids9(res, "notice").map((n) => ({ ...n.attrs }));
+    return kids10(res, "notice").map((n) => ({ ...n.attrs }));
   }
   // ---- text status ("About" with an emoji) and profile ----
-  setTextStatus = (text4, emoji) => this.mex(
+  setTextStatus = (text5, emoji) => this.mex(
     IDS4.UPDATE_TEXT_STATUS,
-    { text_status_input: { text: text4, ...emoji && { emoji: { content: emoji } } } },
+    { text_status_input: { text: text5, ...emoji && { emoji: { content: emoji } } } },
     "xwa2_text_status_update"
   );
   textStatusList = (jids, lastUpdateTime = null) => this.mex(
@@ -17807,8 +18876,8 @@ function withContext(message, chat, opts, meId) {
   body["contextInfo"] = ctx;
   return { ...message, [field]: body };
 }
-function textMessage(text4) {
-  return { extendedTextMessage: { text: text4 } };
+function textMessage(text5) {
+  return { extendedTextMessage: { text: text5 } };
 }
 var wireKey = (key) => ({
   remoteJid: key.remoteJid,
@@ -17892,6 +18961,9 @@ function unifiedSession(serverSeconds) {
 function presenceSubscribe(jid, id) {
   return { tag: "presence", attrs: { to: jid, id, type: "subscribe" } };
 }
+function presenceUnsubscribe(jid, id) {
+  return { tag: "presence", attrs: { to: jid, id, type: "unsubscribe" } };
+}
 function forward(message, score = 1) {
   const field = Object.keys(message).find((k) => k !== "messageContextInfo");
   if (!field) throw new Error("empty message");
@@ -17907,7 +18979,7 @@ function forward(message, score = 1) {
 }
 
 // src/client/features/call/calls.ts
-import { randomBytes as randomBytes11 } from "crypto";
+import { randomBytes as randomBytes12 } from "crypto";
 var CAPABILITY_OFFER = Uint8Array.from([1, 5, 247, 9, 224, 187, 19]);
 var CAPABILITY_VIDEO_OFFER = Uint8Array.from([1, 5, 247, 9, 224, 187, 83]);
 var CAPABILITY_PREACCEPT = Uint8Array.from([1, 5, 247, 9, 224, 187, 7]);
@@ -17915,7 +18987,7 @@ var noMlow = (b) => Uint8Array.from(b, (v, i) => i === 5 ? v & 127 : v);
 var CAPABILITY_STANDARD_OPUS_OFFER = noMlow(CAPABILITY_OFFER);
 var CAPABILITY_STANDARD_OPUS_VIDEO_OFFER = noMlow(CAPABILITY_VIDEO_OFFER);
 var CAPABILITY_STANDARD_OPUS_PREACCEPT = noMlow(CAPABILITY_PREACCEPT);
-var newCallId = () => "00" + randomBytes11(15).toString("hex");
+var newCallId = () => "00" + randomBytes12(15).toString("hex");
 var wrap = (to, id, action) => ({
   tag: "call",
   attrs: { to, ...id && { id } },
@@ -18201,8 +19273,8 @@ function parseLinkQueryAck(ack) {
 }
 
 // src/client/features/payment/payments.ts
-var noteOf = (text4) => ({
-  extendedTextMessage: { text: text4 ?? "" }
+var noteOf = (text5) => ({
+  extendedTextMessage: { text: text5 ?? "" }
 });
 var wireKey2 = (key) => ({
   remoteJid: key.remoteJid,
@@ -18308,15 +19380,20 @@ function signatureOf(m) {
   const body = m[field];
   if (typeof body === "string") return `${field}:${body}`;
   const b = body ?? {};
-  const text4 = b["text"] ?? b["caption"] ?? b["name"];
-  return `${field}:${typeof text4 === "string" ? text4 : ""}`;
+  const text5 = b["text"] ?? b["caption"] ?? b["name"];
+  return `${field}:${typeof text5 === "string" ? text5 : ""}`;
 }
+var KEEP_ALIVE_INTERVAL_MIN_MS = 15e3;
+var KEEP_ALIVE_INTERVAL_MAX_MS = 3e4;
+var KEEP_ALIVE_SKIP_IF_RECENT_MS = KEEP_ALIVE_INTERVAL_MIN_MS;
+var KEEPALIVE_MAX_CONSECUTIVE_FAILURES = 3;
 var Client = class {
   logger;
   #events = new TypedEmitter();
   #credsPath;
   #signalDir;
   #tcTokens;
+  #sentIds;
   #autoRecover;
   #recoverTimes = [];
   #signalStorage;
@@ -18330,12 +19407,27 @@ var Client = class {
   #sender;
   #qrTimer;
   #keepAlive;
+  /** Last time ANY node arrived on the current connection - a dead/half-open socket (sends still work,
+   * nothing ever comes back) shows up as this going stale while pings keep timing out. */
+  #lastDataReceived = 0;
+  /** Consecutive keepalive pings with no answer; reset on any successful one or on other inbound data. */
+  #keepAliveFailures = 0;
   #stopped = false;
   /** Set when the server ended the session for good (see `classifyServerFailure`): no reconnect, reported on close. */
   #terminal;
+  /** Reconnect backoff state: how many unsuccessful attempts in a row, and when the last connection opened
+   * (so `onClose` can tell a connection that proved stable - open for `BACKOFF_STABLE_RESET_MS` - from one
+   * that never really recovered, and reset the former back to attempt 0). */
+  #reconnectAttempt = 0;
+  #connectedAt;
+  /** Set by `#handle` on a non-terminal `<stream:error>` that still changes how the next reconnect should
+   * behave (see `streamErrorReconnectHint`); read and cleared by the same close this stream:error caused. */
+  #reconnectHint;
   /** A guest's private auth folder, removed again on `close()`. */
   #guestTmp;
   #isOpen = false;
+  /** JIDs `subscribePresence` was called for: the server forgets presence subscriptions across a reconnect, so these are re-sent once the connection is back up. */
+  #presenceSubscriptions = /* @__PURE__ */ new Set();
   #mediaConn;
   #appState;
   #pairing;
@@ -18356,6 +19448,7 @@ var Client = class {
     this.#signalDir = join5(dir, "signal");
     this.#autoRecover = options.autoRecover !== false;
     this.#tcTokens = new TcTokens(join5(dir, "signal", "tctokens.json"));
+    this.#sentIds = new SentMessageIds(join5(dir, "signal", "sent-ids.json"));
     this.logger = options.logger ?? new ProtocolLogger({ label: "client" });
     this.#creds = this.#isGuest ? initAuthCreds() : loadAuthCreds(this.#credsPath) ?? initAuthCreds();
     saveAuthCreds(this.#credsPath, this.#creds);
@@ -18399,17 +19492,17 @@ var Client = class {
     return (await this.#live()).receiver.sendCallAndWait(node, timeoutMs);
   }
   /** Send text, optionally as a reply (`quoted`) and/or with @mentions. Returns the message id. */
-  async sendText(to, text4, opts = {}) {
+  async sendText(to, text5, opts = {}) {
     const { sender, meId } = await this.#live();
     if (this.antiban?.config.typing && !to.endsWith("@newsletter")) {
       await this.sendChatState(to, "composing").catch(() => void 0);
-      await new Promise((r) => setTimeout(r, this.antiban.typingMs(text4)));
+      await new Promise((r) => setTimeout(r, this.antiban.typingMs(text5)));
       await this.sendChatState(to, "paused").catch(() => void 0);
     }
-    let body = textMessage(text4);
+    let body = textMessage(text5);
     if (opts.linkPreview) {
-      const p = opts.linkPreview === true ? await fetchLinkPreview(text4).catch(() => void 0) : opts.linkPreview;
-      if (p) body = linkPreviewMessage(text4, p);
+      const p = opts.linkPreview === true ? await fetchLinkPreview(text5).catch(() => void 0) : opts.linkPreview;
+      if (p) body = linkPreviewMessage(text5, p);
     }
     return sender.sendMessage(to, withContext(body, to, opts, meId));
   }
@@ -18441,6 +19534,28 @@ var Client = class {
     const { sender } = await this.#live();
     return sender.sendMessage(to, message, opts);
   }
+  /**
+   * Inject a message into this client's own `message` event exactly as if it had really arrived from
+   * `from` - entirely local, no network traffic, nothing sent or received for real. Ported from a known
+   * WhatsApp mod feature ("Fake real-time chat"/"Modify Chat"): type something yourself and have your
+   * own chat view show it as if the other person sent it. The result needs no special handling on your
+   * side - a genuinely received message already reads as `fromMe: false` by default (see `serialize()`),
+   * so building and emitting a normal-looking incoming message is the entire trick.
+   *
+   * Not for groups, same restriction the original mod enforces: a fabricated `participant` can collide
+   * with real membership-list validation if this ever gets mixed into real group state.
+   */
+  simulateIncomingMessage(from, content) {
+    if (isJidGroup(from)) throw new Error("simulateIncomingMessage: not for groups");
+    const decoded = {
+      id: generateMessageId(this.#creds.me?.id ?? from),
+      from,
+      message: typeof content === "string" ? { conversation: content } : content,
+      timestamp: Math.floor(Date.now() / 1e3)
+    };
+    this.#events.emit("message", decoded);
+    return decoded;
+  }
   /** React to a message with an emoji (empty string removes the reaction). */
   async react(key, emoji) {
     const { sender } = await this.#live();
@@ -18467,11 +19582,13 @@ var Client = class {
       await receiver.request(mediaConnRequest())
     );
   }
-  /** Encrypt, upload and send an image / video / audio / document / sticker. */
+  /** Encrypt, upload and send an image / video / audio / document / sticker. `data` is bytes, a local path
+   * (`{ path }`), an `http(s)` URL (`{ url }`) or a stream (`{ stream }`); see `MediaSource`. */
   async sendMedia(to, type, data, opts = {}) {
     const { sender, meId } = await this.#live();
+    const bytes2 = await toBytes(data);
     const channel = to.endsWith("@newsletter");
-    const enc2 = channel ? rawMedia(data) : encryptMedia(data, type);
+    const enc2 = channel ? rawMedia(bytes2) : encryptMedia(bytes2, type);
     const uploaded = await uploadMedia(await this.#getMediaConn(), type, enc2, fetch, channel);
     const built = mediaMessage(type, enc2, uploaded, opts);
     if (channel) stripMediaKeys(built.message);
@@ -18550,19 +19667,30 @@ var Client = class {
   sendVideo = (to, data, opts = {}) => this.sendMedia(to, "video", data, opts);
   sendAudio = (to, data, opts = {}) => this.sendMedia(to, "audio", data, opts);
   sendDocument = (to, data, opts = {}) => this.sendMedia(to, "document", data, opts);
-  sendSticker = (to, data, opts = {}) => this.sendMedia(to, "sticker", data, opts);
+  /** `stickerMetadata` embeds pack attribution (WhatsApp's own EXIF convention) so the app shows "Added by X". */
+  async sendSticker(to, data, opts = {}) {
+    const { stickerMetadata, ...rest } = opts;
+    const bytes2 = await toBytes(data);
+    return this.sendMedia(
+      to,
+      "sticker",
+      stickerMetadata ? addStickerMetadata(bytes2, stickerMetadata) : bytes2,
+      rest
+    );
+  }
   /** Download and decrypt the media of a received message (`event.message`). */
   async downloadMedia(message, opts = {}) {
     const m = mediaOf(message);
     if (!m) throw new Error("message carries no downloadable media");
+    const extraHosts = this.#options.additionalMediaHosts ?? [];
     try {
-      return await downloadMedia(m.ref, m.type);
+      return await downloadMedia(m.ref, m.type, void 0, extraHosts);
     } catch (e) {
-      const text4 = `${e.message} ${e.cause?.message ?? ""}`;
-      if (!this.#autoRecover || !opts.key || !/HTTP (404|410)\b/.test(text4)) throw e;
+      const text5 = `${e.message} ${e.cause?.message ?? ""}`;
+      if (!this.#autoRecover || !opts.key || !/HTTP (404|410)\b/.test(text5)) throw e;
       const fresh = await this.updateMediaMessage(opts.key, message);
       const again = mediaOf(fresh);
-      return downloadMedia(again.ref, again.type);
+      return downloadMedia(again.ref, again.type, void 0, extraHosts);
     }
   }
   async #peerDataOperation(request) {
@@ -18581,10 +19709,15 @@ var Client = class {
   async sendStickerPack(to, pack) {
     const { sender } = await this.#live();
     const packId = pack.packId ?? newPackId();
-    const zip = createStickerPackZip(packId, pack.stickers, pack.cover);
-    const mediaKey = randomBytes12(32);
+    const [stickers, cover, thumbnail] = await Promise.all([
+      Promise.all(pack.stickers.map(async (s) => ({ ...s, data: await toBytes(s.data) }))),
+      toBytes(pack.cover),
+      toBytes(pack.thumbnail)
+    ]);
+    const zip = createStickerPackZip(packId, stickers, cover);
+    const mediaKey = randomBytes13(32);
     const encZip = encryptMedia(zip.zip, "sticker-pack", mediaKey);
-    const encThumb = encryptMedia(pack.thumbnail, "sticker-pack-thumbnail", mediaKey);
+    const encThumb = encryptMedia(thumbnail, "sticker-pack-thumbnail", mediaKey);
     const conn = await this.#getMediaConn();
     const [zipUp, thumbUp] = await Promise.all([
       uploadMedia(conn, "document", encZip, fetch, false, "/mms/sticker-pack"),
@@ -18624,7 +19757,7 @@ var Client = class {
    * Comment on a post in a Community Announcement Group (an announcement under a community). `parent` is the post's
    * key; it must have been received here (its secret is needed). Comments arrive as `addon` on the message.
    */
-  async sendComment(parent, text4) {
+  async sendComment(parent, text5) {
     const { sender, receiver } = await this.#live();
     const secret = receiver.secretOf(parent.id);
     if (!secret) throw new Error("the secret of this post is unknown (it was not received here)");
@@ -18634,7 +19767,7 @@ var Client = class {
     const author = parent.participant ?? (parent.fromMe ? me.id : parent.remoteJid);
     return sender.sendMessage(
       parent.remoteJid,
-      commentMessage(parent, text4, {
+      commentMessage(parent, text5, {
         parentSenderJid: strip(author),
         modifierJid: strip(me.lid ?? me.id),
         secret
@@ -18866,6 +19999,10 @@ var Client = class {
   serverTime = () => Math.floor((Date.now() + this.#serverOffsetMs) / 1e3);
   /** The AI bots WhatsApp offers this account (Meta AI and others), by section. */
   listBots = async () => listBots((n) => this.#q(n));
+  /** One bot's own profile: name/description/category, suggested prompts and slash commands (`BotEntry.personaId`). */
+  async fetchBotProfile(jid, personaId) {
+    return fetchBotProfile(this.#q, await this.#sid(), jid, personaId);
+  }
   /** Group management: `client.groups.create(...)`, `.updateParticipants(...)`, `.metadata(...)`, ... */
   groups = new Groups(
     async (node) => (await this.#live()).receiver.request(node),
@@ -18903,8 +20040,14 @@ var Client = class {
   deleteMessageForMe = (key, timestamp, deleteMedia = false) => this.#push(deleteMessageForMe(key, timestamp, deleteMedia));
   /** Save a contact in the phone's address book, or remove it with `null`. */
   saveContact = (jid, c) => this.#push(contact(jid, c));
-  /** Change the account's display name (push name). */
+  /**
+   * Change the account's display name (push name): announces it to the server right away
+   * (`<presence name="...">`, as WA Web's `WAWebPushNameBridge` does), syncs it to app state so other
+   * devices see it too, and remembers it locally for presence stanzas this client builds afterward.
+   */
   async updateProfileName(name) {
+    const { receiver } = await this.#live();
+    receiver.sendNode({ tag: "presence", attrs: { name } });
     await this.#push(pushName(name));
     this.setName(name);
   }
@@ -18981,9 +20124,59 @@ var Client = class {
   async lidsFor(...jids) {
     return lidsFor(this.#q, await this.#sid(), jids);
   }
+  /**
+   * The 60-digit numeric security code WhatsApp Web shows for comparing your and `peerJid`'s complete
+   * identity-key sets out of band (the idea behind Signal's safety number): read the same digits off both
+   * devices and compare them by some channel other than this connection to catch a swapped identity
+   * independently of the server - a check `assertSessions`'s own ADV verification cannot make, since that
+   * trusts the server's signed chain in the first place. `version` (`V4`, LID-based, by default; `V3` is
+   * phone-number based) must match on both ends or the digits never agree. `peerJid` must be given in its
+   * phone-number form (LID resolution for the other side is looked up here). A point-in-time snapshot: wrong
+   * again once either side's identity or device list changes - recompute rather than cache it for long.
+   */
+  async securityCode(peerJid, version = "V4") {
+    const { sender } = await this.#live();
+    const storage = this.#signalStorage;
+    if (!storage) throw new Error("not connected");
+    const creds = this.#creds;
+    if (!creds.me) throw new Error("not paired");
+    if (peerJid.endsWith("@lid"))
+      throw new Error("securityCode needs the phone-number form of peerJid");
+    const meUser = creds.me.id.replace(/:\d+@.*/, "");
+    const peerUser = peerJid.replace(/:\d+@.*/, "").replace(/@.*/, "");
+    const ownBare = `${meUser}@s.whatsapp.net`;
+    const peerBare = `${peerUser}@s.whatsapp.net`;
+    const devices = await sender.getDevices([ownBare, peerBare]);
+    const ownOthers = devices.filter((d) => d.user === meUser);
+    const peerDevices = devices.filter((d) => d.user === peerUser);
+    if (!peerDevices.length) throw new Error(`no devices found for ${peerJid}`);
+    const toEstablish = [...ownOthers, ...peerDevices].map((d) => d.jid);
+    if (toEstablish.length) await sender.assertSessions(toEstablish);
+    const identityOf = async (jid) => {
+      const a = sender.addr(jid);
+      const key = await storage.loadIdentity(a.name, a.device);
+      if (!key) throw new Error(`identity key for ${jid} is unavailable`);
+      return key;
+    };
+    const ownKeys = [
+      creds.signedIdentityKey.publicKey,
+      ...await Promise.all(ownOthers.map((d) => identityOf(d.jid)))
+    ];
+    const peerKeys = await Promise.all(peerDevices.map((d) => identityOf(d.jid)));
+    let localUser = meUser;
+    let remoteUser = peerUser;
+    if (version === "V4") {
+      if (!creds.me.lid) throw new Error("own LID is unavailable");
+      localUser = creds.me.lid.replace(/:\d+@.*/, "");
+      const found = (await this.lidsFor(peerBare)).find((x) => x.pn === peerBare);
+      if (!found) throw new Error(`no LID known for ${peerJid}`);
+      remoteUser = found.lid.replace(/@.*/, "");
+    }
+    return numericSecurityCode(version, localUser, ownKeys, remoteUser, peerKeys);
+  }
   profilePictureUrl = (jid, type = "preview") => profilePictureUrl(this.#q, jid, type);
   /** Set our own "About" text. */
-  updateProfileStatus = (text4) => updateStatus(this.#q, text4);
+  updateProfileStatus = (text5) => updateStatus(this.#q, text5);
   fetchBlocklist = () => fetchBlocklist(this.#q);
   /** Block a contact; `entryPoint` / `reason` are what the app reports with it (see `contacts.BlockOptions`). */
   async blockUser(jid, o = {}) {
@@ -19001,9 +20194,9 @@ var Client = class {
   fetchPrivacySettings = () => fetchPrivacySettings(this.#q);
   updatePrivacy = (name, value) => updatePrivacy(this.#q, name, value);
   /** Post a text status/story visible to `recipients` (the audience must be given explicitly). */
-  async sendStatusText(text4, recipients, privacy = "contacts") {
+  async sendStatusText(text5, recipients, privacy = "contacts") {
     const { sender } = await this.#live();
-    return sender.sendMessage("status@broadcast", textMessage(text4), {
+    return sender.sendMessage("status@broadcast", textMessage(text5), {
       statusRecipients: recipients,
       statusPrivacy: privacy
     });
@@ -19019,6 +20212,11 @@ var Client = class {
     cursor
   );
   getCollections = (jid, limit = 51) => getCollections(this.#q, jid ?? this.#creds.me?.id.replace(/:\d+@/, "@") ?? "", limit);
+  /**
+   * Read a placed order's line items and totals. `jid`/`orderId`/`token` come from the `orderMessage` the
+   * customer's "Review and pay" tap sent (`.sellerJid`/`.orderId`/`.token`).
+   */
+  getOrder = (jid, orderId, token) => getOrder(this.mex, jid, orderId, token);
   /** Buttons / list message (native flow). Build buttons with `quickReply`, `urlButton`, `singleSelect`, ... from the package. */
   async sendInteractive(to, o) {
     const { sender } = await this.#live();
@@ -19058,7 +20256,7 @@ var Client = class {
       {
         pinInChatMessage: { key, type: "PIN_FOR_ALL", senderTimestampMs: Date.now() },
         messageContextInfo: {
-          messageSecret: randomBytes12(32),
+          messageSecret: randomBytes13(32),
           messageAddOnDurationInSecs: seconds2,
           messageAddOnExpiryType: "STATIC"
         }
@@ -19072,7 +20270,7 @@ var Client = class {
       {
         pinInChatMessage: { key, type: "UNPIN_FOR_ALL", senderTimestampMs: Date.now() },
         messageContextInfo: {
-          messageSecret: randomBytes12(32),
+          messageSecret: randomBytes13(32),
           messageAddOnDurationInSecs: 0,
           messageAddOnExpiryType: "STATIC"
         }
@@ -19132,15 +20330,87 @@ var Client = class {
     return { id, ...serverId && { serverId } };
   }
   /**
+   * Post a channel status (shows in followers' Status tray, distinct from `postToChannel`'s permanent
+   * feed post).
+   */
+  async postChannelStatus(channel, text5, opts = {}) {
+    const { sender } = await this.#live();
+    let serverId;
+    const id = await sender.sendChannelStatus(channel, textMessage(text5), {
+      ...opts,
+      onAck: (ack) => serverId = ack.attrs["server_id"]
+    });
+    return { id, ...serverId && { serverId } };
+  }
+  /**
+   * Post an image/video/audio channel status. Uploads to the same `/newsletter/newsletter-image`-style
+   * path `sendMedia` uses for normal channel posts, but with `media_id`/`server_thumb_gen` on the query
+   * string - that's what makes the server's response carry a `handle`, which becomes the `<status>`
+   * stanza's own `media_id` attribute (confirmed against WA Web's own upload).
+   */
+  async postChannelStatusMedia(channel, type, data, opts = {}) {
+    const { sender } = await this.#live();
+    const enc2 = rawMedia(await toBytes(data));
+    const uploaded = await uploadMedia(
+      await this.#getMediaConn(),
+      type,
+      enc2,
+      fetch,
+      true,
+      void 0,
+      { media_id: String(Math.floor(Math.random() * 1e16)), server_thumb_gen: "1" }
+    );
+    if (!uploaded.handle) throw new Error("channel-status upload did not return a handle");
+    if (type === "video" && !uploaded.thumbnail && opts.jpegThumbnail) {
+      const raw = rawMedia(opts.jpegThumbnail);
+      const t = await uploadMedia(
+        await this.#getMediaConn(),
+        "image",
+        raw,
+        fetch,
+        true,
+        NEWSLETTER_THUMBNAIL_PATH
+      );
+      uploaded.thumbnail = { directPath: t.directPath, sha256: raw.fileSha256 };
+    }
+    const built = mediaMessage(type, enc2, uploaded, opts);
+    stripMediaKeys(built.message);
+    if (uploaded.thumbnail) {
+      const body = built.message[Object.keys(built.message)[0]];
+      body["thumbnailDirectPath"] = uploaded.thumbnail.directPath;
+      body["thumbnailSha256"] = uploaded.thumbnail.sha256;
+    }
+    if (type === "audio" && opts.ptt) {
+      const audio2 = built.message["audioMessage"];
+      audio2["backgroundArgb"] = opts.fields?.["backgroundArgb"] ?? 4280191205;
+      audio2["contextInfo"] = {
+        ...audio2["contextInfo"],
+        statusSourceType: "AUDIO"
+      };
+    }
+    let serverId;
+    const id = await sender.sendChannelStatus(channel, built.message, {
+      ...opts,
+      // A voice note is the one media kind that must NOT carry media_id on the <status> stanza - the
+      // server rejects it (error 479) if it does, even though the same upload still returns a handle.
+      // Confirmed live: identical content with media_id omitted went through; every other field here
+      // already matched a freshly captured real ptt channel status byte for byte.
+      ...type === "audio" && opts.ptt ? {} : { mediaId: uploaded.handle },
+      encAttrs: { mediatype: built.mediaType, ...opts.encAttrs },
+      onAck: (ack) => serverId = ack.attrs["server_id"]
+    });
+    return { id, ...serverId && { serverId } };
+  }
+  /**
    * Post a text status to a group. Pictures, videos and voice notes: `sendImage(group, data, { groupStatus: true })`,
    * `sendVideo`, `sendAudio(..., { ptt: true, groupStatus: true })`.
    */
-  async sendGroupStatusText(group, text4, o = {}) {
+  async sendGroupStatusText(group, text5, o = {}) {
     const { sender } = await this.#live();
     const lid = (this.#creds.me?.lid ?? "").replace(/[:.]\d+@/, "@");
     const gs = groupStatus({
       extendedTextMessage: {
-        text: text4,
+        text: text5,
         textArgb: o.textArgb ?? 4294967295,
         backgroundArgb: o.backgroundArgb ?? 4280191205,
         font: o.font ?? "SYSTEM",
@@ -19175,7 +20445,7 @@ var Client = class {
     const devices = await sender.getDevices([peer]);
     const ring = devices.map((d) => d.jid);
     if (!ring.length) throw new Error(`no devices found for ${peer}`);
-    const callKey = new Uint8Array(randomBytes12(32));
+    const callKey = new Uint8Array(randomBytes13(32));
     const keys = await sender.encryptForDevices(ring, { call: { callKey } });
     if (!keys.length) throw new Error("could not encrypt the call key for any device");
     const callId = newCallId();
@@ -19380,17 +20650,17 @@ var Client = class {
     const own = this.#creds.me;
     if (!own?.lid) throw new Error("no own LID yet");
     const inner = Array.isArray(c.offer.content) ? c.offer.content[0] : void 0;
-    const kids10 = Array.isArray(inner?.content) ? inner.content : [];
+    const kids11 = Array.isArray(inner?.content) ? inner.content : [];
     const ours = (n) => [own.lid, own.id].includes(n.attrs["jid"] ?? "");
-    let enc2 = kids10.find((k) => k.tag === "enc");
+    let enc2 = kids11.find((k) => k.tag === "enc");
     if (!enc2) {
-      const dest = kids10.find((k) => k.tag === "destination");
+      const dest = kids11.find((k) => k.tag === "destination");
       const to = (Array.isArray(dest?.content) ? dest.content : []).find(ours);
       enc2 = (Array.isArray(to?.content) ? to.content : []).find((k) => k.tag === "enc");
     }
     if (!enc2 || !(enc2.content instanceof Uint8Array))
       throw new Error("the offer carries no call key for this device");
-    const relay = kids10.find((k) => k.tag === "relay");
+    const relay = kids11.find((k) => k.tag === "relay");
     if (!relay) throw new Error("the offer carries no relay");
     const target = c.offerFrom ?? c.creator;
     receiver.sendNode(buildPreaccept(callId, target, c.creator, receiver.nextId(), c.video));
@@ -19542,6 +20812,70 @@ var Client = class {
       throw e;
     }
     return state;
+  }
+  /** This group call's current roster, in the `buildGroupInviteOffer`/`buildGroupOffer` participants shape. */
+  async #currentRosterParticipants(c, ownUser, own) {
+    const { sender } = await this.#live();
+    const isHosted = (jid) => /:99@/.test(jid);
+    const users = [...c.members ?? []].filter((u) => u !== ownUser);
+    const devices = (await sender.getDevices(users)).filter((d) => !isHosted(d.jid));
+    return [
+      { jid: ownUser, devices: [{ jid: own }] },
+      ...users.map((u) => ({
+        jid: u,
+        devices: devices.filter((d) => d.jid.replace(/:\d+@/, "@") === u).map((d) => ({ jid: d.jid }))
+      }))
+    ];
+  }
+  async #resolveCallTarget(target) {
+    const user = target.replace(/:\d+@/, "@");
+    if (user.endsWith("@lid")) return user;
+    const found = (await this.lidsFor(user)).find((x) => x.pn === user);
+    if (!found) throw new Error(`no LID known for ${target}`);
+    return found.lid;
+  }
+  async #sendParticipantInvite(callId, c, targetUser) {
+    const { sender, receiver } = await this.#live();
+    const own = this.#creds.me?.lid;
+    if (!own) throw new Error("no own LID yet; wait for the login to finish");
+    const ownUser = own.replace(/:\d+@/, "@");
+    const isHosted = (jid) => /:99@/.test(jid);
+    const targetDevices = (await sender.getDevices([targetUser])).filter((d) => !isHosted(d.jid)).map((d) => d.jid);
+    if (!targetDevices.length) throw new Error(`${targetUser} has no devices`);
+    const participants = await this.#currentRosterParticipants(c, ownUser, own);
+    const id = receiver.nextId();
+    const offer = buildGroupInviteOffer(
+      JSON.stringify({
+        call_id: callId,
+        id,
+        to: targetUser,
+        creator: c.creator,
+        target_devices: targetDevices,
+        participants,
+        video: c.video
+      })
+    );
+    await receiver.sendCallAndWait(offer);
+  }
+  /**
+   * Invite a user who is not yet in this group call's roster. The current roster travels with the offer, as
+   * the app does, so the invitee is admitted straight into the live call rather than just answering this one
+   * device's offer. Use `ringParticipant` for someone already in the roster but disconnected.
+   */
+  async inviteParticipant(callId, target) {
+    const c = this.#calls.get(callId);
+    if (!c?.groupSession) throw new Error(`${callId} is not a running group call`);
+    const targetUser = await this.#resolveCallTarget(target);
+    if (c.members?.has(targetUser)) throw new Error(`${target} is already in this call`);
+    await this.#sendParticipantInvite(callId, c, targetUser);
+  }
+  /** Re-ring a disconnected participant who is already in this group call's roster. */
+  async ringParticipant(callId, target) {
+    const c = this.#calls.get(callId);
+    if (!c?.groupSession) throw new Error(`${callId} is not a running group call`);
+    const targetUser = await this.#resolveCallTarget(target);
+    if (!c.members?.has(targetUser)) throw new Error(`${target} is not in this call's roster`);
+    await this.#sendParticipantInvite(callId, c, targetUser);
   }
   /** Build the group engine once the server gave us a relay, then deliver the shared key where it is owed. */
   async #startGroupMedia(state, summary, o) {
@@ -19893,7 +21227,7 @@ var Client = class {
     if (state.direction !== "outgoing" || !summary.transaction_id) return;
     if (state.epochTx !== void 0 && state.epochTx >= summary.transaction_id) return;
     const { sender, receiver } = await this.#live();
-    const raw = new Uint8Array(randomBytes12(32));
+    const raw = new Uint8Array(randomBytes13(32));
     const recipients = summary.epoch_recipients.filter(
       (j) => state.members?.has(j.replace(/:\d+@/, "@"))
     );
@@ -20127,7 +21461,7 @@ var Client = class {
     const parentId = generateMessageId(meId);
     const hashes = [];
     for (const [i, img] of images.entries()) {
-      const raw = rawMedia(img);
+      const raw = rawMedia(await toBytes(img));
       const uploaded = await uploadMedia(conn, "image", raw, fetch, true);
       hashes.push(pollOptionHash2(values[i], raw.fileSha256));
       await sender.sendMessage(
@@ -20164,10 +21498,10 @@ var Client = class {
     return sender.sendMessage(to, p.message, { ...p.opts, messageId: parentId });
   }
   /** Send a question (the audience answers in a box). */
-  async sendQuestion(to, text4) {
+  async sendQuestion(to, text5) {
     const { sender } = await this.#live();
     const q = question({
-      extendedTextMessage: { text: text4, previewType: "NONE", contextInfo: { isQuestion: true } }
+      extendedTextMessage: { text: text5, previewType: "NONE", contextInfo: { isQuestion: true } }
     });
     return sender.sendMessage(to, q.message, q.opts);
   }
@@ -20205,10 +21539,17 @@ var Client = class {
     this.#creds.me.name = name;
     saveAuthCreds(this.#credsPath, this.#creds);
   }
-  /** Get presence updates for a contact. */
+  /** Get presence updates for a contact. Re-sent automatically after a reconnect (the server forgets it otherwise). */
   async subscribePresence(jid) {
     const { receiver } = await this.#live();
+    this.#presenceSubscriptions.add(jid);
     receiver.sendNode(presenceSubscribe(jid, receiver.nextId()));
+  }
+  /** Stop getting presence updates for a contact subscribed to with `subscribePresence`. */
+  async unsubscribePresence(jid) {
+    const { receiver } = await this.#live();
+    this.#presenceSubscriptions.delete(jid);
+    receiver.sendNode(presenceUnsubscribe(jid, receiver.nextId()));
   }
   /**
    * Log this device out of the account: tell WhatsApp to unlink it, then close. The phone shows the device gone from
@@ -20254,7 +21595,7 @@ var Client = class {
   #teardown() {
     this.#www.invalidate();
     clearTimeout(this.#qrTimer);
-    clearInterval(this.#keepAlive);
+    clearTimeout(this.#keepAlive);
     this.#receiver = void 0;
     this.#sender = void 0;
     this.#appState = void 0;
@@ -20318,6 +21659,11 @@ var Client = class {
         },
         onNode: (node) => this.#handle(conn, node),
         onClose: ({ code, reason: closeReason }) => {
+          const hint = this.#reconnectHint;
+          this.#reconnectHint = void 0;
+          if (this.#connectedAt !== void 0 && Date.now() - this.#connectedAt >= BACKOFF_STABLE_RESET_MS)
+            this.#reconnectAttempt = 0;
+          this.#connectedAt = void 0;
           this.#teardown();
           const reason = this.#terminal ?? closeReason;
           const willReconnect = !this.#stopped && !this.#terminal && (this.#options.autoReconnect ?? true) && Boolean(this.#creds.me) && reason !== "logged-out";
@@ -20329,8 +21675,14 @@ var Client = class {
             willReconnect,
             loggedOut: reason === "logged-out"
           });
-          if (willReconnect) setTimeout(() => !this.#stopped && this.#start(), 1e3);
-          else this.logger.close("disconnect", { code, reason });
+          if (willReconnect) {
+            if (hint === "penalty")
+              this.#reconnectAttempt = Math.min(this.#reconnectAttempt + 5, BACKOFF_MAX_ATTEMPTS);
+            const delay = hint === "immediate" ? 0 : backoffDelayMs(fibonacciBackoffMs(this.#reconnectAttempt));
+            if (hint !== "immediate")
+              this.#reconnectAttempt = Math.min(this.#reconnectAttempt + 1, BACKOFF_MAX_ATTEMPTS);
+            setTimeout(() => !this.#stopped && this.#start(), delay);
+          } else this.logger.close("disconnect", { code, reason });
         }
       },
       void 0,
@@ -20343,13 +21695,59 @@ var Client = class {
       void loggedFetch(this.logger, "https://web.whatsapp.com/status.json").catch(() => {
       });
   }
+  /**
+   * Keeps the connection alive and detects a half-open socket (sends still succeed, nothing ever comes
+   * back) that a bare ack/receipt flow would never otherwise notice. Ticks every 15-30s, randomized so
+   * many clients reconnecting after an outage don't all ping in lockstep:
+   * - Real data (any inbound node) more recent than 15s ago stands in for a ping; skipped, not a failure.
+   * - Otherwise sends a `w:p` ping and waits for its own 20s answer deadline (`receiver.request`'s own
+   *   timeout). Three consecutive unanswered pings force a reconnect instead of waiting for TCP to
+   *   notice the socket is actually dead, which can take far longer than a chat client should tolerate.
+   */
+  #scheduleKeepAlive(conn, receiver) {
+    const interval = KEEP_ALIVE_INTERVAL_MIN_MS + Math.random() * (KEEP_ALIVE_INTERVAL_MAX_MS - KEEP_ALIVE_INTERVAL_MIN_MS);
+    this.#keepAlive = setTimeout(() => {
+      if (conn.state !== "open") return;
+      if (Date.now() - this.#lastDataReceived < KEEP_ALIVE_SKIP_IF_RECENT_MS) {
+        this.#keepAliveFailures = 0;
+        this.#scheduleKeepAlive(conn, receiver);
+        return;
+      }
+      let gaveUp = false;
+      void receiver.request({ tag: "iq", attrs: { to: "s.whatsapp.net", type: "get", xmlns: "w:p" } }).then((res) => {
+        this.#keepAliveFailures = 0;
+        const t = Number(res.attrs["t"]);
+        if (t > 1e9) this.#serverOffsetMs = t * 1e3 - Date.now();
+      }).catch((e) => {
+        this.#keepAliveFailures++;
+        this.logger.event("keepalive.failed", {
+          consecutiveFailures: this.#keepAliveFailures,
+          error: e
+        });
+        if (this.#keepAliveFailures >= KEEPALIVE_MAX_CONSECUTIVE_FAILURES) {
+          gaveUp = true;
+          this.logger.event("keepalive.dead-socket", {});
+          conn.close("keepalive-dead-socket");
+        }
+      }).finally(() => {
+        if (!gaveUp && conn.state === "open") this.#scheduleKeepAlive(conn, receiver);
+      });
+    }, interval);
+  }
   #handle(conn, node) {
+    this.#lastDataReceived = Date.now();
     const failure = classifyServerFailure(node);
     if (failure) {
       this.#terminal = failure;
       this.#stopped = true;
       this.logger.event("server.terminal", { reason: failure, node });
       conn.close(failure);
+      return;
+    }
+    const hint = streamErrorReconnectHint(node);
+    if (hint) {
+      this.#reconnectHint = hint;
+      this.logger.event("server.reconnect-hint", { hint, node });
       return;
     }
     if (this.#receiver?.handle(node)) return;
@@ -20540,6 +21938,10 @@ var Client = class {
             messages: chunk.chats.reduce((a, c) => a + c.messages.length, 0)
           });
           for (const m of chunk.lidMappings) lids.set(m.pn, m.lid);
+          if (chunk.nctSalt) {
+            this.#creds.nctSalt = chunk.nctSalt;
+            saveAuthCreds(this.#credsPath, this.#creds);
+          }
           this.#events.emit("history", chunk);
         }).catch((error) => this.logger.event("history.error", error));
       },
@@ -20557,7 +21959,19 @@ var Client = class {
         if (c) this.#events.emit("call", { ...c, node });
       },
       onReceipt: (node) => {
-        if (node.attrs["from"]) this.#events.emit("receipt", parseReceipt(node));
+        if (node.attrs["from"]) {
+          const r = parseReceipt(node);
+          this.#events.emit("receipt", r);
+          const fake = detectFakeChat(r, this.#sentIds, (jid) => {
+            try {
+              const u = jidDecode(jid).user;
+              return !!creds.me && jidDecode(creds.me.id).user === u || !!creds.me?.lid && jidDecode(creds.me.lid).user === u;
+            } catch {
+              return false;
+            }
+          });
+          if (fake) this.#events.emit("fake-chat", fake);
+        }
         if (node.attrs["type"] === "retry" && node.attrs["from"])
           void this.#sender?.handleRetryReceipt(node).catch((e) => this.logger.event("retry.error", e));
       },
@@ -20613,7 +22027,50 @@ var Client = class {
           const names = (Array.isArray(node.content) ? node.content : []).filter((c) => c.tag === "collection").map((c) => c.attrs["name"] ?? "").filter(Boolean);
           void this.#appState?.sync(names);
         }
-      }
+        if (type === "picture") {
+          const p = parsePictureNotification(node);
+          if (p) this.#events.emit("contact.picture", p);
+        }
+        if (type === "status") {
+          const s = parseStatusNotification(node);
+          if (s) this.#events.emit("contact.about", s);
+        }
+        if (type === "disappearing_mode") {
+          const d = parseDisappearingModeNotification(node);
+          if (d) this.#events.emit("contact.disappearing-mode", d);
+        }
+        if (type === "contacts") {
+          const c = parseContactsNotification(node);
+          if (c) {
+            if (c.action === "number-changed" && c.oldLid && c.newLid) {
+              const agrees = (pnJid, lidJid) => {
+                try {
+                  const pn = jidDecode(pnJid).user;
+                  const lid = jidDecode(lidJid).user;
+                  const curLid = lids.lidUser(pn);
+                  const curPn = lids.pnUser(lid);
+                  return (!curLid || curLid === lid) && (!curPn || curPn === pn);
+                } catch {
+                  return false;
+                }
+              };
+              if (agrees(c.oldJid, c.oldLid) && agrees(c.newJid, c.newLid)) {
+                lids.set(c.oldJid, c.oldLid);
+                lids.set(c.newJid, c.newLid);
+              }
+            }
+            this.#events.emit("contact.change", c);
+          }
+        }
+        if (type === "newsletter") {
+          const n = parseNewsletterLiveUpdate(node);
+          if (n) this.#events.emit("newsletter.live-update", n);
+        }
+      },
+      onIdentityChange: (jid) => this.#events.emit("identity.changed", { jid }),
+      // The primary phone (or another linked device) sent this one, not us specifically - still our
+      // own account's send, so its id belongs in the same store `fake-chat` checks receipts against.
+      onOwnDeviceSent: (id) => this.#sentIds.add(id)
     });
     this.#receiver = receiver;
     this.#appState = new AppStateSync({
@@ -20641,6 +22098,7 @@ var Client = class {
       tc: this.#tcTokens,
       onSent: (id, to, m) => {
         receiver.rememberOwn(id, to, m);
+        this.#sentIds.add(id);
         this.#reports.add({
           id,
           t: Math.floor(Date.now() / 1e3),
@@ -20661,17 +22119,17 @@ var Client = class {
       });
       await receiver.ensurePreKeys();
       void this.#appState.sync();
+      void receiver.validateDigestKey().catch((e) => this.logger.event("prekeys.digest-check-failed", e));
     } catch (error) {
       this.logger.event("login.setup-failed", error);
     }
-    this.#keepAlive = setInterval(() => {
-      if (conn.state === "open")
-        conn.send({
-          tag: "iq",
-          attrs: { id: receiver.nextId(), to: "s.whatsapp.net", type: "get", xmlns: "w:p" }
-        });
-    }, 3e4);
+    for (const jid of this.#presenceSubscriptions)
+      receiver.sendNode(presenceSubscribe(jid, receiver.nextId()));
+    this.#lastDataReceived = Date.now();
+    this.#keepAliveFailures = 0;
+    this.#scheduleKeepAlive(conn, receiver);
     this.#isOpen = true;
+    this.#connectedAt = Date.now();
     this.#events.emit("open", { id: creds.me?.id ?? "" });
     if (!creds.signedPreKeyAt || Date.now() - creds.signedPreKeyAt >= SIGNED_PRE_KEY_INTERVAL_MS)
       void this.rotateSignedPreKey().catch((e) => this.logger.event("prekey.rotate-failed", e));
@@ -20730,11 +22188,15 @@ export {
   AntiBanError,
   ANTIBAN_DEFAULTS,
   AntiBan,
+  deviceOf,
   quickReply,
   urlButton,
   callButton,
   copyButton,
   singleSelect,
+  getFakeMsg,
+  addStickerMetadata,
+  getStickerMetadata,
   Room,
   parseButtonReply,
   tokenizeCode,
