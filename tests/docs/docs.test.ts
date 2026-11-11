@@ -53,6 +53,8 @@ const prelude: Record<string, string> = {
 	videoWithSongTrack: 'Uint8Array',
 	imageA: 'Uint8Array',
 	imageB: 'Uint8Array',
+	jpegThumbnail: 'Uint8Array',
+	waveform: 'Uint8Array',
 	id: 'string',
 	m: "import('velowa').Message",
 	raw: "import('velowa').ClientEvents['message']",

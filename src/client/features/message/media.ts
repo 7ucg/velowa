@@ -181,6 +181,11 @@ export interface UploadResult {
 	directPath: string
 	/** Channel uploads: the server-made thumbnail. */
 	thumbnail?: { directPath: string; sha256: Uint8Array }
+	/** Channel STATUS uploads only: the `media_id` attribute `sendChannelStatus` puts on the `<status>` stanza
+	 * (confirmed against WA Web's own upload: `?...&media_id=<client token>&server_thumb_gen=1` on the same
+	 * `/newsletter/newsletter-image` path this client already posts to - the response's `handle` field, not
+	 * the query's own `media_id`, is what the stanza actually carries). */
+	handle?: string
 }
 
 /** Hash that ties a poll option to its image: sha256-hex(sha256-hex(name) + base64(image sha256)). */
@@ -203,11 +208,18 @@ export async function uploadMedia(
 	fetchImpl: Fetch = fetch,
 	channel = false,
 	pathOverride?: string,
+	extraQuery?: Record<string, string>,
 ): Promise<UploadResult> {
 	const token = uploadToken(media.fileEncSha256)
+	const query = extraQuery
+		? '&' +
+			Object.entries(extraQuery)
+				.map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+				.join('&')
+		: ''
 	let lastError: unknown
 	for (const host of conn.hosts) {
-		const url = `https://${host}${pathOverride ?? (channel ? NEWSLETTER_PATH[type] : UPLOAD_PATH[type])}/${token}?auth=${encodeURIComponent(conn.auth)}&token=${token}`
+		const url = `https://${host}${pathOverride ?? (channel ? NEWSLETTER_PATH[type] : UPLOAD_PATH[type])}/${token}?auth=${encodeURIComponent(conn.auth)}&token=${token}${query}`
 		try {
 			const res = await fetchImpl(url, {
 				method: 'POST',
@@ -218,6 +230,7 @@ export async function uploadMedia(
 				| {
 						url?: string
 						direct_path?: string
+						handle?: string
 						thumbnail_info?: { thumbnail_direct_path?: string; thumbnail_sha256?: string }
 				  }
 				| undefined
@@ -226,6 +239,7 @@ export async function uploadMedia(
 				return {
 					url: json.url,
 					directPath: json.direct_path,
+					...(json.handle && { handle: json.handle }),
 					...(t?.thumbnail_direct_path &&
 						t.thumbnail_sha256 && {
 							thumbnail: {

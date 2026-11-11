@@ -234,6 +234,67 @@ export class Sender {
 	}
 
 	/**
+	 * Post a channel status: distinct from a normal channel post (`sendMessage` to the `@newsletter` jid),
+	 * which WA Web sends as `<message>` with a bare `conversation`/media and no secret. A status keeps the
+	 * full message shape (`extendedTextMessage`, not flattened to `conversation`) with a `messageSecret`
+	 * (so later reactions/comments on it can use the usual add-on mechanism) and `contextInfo.statusAttributions:
+	 * [{type:'NEWSLETTER_STATUS'}]` (what makes the server show it in followers' Status, confirmed against a
+	 * real `<status to="...@newsletter" id=... type="text|media">` stanza captured from WA Web itself).
+	 * Media needs `mediaId`: the `handle` field `uploadMedia`'s response carries when the upload's query
+	 * string includes `media_id`/`server_thumb_gen` (confirmed against WA Web's own upload to the same
+	 * `/newsletter/newsletter-image` path this client already posts normal channel media to).
+	 * A voice note (`audioMessage.ptt`) is the one exception: the server rejects it (error 479) unless the
+	 * stanza's own `type` says `text` and `<plaintext>` carries no `mediatype` - confirmed against a captured
+	 * ptt channel status, and against this client's own first attempt getting 479 with `type="media"`.
+	 */
+	async sendChannelStatus(
+		channel: string,
+		message: Record<string, unknown>,
+		opts: SendOptions & { mediaId?: string } = {},
+	): Promise<string> {
+		const { creds } = this.d
+		if (!creds.me) throw new Error('not paired')
+		const id = opts.messageId ?? generateMessageId(creds.me.id)
+		const withSecret = withMessageSecret(message)
+		const field = Object.keys(withSecret).find((k) => k !== 'messageContextInfo')!
+		const body = withSecret[field] as Record<string, unknown>
+		const post = {
+			...withSecret,
+			[field]: {
+				...body,
+				contextInfo: {
+					...(body['contextInfo'] as object | undefined),
+					statusAttributions: [{ type: 'NEWSLETTER_STATUS' }],
+				},
+			},
+		}
+		const isPtt = !!(post['audioMessage'] as { ptt?: boolean } | undefined)?.ptt
+		const stanza: BinaryNode = {
+			tag: 'status',
+			attrs: {
+				id,
+				to: channel,
+				type: isPtt ? 'text' : messageType(post),
+				...(opts.mediaId && { media_id: opts.mediaId }),
+				...opts.stanzaAttrs,
+			},
+			content: [
+				{
+					tag: 'plaintext',
+					attrs: isPtt ? {} : { ...opts.encAttrs },
+					content: encodeProto('Message', post),
+				},
+				...(opts.extraNodes ?? []),
+			],
+		}
+		this.d.logger.event('send.channel-status', { id, channel })
+		const ack = await this.d.receiver.sendAndWaitAck(stanza)
+		opts.onAck?.(ack)
+		this.d.logger.event('send.acked', { id, to: channel })
+		return id
+	}
+
+	/**
 	 * Send a "peer" message to our own primary phone (device 0): app-state key requests and similar
 	 * device-to-device traffic. Wrapped as a deviceSentMessage like every message to our own devices.
 	 */

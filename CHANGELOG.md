@@ -1,6 +1,26 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 - 2026-11-11
+- Added: `client.postChannelStatus(channel, text)` and `client.postChannelStatusMedia(channel, type, data, opts)` -
+  a channel *status* (shows in followers' Status tray) is a distinct `<status>` stanza, not the `<message>`
+  `postToChannel` sends for the permanent feed; confirmed against a real WA Web upload/send capture (full
+  network + stanza logging added to the capture tooling used for this). Media needs the upload's own
+  `media_id`/`server_thumb_gen` query params to get a `handle` back, which becomes the stanza's `media_id`
+  attribute - except a voice note (`ptt`), where the server rejects the send (479) if that attribute is
+  present at all; confirmed by comparing against a freshly captured real ptt channel status byte for byte.
+- Fixed: `Receiver`'s ack dispatch only resolved a pending `sendAndWaitAck` on `class="message"` - a channel
+  status send's own ack (`class="status"`) never matched, so every status send hung until its own request
+  timeout even though the server had already acked it correctly.
+- Fixed: `proto/WAProto.proto`'s `LIDMigrationMapping`/`LIDMigrationMappingSyncPayload` (added locally in an
+  earlier session, reconstructed from whatsapp-rust/baileyrs since the official WA Web extraction never
+  named them) were silently dropped by a routine proto-version refresh, since that refresh overwrites the
+  whole file from the official dump. `applyLidMigrationMapping()` broke as a result (5 failing tests);
+  restored the two message definitions.
+- Changed: every media-sending method (`sendImage`, `sendVideo`, `sendAudio`, `sendDocument`, `sendSticker`,
+  `sendMedia`, `sendImagePoll`, `sendMusic`, `sendQuestionImage`, `sendStickerPack`, `postChannelStatusMedia`)
+  now takes a `MediaSource` (bytes, `{ path }`, `{ url }` or `{ stream }`) instead of only raw bytes - the
+  same source type `client.send`'s content-object form already accepted, so a local file or a safely-fetched
+  URL now works everywhere media does, not just through `client.send`.
 - Fixed: the keepalive ping was a flat 30s `setInterval` sending a fire-and-forget `w:p` IQ with no response
   correlation, no timeout and no failure tracking - a half-open socket (our own sends still succeed, nothing
   ever comes back) was invisible to it and never triggered a reconnect; it would just sit there. Replaced

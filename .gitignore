@@ -7,8 +7,9 @@
 /TODO.md
 /graphify-out
 /logs
-/auth
+/auth*
 /src/wasm-voip
 /tools
 /scripts
 /.playwright-mcp
+*.mjs

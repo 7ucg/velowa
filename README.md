@@ -11,6 +11,8 @@ else is TypeScript. The package ships **ESM and CommonJS** builds with type defi
 > account can get it restricted or banned; read [Reliability and safety](#reliability-and-safety) before you point
 > it at an account you care about.
 
+<!-- -->
+
 > **License:** velowa is free to use and to build on, but **copying any part of its code, however small, requires credit**
 > to velowa and its author. Using it as a library does not. See [License and credit](#license-and-credit).
 
@@ -32,6 +34,7 @@ only then compared with Baileys behaviour where that helps. What that changes in
 Also worth knowing: velowa builds to **ESM and CommonJS** with types, has three runtime dependencies, and is written in
 strict TypeScript with a test suite that mirrors `src/`; the code in this README and in `examples/` is type-checked against
 the built package. It is built once from the repository (Rust and `wasm-pack` needed for that) and then runs on plain Node.
+Codec throughput against Baileys' own rust bridge is tracked in [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ## What exists and works
 
@@ -47,8 +50,8 @@ the built package. It is built once from the repository (Rust and `wasm-pack` ne
 | Polls | polls, quizzes, questions, image polls and quizzes | live |
 | Groups | create, members, admins, name, description, settings, invite links, join approval, disappearing messages, member tags, permissions | live |
 | Communities | create, link and unlink groups, deactivate | live for link and unlink; tests for the rest |
-| Channels | create, follow, mute; post text, image, video, polls, quizzes, questions and music; AI-content and paid-partnership labels | live for posting and labels; tests for create, follow, mute |
-| Status | text status with a chosen audience; group status (text, picture, video, music, voice) | live |
+| Channels | create, follow, mute; post text, image, video, polls, quizzes, questions and music; a channel *status* (text, image, video, voice note); AI-content and paid-partnership labels | live for posting (feed and status) and labels; tests for create, follow, mute |
+| Status | text status with a chosen audience; group status (text, picture, video, music, voice); channel status | live |
 | Contacts and account | number lookup, "About", profile picture, username lookup, blocking, privacy settings, profile name and picture | live for lookups, blocking and reading settings; tests for changing them |
 | Chats | archive, mute, pin, star, mark read, delete, clear, labels, per-chat disappearing timer | live for archive, pin, star; tests for the rest |
 | Reports | report a user, a group, a channel, a message to the admins | live |
@@ -61,8 +64,8 @@ the built package. It is built once from the repository (Rust and `wasm-pack` ne
 | History | the history chunks the phone sends after linking | tests |
 | Escape hatches | `client.request(node)` for any stanza, `client.mex(queryId, variables)` for any GraphQL query | live |
 
-Not included: registering a new number, managed accounts and interop with other messengers. Channel *status* posts
-arrive as ordinary posts, and a call that started as voice-only cannot turn the camera on later.
+Not included: registering a new number, managed accounts and interop with other messengers. A call that started as
+voice-only cannot turn the camera on later.
 
 ## Contents
 
@@ -104,7 +107,7 @@ velowa is distributed through **git only**; it is not published on npm. The repo
 ```bash
 cd my-bot
 npm install github:7ucg/velowa            # the latest
-npm install github:7ucg/velowa#v1.0.0     # a release (recommended: it does not move)
+npm install github:7ucg/velowa#v1.2.0     # a release (recommended: it does not move)
 ```
 
 Requirements: **Node.js 18 or newer**. Nothing is compiled or run while installing.
@@ -432,7 +435,8 @@ link (private addresses are refused; use `fetchLinkPreview` and pass your own pr
 
 ```ts
 await client.sendImage(jid, bytes, { caption: 'hi' })
-await client.sendVideo(jid, bytes, { gifPlayback: true })
+await client.sendImage(jid, { path: './cat.jpg' }, { caption: 'from disk' })
+await client.sendVideo(jid, { url: 'https://example.com/clip.mp4' }, { gifPlayback: true }) // fetched safely
 await client.sendAudio(jid, bytes, { ptt: true }) // voice note
 await client.sendDocument(jid, bytes, { mimetype: 'application/pdf', fileName: 'a.pdf' })
 await client.sendSticker(jid, webpBytes)
@@ -440,6 +444,12 @@ await client.sendSticker(jid, webpBytes, { stickerMetadata: { packName: 'My Pack
 
 const data = await client.downloadMedia(m.raw.message) // Buffer, decrypted
 ```
+
+Every media-sending method (`sendImage`, `sendVideo`, `sendAudio`, `sendDocument`, `sendSticker`, `sendMedia`,
+`sendImagePoll`, `sendMusic`, `sendQuestionImage`, `sendStickerPack`, `postChannelStatusMedia`) takes a
+`MediaSource`: bytes (`Buffer`/`Uint8Array`), `{ path }` (a local file), `{ url }` (an `http(s)` URL, fetched safely
+the same way as `client.send`'s media) or `{ stream }` - not just `client.send`'s content-object form. See
+[Sending](#sending-clientsend) for the safety rules around `{ url }` vs. `{ path }`.
 
 Media is encrypted and uploaded for you; channels get unencrypted uploads automatically. Options (`viewOnce`, `seconds`,
 `width`, `height`, `groupStatus`, …) are on `MediaOptions`.
@@ -523,9 +533,17 @@ await client.postToChannel(ch.id, 'Hello channel') // text
 await client.postToChannel(ch.id, { /* any message */ }, { aiContent: true }) // label: AI content / paid partnership
 await client.sendImage(jid, bytes, { caption: 'photo' }) // images, videos, polls, quizzes, questions and music
 await client.sendMusic(channelJid, videoWithSongTrack, { title: 'Song', author: 'Artist', songId: '…' }) // the sound must be in the video's own track; catalog data (`MusicInfo`) is best copied from a music post you received
+
+await client.postChannelStatus(ch.id, 'Good morning!') // shows in followers' Status tray, not the permanent feed
+await client.postChannelStatusMedia(ch.id, 'image', bytes, { caption: 'photo' })
+await client.postChannelStatusMedia(ch.id, 'video', bytes, { seconds: 10, jpegThumbnail })
+await client.postChannelStatusMedia(ch.id, 'audio', bytes, { ptt: true, seconds: 3, waveform })
 ```
 
 Channel posts are not end-to-end encrypted (the server fans them out); velowa handles the different wire format.
+A channel *status* is a distinct send (its own `<status>` stanza, not a message) that disappears from the Status
+tray the way a personal status does; `postToChannel` is the permanent feed post. The `channel.status` event fires
+for both your own posts (on another linked device) and reactions/edits to one.
 
 ### Status (stories)
 
@@ -568,89 +586,20 @@ await client.requestPayment(jid, { amount1000: 12_500, currency: 'EUR', note: 'L
 
 ### More account, chat, group, channel, event and business functions
 
-Everything here is covered by unit tests against the stanza or GraphQL request it builds. What was also tried on a real account is in the table below: some `w:mex` GraphQL calls were answered with `Bad Request` (their query ids come from the Baileys fork and may belong to another WhatsApp build), some got no answer, many are untested live. Use those at your own risk; `client.mex(queryId, variables)` lets you replace an id yourself.
+velowa also covers calendar events, business products and collections, trusted devices, community ownership
+transfer, group `pastParticipants`/`reportedMessages`, the AI bot directory, server experiment flags and more -
+about 50 further methods, each backed by a request builder with its own unit tests. A few:
 
 ```ts
-// Account and chats
-await client.account.trustedDevices() // + trustDevice, untrustDevice, removeDevice(jid), setLinkedProfiles
-await client.lockChat(jid) // + setFavorites([jid]), muteContactStatus(jid), reorderLabels([1, 2])
 await client.pinMessage(m.key, 7 * 86_400) // + unpinMessage(m.key); live-verified
 await client.sendAlbum(jid, [{ image: bytes }, { image: bytes, caption: 'two' }])
-const next = await client.waitForMessage((x) => x.from === jid, 60_000)
-await client.logout({ deleteAuth: true }) // unlinks this device on the server and deletes the saved folder
-
-// Privacy and contacts
-await client.privacy.blockingStatus() // + setBlocking, optOutList, pushConfig, disclosures
-await client.privacy.setTextStatus('Busy', '🔕') // + textStatusList, createReminder, deleteReminder
-await client.contactUsernames('4915…@s.whatsapp.net')
-
-// Groups, communities, channels
-await client.groups.pastParticipants(groupJid) // who left, why and when
-await client.groups.reportedMessages(groupJid)
-await client.communities.transferOwnership(communityJid, newOwnerJid)
-await client.newsletters.promoteAdmin(channelJid, userJid) // + demoteAdmin, changeOwner, pinMessage, setPicture
-await client.newsletters.search('news') // + directoryList, recommended, directoryCategories, following
-
-// Calendar events (HTTP GraphQL; the token comes from two w:mex calls)
-await client.calendar.list()
-await client.calendar.rsvp(eventId, 'GOING') // + create, get, update, delete, invite, inviteLink, linkPreview
-
-// Media, history, devices (round 2)
 const fresh = await client.updateMediaMessage(m.key, m.content!) // the phone uploads expired media again
-await client.fetchMessageHistory(50, m.key, Date.now()) // older messages arrive as a `history` event
-await client.requestPlaceholderResend(m.key) // "waiting for this message": arrives as `message.resent`
-await client.sendMessage(jid, { conversation: 'hi' }, { devices: 'primary' }) // 'recipient' | 'primary' | 'no-linked'
-await client.rotateSignedPreKey() // also done automatically every 27 days
-await client.resyncAppState(undefined, { fromScratch: true })
-
-// Events as chat cards, comments, sticker packs, menu widgets
-const cardId = await client.sendEvent(groupJid, { name: 'Launch', startTime: new Date(Date.now() + 86_400_000) })
-await client.respondToEvent({ remoteJid: groupJid, id: cardId, fromMe: true }, userJid, 'GOING') // answers arrive as `eventResponse`
-await client.sendComment(m.key, 'nice') // under a post in a community announcement group; arrives as `addon`
-await client.sendStickerPack(jid, { name: 'Pack', publisher: 'Me', stickers: [{ data: webpBytes, emojis: ['😀'] }], cover: webpBytes, thumbnail: jpegBytes })
-await client.sendRichResponse(jid, {
-	text: 'Pick one',
-	buttons: { title: 'Menu', labels: ['Profile', 'Help'] },
-	cards: { items: [{ title: 'Card', buttons: ['A', 'B'] }], layout: 'carousel' },
-	footer: { text: 'Open', url: 'https://example.com' },
-})
-
-// Server info, clock, a small store
-const flags = await client.server.abProps() // the server's experiment flags: { props, hash, refresh }
-await client.server.reachoutTimelock() // is the account blocked from starting chats?
-await client.server.newChatCap() // how many new chats may it start this period
-await client.server.setPassive(true) // background mode
-client.serverTime() // unix seconds on the server's clock
-const store = new MemoryStore().bind(client) // later: store.messages(jid, 20), store.name(jid), store.chats()
-
-// Bots, group calls
-await client.listBots() // the AI bot directory
-await client.fetchBotProfile(jid, productId) // one bot's name/description/category, prompts and slash commands
-await client.setScreenShare(callId, true) // only the signal; others see `screenShare` on the call event
-
-// Business accounts
-await client.business.createProduct({ name: 'Tee', price: 15_000, currency: 'EUR', images: [{ url }] })
-await client.business.deleteProducts([productId])
-await client.business.broadcastQuota() // + deleteBroadcastList, createCollection, updateCollection
-await client.setQuickReply({ shortcut: 'hi', message: 'Hello, how can we help?' })
-await client.setBusinessCoverPhoto(jpegBytes) // + business.removeCoverPhoto(id)
+await client.getOrder(jid, id, 'the orderMessage’s token') // from a "Review and pay" tap
 ```
 
-**Status of the functions in this section** (checked against a real account):
-
-| Status | Functions |
-| --- | --- |
-| Live, works | `pinMessage`, `unpinMessage`, `sendAlbum`, `groups.info`, `infoWithBots`, `isInternal`, `subgroups`, `reportedMessages`, `privacy.settings`, `blockingStatus`, `pushConfig`, `disclosures`, `optOutList`, `textStatusList`, `newsletters.search`, `directoryList`, `recommended`, `directoryCategories`, `linkPreviewCheck`, `dehydrated`, `following` |
-| Live, reaches the server (answer "Not Authorized" because the account does not run the channel) | `newsletters.adminCapabilities`, `enforcements` |
-| Live, **Bad Request** (the server refuses the query id or its variables) | `calendar.*` (the token query already fails), `account.trustedDevices`, `privacy.contactList`, `pictureInfo`, `onlineStatus`, `onlineStatusLastSeen`, `suggestedContacts`, `newsletters.similar`, `groups.batch`, `inviteLink`, `participating` |
-| Live, **no answer** (timeout) | `groups.pastParticipants`, `groups.linkedSubgroups`, `business.broadcastQuota` |
-| Live, arrived on the phone | `sendRichResponse` with `buttons` / `cards` / `footer`, `sendEvent`, `sendStickerPack` |
-| Live, sent without error, no visible result yet | `tctoken` (our token is issued after a 1:1 send; none came back yet), `fetchMessageHistory`, `requestPlaceholderResend` |
-| Live, works | `rotateSignedPreKey` (messages kept decrypting afterwards), `resyncAppState`, `server.abProps`, `server.reachoutTimelock`, `server.newChatCap`, `server.setPassive`, `serverTime` |
-| Live, answered `403 forbidden` for this account | `listBots` |
-| **Not tested live**, unit tests only | `MemoryStore`, `updateMediaMessage`, `respondToEvent`, `sendComment`, `setScreenShare`, `setBusinessCoverPhoto`, `lockChat`, `setFavorites`, `muteContactStatus`, `reorderLabels`, `setLinkPreviewsDisabled`, `setRelayAllCalls`, `setPrivateProcessing`, `logout`, `waitForMessage`, `contactUsernames`, `setQuickReply` (sent without error, but never seen on a business phone), `account.trustDevice` / `untrustDevice` / `removeDevice` / `setLinkedProfiles`, all other `privacy.*` setters and reminders, the other `groups.*` additions (invite V4, acknowledge, cancel request, linked participants, GraphQL create / add / reset link), `communities.*` additions, the other channel admin, insight, report and pin calls, `business.createProduct` / `updateProduct` / `deleteProducts` / collections / `deleteBroadcastList` |
-
-The query ids of the channel and group calls come from WhatsApp Web itself; the ones that answer `Bad Request` come from the Baileys fork and are not in the Web build (probably Android-only). Directory calls need country codes (default `US`). Product images must already be on WhatsApp's servers (`{ url }`); uploading new ones is not built.
+The full list, with examples and which ones were checked against a real account (worked, `Bad Request`, no answer,
+arrived on the phone, …), is in [`docs/more-functions.md`](docs/more-functions.md). `client.mex(queryId, variables)`
+lets you run any `w:mex` GraphQL query yourself, including ones not wrapped here.
 
 ### Reports
 
@@ -701,51 +650,10 @@ await client.inviteParticipant(gc.callId, jid) // add someone not yet in this ru
 await client.ringParticipant(gc.callId, jid) // re-ring a disconnected member of the roster
 ```
 
-**A room** is a call link you own and run: guests open it in a browser (no WhatsApp account needed), ask to join, and
-the room lets them in by a rule you choose. `createRoom` makes the link, joins it as its owner, requires approval and
-handles every request; everything it sees is also written to the protocol log (`room.*` events).
-
-```ts
-const room = await client.createRoom({ media: 'video', admit: 'all' }) // 'all' | 'guests' | 'none' | (person) => boolean
-console.log(room.url) // https://call.whatsapp.com/video/…
-room.on('request', (p) => console.log(p.guest ? 'guest' : 'member', p.name, 'wants in'))
-room.on('joined', (p) => console.log(p.name, 'is in'))
-room.on('left', (p) => console.log(p.name, 'left'))
-await room.admit(jid) // by hand, with admit: 'none'; also room.deny(jid)
-await room.close() // ends the call for everybody
-```
-
-Underneath, the `call` event carries `waitingRoom` (who waits, `guest` for people without an account, the name they typed)
-and `roster` (who is connected or left), and `client.answerWaitingRoom(callId, jid, true)` lets one person in.
-
-Raw media is also possible: `audioIn` (16 kHz mono PCM), `videoFrames` (H.264 access units, see `splitAnnexB`),
-`recordTo` / `recordVideoTo` to save what comes in. File decoding needs `ffmpeg` on the machine; `localAudio` needs
-PulseAudio or PipeWire (`parec`, `pacat`). Events of a call arrive as `call` events (`offer`, `accept`, `terminate`,
-`group_update`, `video`, `user_action`, …).
-
-**Joining as a guest** (no WhatsApp account, no pairing — one call link, one throwaway identity):
-
-```ts
-import { Client } from 'velowa'
-
-const guest = new Client({
-  guest: { inviteCode: link.url, guestName: 'Baron' }, // the token, or the whole https://call.whatsapp.com/... URL
-})
-await guest.connect()
-await guest.ready() // registers (guest_reg) then logs in; guest.me is the server-assigned lid once this resolves
-
-const call = await guest.joinCallLink(link.url, 'video', { audioFile: 'hello.mp3' }) // or localAudio, videoFile, ...
-// waits in the host's waiting room if one is on (call.waiting === true until a group_update admits it)
-
-await guest.endCall(call.callId) // leaves properly (the host sees it go, not just drop)
-```
-
-That's the whole guest API: `authDir`, chats, groups, channels and messaging do not apply (a guest is not an
-account) — everything else (`joinCallLink`'s media options, the `call` event, `enableCamera`/`raiseHand`/
-`sendReaction` during the call) works exactly as it does for a paired account joining its own room. A fresh,
-unused `Client` is a fresh guest identity every time: nothing is reused or persisted across runs by design.
-`guest_reg` may be gated behind an anti-automation check on repeated/high-volume registration (not handled here;
-this is for real interactive use, not for running many guests at once).
+Three more specialized parts, in [`docs/calls-rooms-and-guests.md`](docs/calls-rooms-and-guests.md): **running your
+own room** (`createRoom`, a call link you own that admits people by a rule you choose), **joining as a guest** (no
+WhatsApp account, one call link, one throwaway identity), and **raw call media** (`audioIn`/`videoFrames` instead
+of files).
 
 ### Chats and app state
 
@@ -905,6 +813,10 @@ velowa in a product, because the AGPL has conditions of its own.
 
 ## More documentation
 
+- [`docs/more-functions.md`](docs/more-functions.md): the ~50 further account, chat, group, channel, event and business methods.
+- [`docs/calls-rooms-and-guests.md`](docs/calls-rooms-and-guests.md): running your own room, joining as a guest, raw call media.
+- [`docs/benchmarks.md`](docs/benchmarks.md): WABinary codec throughput against Baileys.
+- [`docs/architecture.md`](docs/architecture.md), [`docs/design-decisions.md`](docs/design-decisions.md): how velowa is put together and why.
 - [`LICENSE`](LICENSE) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md): the license and the code that comes from other projects.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): rules for git, for building and for releases.
 - [`CHANGELOG.md`](CHANGELOG.md): what changed, newest first.

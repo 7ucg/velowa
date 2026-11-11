@@ -17,7 +17,7 @@ code in the README and in `examples/` against the built package.
 
 ## Git rules
 
-**Commits**
+### Commits
 
 - One change per commit, subject in the imperative, at most about 70 characters, and the body says *why* when it is not obvious.
   Good: `Group calls: redial the relay when the server moves the call`.
@@ -25,7 +25,7 @@ code in the README and in `examples/` against the built package.
 - Do not rewrite history on `main` (no force-push). Tags `vX.Y.Z` are never moved.
 - Line endings are LF everywhere (`.gitattributes`); `.wasm`, images and media are binary.
 
-**What is in git and what is not**
+### What is in git and what is not
 
 | In git | Never in git (it is in `.gitignore`) |
 | --- | --- |

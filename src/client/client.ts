@@ -591,17 +591,19 @@ export class Client {
 		))
 	}
 
-	/** Encrypt, upload and send an image / video / audio / document / sticker. */
+	/** Encrypt, upload and send an image / video / audio / document / sticker. `data` is bytes, a local path
+	 * (`{ path }`), an `http(s)` URL (`{ url }`) or a stream (`{ stream }`); see `MediaSource`. */
 	async sendMedia(
 		to: string,
 		type: MediaType,
-		data: Uint8Array,
+		data: MediaSource,
 		opts: MediaOptions & TextOptions = {},
 	): Promise<string> {
 		const { sender, meId } = await this.#live()
+		const bytes = await toBytes(data)
 		// Channels are not end-to-end encrypted: the file goes up as is and the message has no media key.
 		const channel = to.endsWith('@newsletter')
-		const enc = channel ? media.rawMedia(data) : media.encryptMedia(data, type)
+		const enc = channel ? media.rawMedia(bytes) : media.encryptMedia(bytes, type)
 		const uploaded = await media.uploadMedia(await this.#getMediaConn(), type, enc, fetch, channel)
 		const built = media.mediaMessage(type, enc, uploaded, opts)
 		if (channel) media.stripMediaKeys(built.message)
@@ -686,25 +688,26 @@ export class Client {
 		return id
 	}
 
-	sendImage = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
+	sendImage = (to: string, data: MediaSource, opts: MediaOptions & TextOptions = {}) =>
 		this.sendMedia(to, 'image', data, opts)
-	sendVideo = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
+	sendVideo = (to: string, data: MediaSource, opts: MediaOptions & TextOptions = {}) =>
 		this.sendMedia(to, 'video', data, opts)
-	sendAudio = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
+	sendAudio = (to: string, data: MediaSource, opts: MediaOptions & TextOptions = {}) =>
 		this.sendMedia(to, 'audio', data, opts)
-	sendDocument = (to: string, data: Uint8Array, opts: MediaOptions & TextOptions = {}) =>
+	sendDocument = (to: string, data: MediaSource, opts: MediaOptions & TextOptions = {}) =>
 		this.sendMedia(to, 'document', data, opts)
 	/** `stickerMetadata` embeds pack attribution (WhatsApp's own EXIF convention) so the app shows "Added by X". */
-	sendSticker = (
+	async sendSticker(
 		to: string,
-		data: Uint8Array,
+		data: MediaSource,
 		opts: MediaOptions & TextOptions & { stickerMetadata?: StickerMetadata } = {},
-	) => {
+	): Promise<string> {
 		const { stickerMetadata, ...rest } = opts
+		const bytes = await toBytes(data)
 		return this.sendMedia(
 			to,
 			'sticker',
-			stickerMetadata ? addStickerMetadata(data, stickerMetadata) : data,
+			stickerMetadata ? addStickerMetadata(bytes, stickerMetadata) : bytes,
 			rest,
 		)
 	}
@@ -748,11 +751,11 @@ export class Client {
 		pack: {
 			name: string
 			publisher: string
-			stickers: StickerInput[]
+			stickers: (Omit<StickerInput, 'data'> & { data: MediaSource })[]
 			/** WebP cover (the pack's tray icon). */
-			cover: Uint8Array
+			cover: MediaSource
 			/** JPEG preview shown in the chat. */
-			thumbnail: Uint8Array
+			thumbnail: MediaSource
 			packId?: string
 			description?: string
 			caption?: string
@@ -760,10 +763,15 @@ export class Client {
 	): Promise<string> {
 		const { sender } = await this.#live()
 		const packId = pack.packId ?? newPackId()
-		const zip = createStickerPackZip(packId, pack.stickers, pack.cover)
+		const [stickers, cover, thumbnail] = await Promise.all([
+			Promise.all(pack.stickers.map(async (s) => ({ ...s, data: await toBytes(s.data) }))),
+			toBytes(pack.cover),
+			toBytes(pack.thumbnail),
+		])
+		const zip = createStickerPackZip(packId, stickers, cover)
 		const mediaKey = randomBytes(32)
 		const encZip = media.encryptMedia(zip.zip, 'sticker-pack', mediaKey)
-		const encThumb = media.encryptMedia(pack.thumbnail, 'sticker-pack-thumbnail', mediaKey)
+		const encThumb = media.encryptMedia(thumbnail, 'sticker-pack-thumbnail', mediaKey)
 		const conn = await this.#getMediaConn()
 		const [zipUp, thumbUp] = await Promise.all([
 			media.uploadMedia(conn, 'document', encZip, fetch, false, '/mms/sticker-pack'),
@@ -1475,6 +1483,90 @@ export class Client {
 		if (serverId && labels.aiContent) await this.newsletters.labelAiContent(channel, serverId)
 		if (serverId && labels.paidPartnership)
 			await this.newsletters.labelPaidPartnership(channel, serverId)
+		return { id, ...(serverId && { serverId }) }
+	}
+	/**
+	 * Post a channel status (shows in followers' Status tray, distinct from `postToChannel`'s permanent
+	 * feed post).
+	 */
+	async postChannelStatus(
+		channel: string,
+		text: string,
+		opts: SendOptions = {},
+	): Promise<{ id: string; serverId?: string }> {
+		const { sender } = await this.#live()
+		let serverId: string | undefined
+		const id = await sender.sendChannelStatus(channel, msg.textMessage(text), {
+			...opts,
+			onAck: (ack) => (serverId = ack.attrs['server_id']),
+		})
+		return { id, ...(serverId && { serverId }) }
+	}
+	/**
+	 * Post an image/video/audio channel status. Uploads to the same `/newsletter/newsletter-image`-style
+	 * path `sendMedia` uses for normal channel posts, but with `media_id`/`server_thumb_gen` on the query
+	 * string - that's what makes the server's response carry a `handle`, which becomes the `<status>`
+	 * stanza's own `media_id` attribute (confirmed against WA Web's own upload).
+	 */
+	async postChannelStatusMedia(
+		channel: string,
+		type: MediaType,
+		data: MediaSource,
+		opts: MediaOptions & SendOptions = {},
+	): Promise<{ id: string; serverId?: string }> {
+		const { sender } = await this.#live()
+		const enc = media.rawMedia(await toBytes(data))
+		const uploaded = await media.uploadMedia(
+			await this.#getMediaConn(),
+			type,
+			enc,
+			fetch,
+			true,
+			undefined,
+			{ media_id: String(Math.floor(Math.random() * 1e16)), server_thumb_gen: '1' },
+		)
+		if (!uploaded.handle) throw new Error('channel-status upload did not return a handle')
+		// Videos get no server-made preview here either (same as a normal channel post): upload our own.
+		if (type === 'video' && !uploaded.thumbnail && opts.jpegThumbnail) {
+			const raw = media.rawMedia(opts.jpegThumbnail)
+			const t = await media.uploadMedia(
+				await this.#getMediaConn(),
+				'image',
+				raw,
+				fetch,
+				true,
+				media.NEWSLETTER_THUMBNAIL_PATH,
+			)
+			uploaded.thumbnail = { directPath: t.directPath, sha256: raw.fileSha256 }
+		}
+		const built = media.mediaMessage(type, enc, uploaded, opts)
+		media.stripMediaKeys(built.message)
+		if (uploaded.thumbnail) {
+			const body = built.message[Object.keys(built.message)[0]!] as Record<string, unknown>
+			body['thumbnailDirectPath'] = uploaded.thumbnail.directPath
+			body['thumbnailSha256'] = uploaded.thumbnail.sha256
+		}
+		// A voice-note status needs its own background color and a statusSourceType, or the server
+		// rejects the <status> send (error 479) - confirmed against a captured real ptt channel status.
+		if (type === 'audio' && opts.ptt) {
+			const audio = built.message['audioMessage'] as Record<string, unknown>
+			audio['backgroundArgb'] = opts.fields?.['backgroundArgb'] ?? 0xff1e88e5
+			audio['contextInfo'] = {
+				...(audio['contextInfo'] as object | undefined),
+				statusSourceType: 'AUDIO',
+			}
+		}
+		let serverId: string | undefined
+		const id = await sender.sendChannelStatus(channel, built.message, {
+			...opts,
+			// A voice note is the one media kind that must NOT carry media_id on the <status> stanza - the
+			// server rejects it (error 479) if it does, even though the same upload still returns a handle.
+			// Confirmed live: identical content with media_id omitted went through; every other field here
+			// already matched a freshly captured real ptt channel status byte for byte.
+			...(type === 'audio' && opts.ptt ? {} : { mediaId: uploaded.handle }),
+			encAttrs: { mediatype: built.mediaType, ...opts.encAttrs },
+			onAck: (ack) => (serverId = ack.attrs['server_id']),
+		})
 		return { id, ...(serverId && { serverId }) }
 	}
 	/**
@@ -2750,7 +2842,7 @@ export class Client {
 		to: string,
 		name: string,
 		values: string[],
-		images: Uint8Array[],
+		images: MediaSource[],
 		o: { correctAnswer?: string } = {},
 	): Promise<string> {
 		if (images.length !== values.length) throw new Error('one image per option')
@@ -2759,7 +2851,7 @@ export class Client {
 		const parentId = generateMessageId(meId)
 		const hashes: string[] = []
 		for (const [i, img] of images.entries()) {
-			const raw = media.rawMedia(img)
+			const raw = media.rawMedia(await toBytes(img))
 			const uploaded = await media.uploadMedia(conn, 'image', raw, fetch, true)
 			hashes.push(media.pollOptionHash(values[i]!, raw.fileSha256))
 			await sender.sendMessage(
@@ -2803,10 +2895,15 @@ export class Client {
 		})
 		return sender.sendMessage(to, q.message, q.opts)
 	}
-	sendQuestionImage = (to: string, data: Uint8Array, question: string, opts: MediaOptions = {}) =>
+	sendQuestionImage = (to: string, data: MediaSource, question: string, opts: MediaOptions = {}) =>
 		this.sendMedia(to, 'image', data, { ...opts, caption: question, isQuestion: true })
 	/** Send a video with a song attached (the app's "music" post; the video is what plays). */
-	sendMusic = (to: string, video: Uint8Array, music: extras.MusicInfo, opts: MediaOptions = {}) => {
+	sendMusic = (
+		to: string,
+		video: MediaSource,
+		music: extras.MusicInfo,
+		opts: MediaOptions = {},
+	) => {
 		const parts = extras.musicParts(music)
 		return this.sendMedia(to, 'video', video, {
 			...opts,

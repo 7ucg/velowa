@@ -282,7 +282,10 @@ export class Receiver {
 			}
 			return false
 		}
-		if (node.tag === 'ack' && node.attrs['class'] === 'message') {
+		if (
+			node.tag === 'ack' &&
+			(node.attrs['class'] === 'message' || node.attrs['class'] === 'status')
+		) {
 			const p = this.#acks.get(node.attrs['id'] ?? '')
 			if (p) {
 				this.#acks.delete(node.attrs['id']!)

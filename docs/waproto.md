@@ -4,6 +4,7 @@
 `baron-baileys-v2/WAProto/WAProto.proto` via `scripts/proto-sync.py`; no upstream `waproto` is vendored.
 
 ## What the sync script does and why
+
 1. **Trim.** Keeps only top-level types reachable from `ROOTS` (35 of 412): what
    libsignal/noise/appstate reference. Smaller codegen, smaller wasm, no schema surface we don't use.
 2. **proto3 -> proto2.** Baileys' file is proto3 but relies on protobufjs leniency (enums whose first
@@ -18,8 +19,10 @@ the codec module is cut to the 15 functions the three crates call. Add a root to
 to `codec` when a new type is needed.
 
 ## Known differences vs upstream's schema (verify when a test disagrees)
+
 - Baileys' proto drops `[default = ...]` annotations; upstream keeps some (e.g. `ADVEncryptionType`).
 - Field sets differ by WhatsApp Web version (Baileys 2.3000.1052536159 vs upstream 2.3000.1045368834).
 
 ## Evidence
+
 Native + wasm32 `cargo check` clean; `cargo test` on waproto, libsignal, noise, appstate all pass.
