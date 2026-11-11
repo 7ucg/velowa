@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 1.3.0 - 2026-11-11
 - Added: `client.postChannelStatus(channel, text)` and `client.postChannelStatusMedia(channel, type, data, opts)` -
   a channel *status* (shows in followers' Status tray) is a distinct `<status>` stanza, not the `<message>`
