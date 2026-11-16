@@ -3,22 +3,32 @@ import { createDecipheriv, hkdfSync } from 'node:crypto'
 
 const BOT_MESSAGE_INFO = 'Bot Message'
 const MAX_SECRETS_PER_CHAT = 20
+const MAX_SECRETS_TOTAL = 5000
 
 /**
  * Remembers the `messageSecret` of every message we decode, by message id and per chat: a Meta AI
  * reply (`<enc type="msmsg">`) is keyed from the secret of the message it answers.
  */
 export class MessageSecrets {
-	readonly #byId = new Map<string, Buffer>()
+	// `null` is a tombstone: the id was seen and its secret has been evicted to bound memory, but the
+	// *key* stays forever so `has()` keeps returning true for it - a later message reusing that id (an
+	// attacker's replay, or a collision) can never look "unseen" and get a fresh secret/author bound to
+	// it. Only the heavy payload (the 32-byte buffer) is freed, never the cheap anti-rebind marker.
+	readonly #byId = new Map<string, Buffer | null>()
+	/** Ids with a live (non-evicted) secret, oldest first - the eviction queue. */
+	readonly #liveOrder: string[] = []
 	readonly #byChat = new Map<string, { id: string; secret: Buffer }[]>()
 	/** Who actually sent the message this id's secret belongs to (ourselves, for `rememberOwn`), and in
 	 * which chat - set alongside the secret so a later secret-encrypted edit can be bound to its real
-	 * author instead of trusting whoever the *editing* envelope claims to be. */
+	 * author instead of trusting whoever the *editing* envelope claims to be. Never evicted: it's two
+	 * small strings, not the 32-byte secret, and losing it would defeat the anti-rebind guarantee above
+	 * just as surely as deleting the id from `#byId` would. */
 	readonly #originById = new Map<string, { author: string; chat: string }>()
 
-	/** The secret stored for exactly this message id (no chat-wide fallback). */
+	/** The secret stored for exactly this message id (no chat-wide fallback), or `undefined` if never
+	 * seen or if its secret has since been evicted. */
 	byId(id: string): Buffer | undefined {
-		return this.#byId.get(id)
+		return this.#byId.get(id) ?? undefined
 	}
 
 	/** Who sent this id's message, and in which chat - as recorded when its secret was first seen. */
@@ -26,15 +36,34 @@ export class MessageSecrets {
 		return this.#originById.get(id)
 	}
 
-	/** Is a secret already stored for this id? (First write wins: a later message with the same id cannot replace it.) */
+	/** Is this id already known (first write wins: a later message with the same id cannot rebind it,
+	 * even once its secret has been evicted)? */
 	has(id: string): boolean {
 		return this.#byId.has(id)
 	}
 
+	/** First write wins, enforced here rather than left to every caller: an id already known (live or
+	 * evicted) is a no-op, so a later message reusing it - whether that's a replay, an id collision, or
+	 * eviction having freed the slot - can never rebind its secret or its recorded author. */
 	set(id: string, secret: Uint8Array, chat?: string, author?: string): void {
+		if (this.#byId.has(id)) return
 		const buf = Buffer.from(secret)
 		this.#byId.set(id, buf)
+		this.#liveOrder.push(id)
 		if (author && chat) this.#originById.set(id, { author, chat })
+		// Evict the oldest *live* secret once the bound is hit - frees the buffer, keeps the tombstone.
+		while (this.#liveOrder.length > MAX_SECRETS_TOTAL) {
+			const oldest = this.#liveOrder.shift()
+			if (oldest === undefined || this.#byId.get(oldest) == null) continue // already tombstoned
+			this.#byId.set(oldest, null)
+			for (const [chatKey, list] of this.#byChat) {
+				const idx = list.findIndex((e) => e.id === oldest)
+				if (idx === -1) continue
+				list.splice(idx, 1)
+				if (!list.length) this.#byChat.delete(chatKey)
+				break
+			}
+		}
 		if (!chat) return
 		const list = (this.#byChat.get(chat) ?? []).filter((e) => e.id !== id && !e.secret.equals(buf))
 		list.unshift({ id, secret: buf })
@@ -46,7 +75,7 @@ export class MessageSecrets {
 	candidates(ids: (string | undefined)[], chat: string): Buffer[] {
 		const out: Buffer[] = []
 		const add = (b?: Buffer) => b && !out.some((o) => o.equals(b)) && out.push(b)
-		for (const id of ids) if (id) add(this.#byId.get(id))
+		for (const id of ids) if (id) add(this.#byId.get(id) ?? undefined)
 		for (const e of this.#byChat.get(chat) ?? []) {
 			if (out.length >= 6) break
 			add(e.secret)

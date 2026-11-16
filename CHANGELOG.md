@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- Fixed: `MessageSecrets` (Meta AI reply decryption) kept one entry per decoded message forever in
+  its `#byId`/`#originById` maps - only the per-chat list (`#byChat`) was bounded. A long-running
+  connection grew these two maps without limit. Now bounds the stored secret bytes to the 5000 most
+  recently seen message ids, evicting the oldest buffer first - but keeps every id it has ever seen as
+  a permanent tombstone (and enforces first-write-wins for `set()` itself, not just via callers), so an
+  id whose secret was evicted can never be rebound to a different secret or author later.
 - Added: `client.newsletters.acceptTOSNotice(noticeId, stage)` - an account that has never created a
   channel needs this called once (`acceptTOSNotice('20601218', '5')`, the ids WhatsApp Web's own
   channel composer uses) before `create()` will work. Matches whatsmeow's `AcceptTOSNotice`.
