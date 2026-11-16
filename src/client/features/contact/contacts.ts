@@ -339,8 +339,11 @@ export interface StatusPrivacy {
 }
 
 /** Who sees our text/picture/video status updates - a separate IQ from the account's general privacy
- * settings (`fetchPrivacySettings`), with its own `status` namespace. The first entry is always the
- * default; WhatsApp falls back to "contacts" if the server has nothing stored yet. */
+ * settings (`fetchPrivacySettings`), with its own `status` namespace. The first entry is the one the
+ * server itself marked `default="true"`; WhatsApp's own fallback ("contacts") is only synthesized here
+ * when the server genuinely has nothing stored yet (item-not-found, or an empty answer) - any other
+ * failure propagates, and a response with lists but none marked default is returned as the server sent
+ * it rather than guessing which one is the default. */
 export async function fetchStatusPrivacy(request: RequestFn): Promise<StatusPrivacy[]> {
 	const DEFAULT: StatusPrivacy[] = [{ type: 'contacts', isDefault: true, list: [] }]
 	let res: BinaryNode
@@ -350,8 +353,9 @@ export async function fetchStatusPrivacy(request: RequestFn): Promise<StatusPriv
 			attrs: { xmlns: 'status', to: 's.whatsapp.net', type: 'get' },
 			content: [{ tag: 'privacy', attrs: {} }],
 		})
-	} catch {
-		return DEFAULT
+	} catch (e) {
+		if (/"code":"404"/.test(String((e as Error).message))) return DEFAULT
+		throw e
 	}
 	const lists = kids(kids(res, 'privacy')[0], 'list').map((list) => ({
 		type: list.attrs['type'] ?? '',

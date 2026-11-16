@@ -14,14 +14,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use waproto::whatsapp as wa;
 
-/// Resolve a mutation's operation to the closed Rust enum. Absent defaults
-/// to SET (proto2 enum default); an unknown wire value is a typed error so
-/// standalone callers stay safe even without process_patch's up-front guard.
+/// Resolve a mutation's operation to the closed Rust enum. WA Web's own validation
+/// (MISSING_MUTATION_OPERATION) treats an absent field as fatal, not an implicit SET -
+/// a genuine SET from the server always sets it explicitly. An unknown wire value is its
+/// own typed error, so standalone callers stay safe even without process_patch's up-front guard.
 fn known_op(
     op: Option<buffa::EnumValue<wa::syncd_mutation::SyncdOperation>>,
 ) -> Result<wa::syncd_mutation::SyncdOperation, AppStateError> {
     match op {
-        None => Ok(wa::syncd_mutation::SyncdOperation::SET),
+        None => Err(AppStateError::MissingSyncdOperation),
         Some(v) => v
             .as_known()
             .ok_or(AppStateError::UnsupportedSyncdOperation(v.to_i32())),
@@ -1165,6 +1166,48 @@ mod tests {
             .expect_err("unknown operation must be rejected");
 
         assert!(matches!(err, AppStateError::UnsupportedSyncdOperation(7)));
+        assert_eq!(state.hash, before, "hash must be untouched on rejection");
+        assert_eq!(state.version, 0, "version must be untouched on rejection");
+    }
+
+    #[test]
+    // WA Web (MISSING_MUTATION_OPERATION) treats a mutation with no operation field at all as fatal,
+    // never as an implicit SET - a genuine SET from the server always sets the field explicitly.
+    fn test_process_patch_rejects_missing_operation() {
+        let master_key = [7u8; 32];
+        let keys = expand_app_state_keys(&master_key);
+        let key_id = b"test_key_id".to_vec();
+        let index_mac = vec![1; 32];
+
+        let record = create_encrypted_record(
+            wa::syncd_mutation::SyncdOperation::SET,
+            &index_mac,
+            &keys,
+            &key_id,
+            1234567890,
+        );
+
+        let patch = wa::SyncdPatch {
+            version: buffa::MessageField::some(wa::SyncdVersion { version: Some(2) }),
+            mutations: vec![wa::SyncdMutation {
+                operation: None,
+                record: buffa::MessageField::some(record),
+            }],
+            key_id: buffa::MessageField::some(wa::KeyId {
+                id: Some(key_id.clone()),
+            }),
+            ..Default::default()
+        };
+
+        let get_keys = |_: &[u8]| Ok(Arc::new(keys.clone()));
+        let get_prev = |_: &[u8]| Ok(None);
+
+        let mut state = HashState::default();
+        let before = state.hash;
+        let err = process_patch(&patch, &mut state, get_keys, get_prev, false, "regular")
+            .expect_err("a missing operation field must be rejected, not defaulted to SET");
+
+        assert!(matches!(err, AppStateError::MissingSyncdOperation));
         assert_eq!(state.hash, before, "hash must be untouched on rejection");
         assert_eq!(state.version, 0, "version must be untouched on rejection");
     }

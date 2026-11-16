@@ -50,6 +50,12 @@ pub enum AppStateError {
     // as SET).
     #[error("unsupported syncd operation {0} in patch")]
     UnsupportedSyncdOperation(i32),
+    // WA Web (WAWebSyncdValidateMutations) treats a mutation with no `operation` field at all as
+    // MISSING_MUTATION_OPERATION, fatal - never as an implicit SET. A genuine SET from the server
+    // always sets the field explicitly; an absent one is a tampering/corruption signal, not a
+    // proto2-default-value situation to paper over.
+    #[error("mutation has no operation field")]
+    MissingSyncdOperation,
 }
 
 pub type Result<T> = std::result::Result<T, AppStateError>;

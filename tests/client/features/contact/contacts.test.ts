@@ -229,15 +229,21 @@ describe('contacts', () => {
 		])
 	})
 
-	it('falls back to the contacts default when the status privacy request fails or is empty', async () => {
-		const notFound = fake({ tag: 'iq', attrs: { type: 'result' }, content: [] })
+	it('falls back to the contacts default on an empty answer or a 404, but propagates any other error', async () => {
+		const empty = fake({ tag: 'iq', attrs: { type: 'result' }, content: [] })
+		expect(await c.fetchStatusPrivacy(empty.request)).toEqual([
+			{ type: 'contacts', isDefault: true, list: [] },
+		])
+		const notFound = {
+			request: async (): Promise<BinaryNode> => Promise.reject(new Error('{"code":"404"}')),
+		}
 		expect(await c.fetchStatusPrivacy(notFound.request)).toEqual([
 			{ type: 'contacts', isDefault: true, list: [] },
 		])
-		const throws = { request: async (): Promise<BinaryNode> => Promise.reject(new Error('no')) }
-		expect(await c.fetchStatusPrivacy(throws.request)).toEqual([
-			{ type: 'contacts', isDefault: true, list: [] },
-		])
+		const serverError = {
+			request: async (): Promise<BinaryNode> => Promise.reject(new Error('{"code":"500"}')),
+		}
+		await expect(c.fetchStatusPrivacy(serverError.request)).rejects.toThrow('500')
 	})
 
 	it('resolves a business message link, with and without its pushname/business block', async () => {

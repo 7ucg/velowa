@@ -732,8 +732,12 @@ export class Client {
 		}
 	}
 	/** Delete an uploaded media blob from the server (e.g. right after a send you want to undo). Only removes
-	 * the upload itself; a message that already points at it still fails to load afterwards. */
-	async deleteMedia(message: Record<string, unknown>): Promise<void> {
+	 * the upload itself; a message that already points at it still fails to load afterwards. `key` must be
+	 * this message's own key with `fromMe: true` - only a sender can meaningfully undo their own upload, and
+	 * without this check any `directPath`/hash taken from someone *else's* received message would delete
+	 * media that was never ours to remove. */
+	async deleteMedia(key: MessageKey, message: Record<string, unknown>): Promise<void> {
+		if (!key.fromMe) throw new Error('can only delete media from a message we sent ourselves')
 		const m = media.mediaOf(message)
 		if (!m) throw new Error('message carries no deletable media')
 		if (!m.ref.directPath || !m.ref.fileEncSha256)

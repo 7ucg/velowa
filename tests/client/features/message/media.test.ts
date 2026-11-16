@@ -126,6 +126,18 @@ describe('upload / download', () => {
 		).rejects.toThrow(/all hosts/)
 	})
 
+	it('refuses to delete on an unsafe directPath or a wrong-length hash', async () => {
+		const fakeFetch = (async () => new Response(null, { status: 200 })) as unknown as typeof fetch
+		const hash = encryptMedia(plain, 'image').fileEncSha256
+		for (const bad of ['//evil.example/x', '/a/../b', '/a@evil.example', 'v/x'])
+			await expect(deleteMedia(conn, 'image', bad, hash, undefined, fakeFetch)).rejects.toThrow(
+				/unsafe/,
+			)
+		await expect(
+			deleteMedia(conn, 'image', '/v/t62/x', new Uint8Array(16), undefined, fakeFetch),
+		).rejects.toThrow(/32 byte/)
+	})
+
 	it('downloads via directPath, falls back to url, and verifies', async () => {
 		const enc = encryptMedia(plain, 'document')
 		const fakeFetch = (async (url: string) =>

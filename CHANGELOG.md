@@ -1,6 +1,23 @@
 # Changelog
 
 ## Unreleased
+- Fixed (security): `wacore-appstate`'s `known_op` defaulted a mutation with no `operation` field at
+  all to SET ("proto2 enum default"), instead of rejecting it the way WA Web's own validation
+  (`MISSING_MUTATION_OPERATION`, fatal) does. A genuine SET from the server always sets the field
+  explicitly; a missing one is a tampering/corruption signal, not a default-value situation. Found by
+  comparing against whatsapp-rust's `validation_generated.rs` line by line.
+- Fixed (security): `client.deleteMedia` took a bare message object with no proof it was ours to
+  delete - a `directPath`/hash taken from someone *else's* received message would delete media that
+  was never ours. Now requires the message's own `MessageKey` and refuses unless `fromMe` is true,
+  mirroring `updateMediaMessage`'s existing ownership check. `media.deleteMedia` also now validates
+  `directPath` the same way `safeMediaUrls` does (no `..`, `@`, backslash or control characters) and
+  rejects a `fileEncSha256` that isn't 32 bytes, instead of encoding unvalidated input into the
+  delete request's URL.
+- Fixed (security): `fetchStatusPrivacy` swallowed *any* request failure into a synthesized
+  `{ type: 'contacts', isDefault: true }` default, masking real errors (a dropped connection, a
+  server error) as "nothing configured yet". Now only falls back on an item-not-found answer or a
+  genuinely empty one (matching whatsmeow's own `ErrIQNotFound` handling), and propagates everything
+  else.
 - Added: `GroupNotification.trigger` is now read off `limit_sharing_enabled` too (the "limit sharing"
   toggle), not just `ephemeral` - the tag already came through generically via `action`, only its own
   attribute was dropped.

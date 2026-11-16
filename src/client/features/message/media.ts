@@ -271,6 +271,9 @@ export async function deleteMedia(
 	fetchImpl: Fetch = fetch,
 ): Promise<void> {
 	const path = directPath.split('?')[0]!
+	if (!path.startsWith('/') || path.startsWith('//') || /[\\@\s]|\.\.|[\u0000-\u001f]/.test(path))
+		throw new Error('unsafe media directPath')
+	if (fileEncSha256.length !== 32) throw new Error('fileEncSha256 must be a 32 byte sha256')
 	const token = uploadToken(fileEncSha256)
 	const dMd = Buffer.from(path, 'utf8').toString('base64url')
 	let lastError: unknown
