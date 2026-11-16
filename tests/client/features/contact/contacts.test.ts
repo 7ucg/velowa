@@ -199,4 +199,98 @@ describe('contacts', () => {
 		const query = kids(kids(f.sent[0]!, 'usync')[0]!, 'query')[0]!
 		expect(kids(query).map((n) => n.tag)).toEqual(['username'])
 	})
+
+	it('reads the status privacy lists, default first', async () => {
+		const f = fake({
+			tag: 'iq',
+			attrs: { type: 'result' },
+			content: [
+				{
+					tag: 'privacy',
+					attrs: {},
+					content: [
+						{
+							tag: 'list',
+							attrs: { type: 'whitelist' },
+							content: [{ tag: 'user', attrs: { jid: '1@s.whatsapp.net' } }],
+						},
+						{
+							tag: 'list',
+							attrs: { type: 'contacts', default: 'true' },
+							content: [],
+						},
+					],
+				},
+			],
+		})
+		expect(await c.fetchStatusPrivacy(f.request)).toEqual([
+			{ type: 'contacts', isDefault: true, list: [] },
+			{ type: 'whitelist', isDefault: false, list: ['1@s.whatsapp.net'] },
+		])
+	})
+
+	it('falls back to the contacts default when the status privacy request fails or is empty', async () => {
+		const notFound = fake({ tag: 'iq', attrs: { type: 'result' }, content: [] })
+		expect(await c.fetchStatusPrivacy(notFound.request)).toEqual([
+			{ type: 'contacts', isDefault: true, list: [] },
+		])
+		const throws = { request: async (): Promise<BinaryNode> => Promise.reject(new Error('no')) }
+		expect(await c.fetchStatusPrivacy(throws.request)).toEqual([
+			{ type: 'contacts', isDefault: true, list: [] },
+		])
+	})
+
+	it('resolves a business message link, with and without its pushname/business block', async () => {
+		const f = fake({
+			tag: 'iq',
+			attrs: { type: 'result' },
+			content: [
+				{
+					tag: 'qr',
+					attrs: { jid: '1@s.whatsapp.net', notify: 'Anna' },
+					content: [
+						{ tag: 'message', attrs: {}, content: 'hi there' },
+						{
+							tag: 'business',
+							attrs: { is_signed: 'true', verified_name: 'Anna Shop', verified_level: 'green' },
+						},
+					],
+				},
+			],
+		})
+		expect(await c.resolveBusinessMessageLink(f.request, 'https://wa.me/message/ABCD')).toEqual({
+			jid: '1@s.whatsapp.net',
+			pushName: 'Anna',
+			message: 'hi there',
+			isSigned: true,
+			verifiedName: 'Anna Shop',
+			verifiedLevel: 'green',
+		})
+		expect(kids(f.sent[0]!, 'qr')[0]!.attrs['code']).toBe('ABCD')
+	})
+
+	it('resolves a contact QR link and strips the known URL prefixes', async () => {
+		const f = fake({
+			tag: 'iq',
+			attrs: { type: 'result' },
+			content: [{ tag: 'qr', attrs: { jid: '2@s.whatsapp.net', type: 'contact' } }],
+		})
+		expect(await c.resolveContactQRLink(f.request, 'https://api.whatsapp.com/qr/XYZ')).toEqual({
+			jid: '2@s.whatsapp.net',
+			type: 'contact',
+		})
+		expect(kids(f.sent[0]!, 'qr')[0]!.attrs['code']).toBe('XYZ')
+	})
+
+	it('reads and revokes our own contact QR link', async () => {
+		const f = fake({
+			tag: 'iq',
+			attrs: { type: 'result' },
+			content: [{ tag: 'qr', attrs: { code: 'MYCODE' } }],
+		})
+		expect(await c.getContactQRLink(f.request)).toBe('MYCODE')
+		expect(kids(f.sent[0]!, 'qr')[0]!.attrs['action']).toBe('get')
+		await c.getContactQRLink(f.request, true)
+		expect(kids(f.sent[1]!, 'qr')[0]!.attrs['action']).toBe('revoke')
+	})
 })

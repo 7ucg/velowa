@@ -4,6 +4,7 @@ import {
 	MAX_DOWNLOAD_BYTES,
 	safeMediaUrls,
 	decryptMedia,
+	deleteMedia,
 	downloadMedia,
 	encryptMedia,
 	mediaKeys,
@@ -90,6 +91,38 @@ describe('upload / download', () => {
 		const fakeFetch = (async () => new Response('{}', { status: 403 })) as unknown as typeof fetch
 		await expect(
 			uploadMedia(conn, 'image', encryptMedia(plain, 'image'), fakeFetch),
+		).rejects.toThrow(/all hosts/)
+	})
+
+	it('deletes by DELETE to the upload path, with the query stripped from directPath', async () => {
+		const enc = encryptMedia(plain, 'image')
+		const calls: { url: string; method?: string }[] = []
+		const fakeFetch = (async (url: string, init?: RequestInit) => {
+			calls.push({ url, method: init?.method })
+			return url.includes('a.example')
+				? new Response('nope', { status: 500 })
+				: new Response(null, { status: 200 })
+		}) as unknown as typeof fetch
+		await deleteMedia(conn, 'image', '/v/t62/x?ccb=1', enc.fileEncSha256, 'the-handle', fakeFetch)
+		expect(calls).toHaveLength(2)
+		expect(calls[1]!.method).toBe('DELETE')
+		expect(calls[1]!.url).toContain(`/mms/image/${uploadToken(enc.fileEncSha256)}?`)
+		expect(calls[1]!.url).toContain('d_md=')
+		expect(calls[1]!.url).not.toContain('ccb')
+		expect(calls[1]!.url).toContain('e_handle=the-handle')
+	})
+
+	it('delete fails when every host fails', async () => {
+		const fakeFetch = (async () => new Response(null, { status: 404 })) as unknown as typeof fetch
+		await expect(
+			deleteMedia(
+				conn,
+				'image',
+				'/v/t62/x',
+				encryptMedia(plain, 'image').fileEncSha256,
+				undefined,
+				fakeFetch,
+			),
 		).rejects.toThrow(/all hosts/)
 	})
 

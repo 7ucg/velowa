@@ -215,6 +215,7 @@ describe('parseGroupNotification', () => {
 					tag: 'membership_approval_request',
 					attrs: { request_method: 'invite_link', parent_group_jid: 'c@g.us' },
 				},
+				{ tag: 'limit_sharing_enabled', attrs: { trigger: '3' } },
 			],
 		})
 		expect(events[0]).toMatchObject({
@@ -242,6 +243,7 @@ describe('parseGroupNotification', () => {
 			requestMethod: 'invite_link',
 			parentGroupJid: 'c@g.us',
 		})
+		expect(events[6]).toMatchObject({ action: 'limit_sharing_enabled', trigger: 3 })
 	})
 })
 

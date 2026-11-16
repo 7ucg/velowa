@@ -331,6 +331,41 @@ export async function fetchPrivacySettings(request: RequestFn): Promise<Record<s
 	return out
 }
 
+export interface StatusPrivacy {
+	type: 'contacts' | 'blacklist' | 'whitelist' | string
+	isDefault: boolean
+	/** Who's on the list, for `blacklist`/`whitelist`. */
+	list: string[]
+}
+
+/** Who sees our text/picture/video status updates - a separate IQ from the account's general privacy
+ * settings (`fetchPrivacySettings`), with its own `status` namespace. The first entry is always the
+ * default; WhatsApp falls back to "contacts" if the server has nothing stored yet. */
+export async function fetchStatusPrivacy(request: RequestFn): Promise<StatusPrivacy[]> {
+	const DEFAULT: StatusPrivacy[] = [{ type: 'contacts', isDefault: true, list: [] }]
+	let res: BinaryNode
+	try {
+		res = await request({
+			tag: 'iq',
+			attrs: { xmlns: 'status', to: 's.whatsapp.net', type: 'get' },
+			content: [{ tag: 'privacy', attrs: {} }],
+		})
+	} catch {
+		return DEFAULT
+	}
+	const lists = kids(kids(res, 'privacy')[0], 'list').map((list) => ({
+		type: list.attrs['type'] ?? '',
+		isDefault: list.attrs['default'] === 'true' || list.attrs['default'] === '1',
+		list: kids(list, 'user')
+			.map((u) => u.attrs['jid'])
+			.filter((jid): jid is string => !!jid),
+	}))
+	if (!lists.length) return DEFAULT
+	const def = lists.findIndex((l) => l.isDefault)
+	if (def > 0) [lists[0], lists[def]] = [lists[def]!, lists[0]!]
+	return lists
+}
+
 export async function updatePrivacy(
 	request: RequestFn,
 	name: PrivacyCategory,
@@ -396,4 +431,92 @@ export async function findUserByUsername(
 	const e = entries[0]
 	if (!e || !e.id) return null
 	return { jid: e.id, exists: e.nodes['contact']?.attrs['type'] === 'in' }
+}
+
+// ---- QR / "click to chat" links ----------------------------------------------------------------
+
+const stripLinkPrefix = (link: string, ...prefixes: string[]): string => {
+	for (const p of prefixes) if (link.startsWith(p)) return link.slice(p.length)
+	return link
+}
+
+export interface BusinessMessageLinkTarget {
+	jid: string
+	pushName?: string
+	/** The pre-filled message text the link opens the chat with, if the link carries one. */
+	message?: string
+	isSigned?: boolean
+	verifiedName?: string
+	verifiedLevel?: string
+}
+
+/** Resolve a `wa.me/message/<code>` or `api.whatsapp.com/message/<code>` "click to chat" link (the full
+ * URL or just the code) to the business account and pre-filled message it opens. */
+export async function resolveBusinessMessageLink(
+	request: RequestFn,
+	link: string,
+): Promise<BusinessMessageLinkTarget> {
+	const code = stripLinkPrefix(link, 'https://wa.me/message/', 'https://api.whatsapp.com/message/')
+	const res = await request({
+		tag: 'iq',
+		attrs: { type: 'get', xmlns: 'w:qr' },
+		content: [{ tag: 'qr', attrs: { code } }],
+	})
+	const qr = kids(res, 'qr')[0]
+	if (!qr) throw new Error('business message link not found')
+	const business = kids(qr, 'business')[0]
+	const message = kids(qr, 'message')[0]?.content
+	return {
+		jid: qr.attrs['jid'] ?? '',
+		...(qr.attrs['notify'] && { pushName: qr.attrs['notify'] }),
+		...(message && {
+			message:
+				typeof message === 'string' ? message : Buffer.from(message as Uint8Array).toString('utf8'),
+		}),
+		...(business && {
+			isSigned: business.attrs['is_signed'] === 'true',
+			verifiedName: business.attrs['verified_name'],
+			verifiedLevel: business.attrs['verified_level'],
+		}),
+	}
+}
+
+export interface ContactQRLinkTarget {
+	jid: string
+	pushName?: string
+	type: string
+}
+
+/** Resolve a `wa.me/qr/<code>` or `api.whatsapp.com/qr/<code>` contact-share link (the full URL or just
+ * the code) to the account it points at. */
+export async function resolveContactQRLink(
+	request: RequestFn,
+	link: string,
+): Promise<ContactQRLinkTarget> {
+	const code = stripLinkPrefix(link, 'https://wa.me/qr/', 'https://api.whatsapp.com/qr/')
+	const res = await request({
+		tag: 'iq',
+		attrs: { type: 'get', xmlns: 'w:qr' },
+		content: [{ tag: 'qr', attrs: { code } }],
+	})
+	const qr = kids(res, 'qr')[0]
+	if (!qr) throw new Error('contact QR link not found')
+	return {
+		jid: qr.attrs['jid'] ?? '',
+		...(qr.attrs['notify'] && { pushName: qr.attrs['notify'] }),
+		type: qr.attrs['type'] ?? '',
+	}
+}
+
+/** Our own `wa.me/qr/<code>` contact-share link, resolvable with `resolveContactQRLink`. `revoke: true`
+ * invalidates the previous code and issues a fresh one. */
+export async function getContactQRLink(request: RequestFn, revoke = false): Promise<string> {
+	const res = await request({
+		tag: 'iq',
+		attrs: { type: 'set', xmlns: 'w:qr' },
+		content: [{ tag: 'qr', attrs: { type: 'contact', action: revoke ? 'revoke' : 'get' } }],
+	})
+	const qr = kids(res, 'qr')[0]
+	if (!qr?.attrs['code']) throw new Error('no contact QR code in response')
+	return qr.attrs['code']
 }

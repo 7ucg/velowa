@@ -398,6 +398,24 @@ describe('Sender: group stanza details and statuses', () => {
 		).toEqual(['4915611111111:1@s.whatsapp.net', bob0.jid].sort())
 	})
 
+	it('still names the audience in <participants> on a second status, even once every device has a fresh key', async () => {
+		const { sender, stanzas } = await world()
+		const opts = {
+			statusRecipients: ['4915611111111@s.whatsapp.net'],
+			statusPrivacy: 'allowlist' as const,
+		}
+		await sender.sendMessage('status@broadcast', { extendedTextMessage: { text: 'one' } }, opts)
+		await sender.sendMessage('status@broadcast', { extendedTextMessage: { text: 'two' } }, opts)
+		const second = stanzas[1]!
+		// No device needed a fresh sender key this time, so the SKDM <to> loop contributes nothing - but
+		// status@broadcast has no server-side roster, so the bare user jid must still be named, or the post
+		// acks successfully while reaching nobody.
+		expect(kids(second, 'participants')[0]).toBeDefined()
+		expect(kids(kids(second, 'participants')[0]!, 'to').map((t) => t.attrs['jid'])).toContain(
+			'4915611111111@s.whatsapp.net',
+		)
+	})
+
 	it('refuses a status without an audience', async () => {
 		const { sender } = await world()
 		await expect(

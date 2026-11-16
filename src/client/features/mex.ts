@@ -41,9 +41,20 @@ export async function mexQuery<T = unknown>(
 	const raw = result?.content
 	if (!raw) throw new MexError('empty w:mex response', 400, res)
 	const text = typeof raw === 'string' ? raw : Buffer.from(raw as Uint8Array).toString('utf8')
-	const data = JSON.parse(text) as {
+	let data: {
 		data?: Record<string, unknown>
 		errors?: { message?: string; extensions?: { error_code?: number } }[]
+	}
+	try {
+		data = JSON.parse(text)
+	} catch {
+		// Some w:mex query ids answer with Meta's binary "Argo" wire format instead of JSON (see whatsmeow's
+		// argo.go) - not decoded here, but a clear error beats a cryptic JSON.parse SyntaxError.
+		throw new MexError(
+			'w:mex response was not JSON (possibly Argo-encoded, not supported)',
+			400,
+			text,
+		)
 	}
 	if (data.errors?.length) {
 		const first = data.errors[0]!

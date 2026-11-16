@@ -1,6 +1,31 @@
 # Changelog
 
 ## Unreleased
+- Added: `GroupNotification.trigger` is now read off `limit_sharing_enabled` too (the "limit sharing"
+  toggle), not just `ephemeral` - the tag already came through generically via `action`, only its own
+  attribute was dropped.
+- Fixed (serious): `#groupStanza` only added a `<participants>` node to a `status@broadcast` send when at
+  least one recipient device needed a *fresh* sender key (the SKDM distribution loop). `status@broadcast`
+  has no server-side roster the way a group does - the bare `<to jid="user@...">` entries in that node are
+  the *only* thing telling the server who should receive the post at all. A second status to an audience
+  whose devices already all had a cached sender key (so the SKDM loop contributed nothing) therefore acked
+  successfully while reaching nobody. Mirrors `whatsapp-rust`'s own `ensure_status_participants`: the bare
+  user-jid entries are now always added for a status send, regardless of whether any device needed a fresh
+  key.
+- Added: `client.fetchStatusPrivacy()` - reads the "Status privacy" lists back from the server (a separate
+  `xmlns="status"` IQ, distinct from the account's general privacy settings); `setStatusPrivacy` was
+  write-only until now. Matches whatsmeow's `GetStatusPrivacy`.
+- Added: `client.resolveBusinessMessageLink(link)` / `resolveContactQRLink(link)` / `getContactQRLink(revoke?)`
+  - resolve a `wa.me/message/<code>` "click to chat" link or a `wa.me/qr/<code>` contact-share link (the full
+  URL or just the code) to the account and pre-filled text it opens, and read/revoke our own contact-share
+  link. Matches whatsmeow's `ResolveBusinessMessageLink`/`ResolveContactQRLink`/`GetContactQRLink`.
+- Fixed: `mexQuery` threw a bare `JSON.parse` `SyntaxError` for a `w:mex` response that isn't JSON. Some
+  query ids answer with Meta's binary "Argo" wire format instead (not decoded here - a real decoder is a
+  project of its own, see whatsmeow's `argo/argo.go`); now throws a clear `MexError` saying so instead of
+  an opaque parse error.
+- Added: `client.deleteMedia(message)` - removes an uploaded media blob from the server (e.g. right after a
+  send you want to undo); a message already pointing at it still fails to load afterwards, same as
+  whatsmeow's `DeleteMedia`.
 - Removed: `applyLidMigrationMapping()` and the LID-migration-mapping handling in `receiver.ts`. It decoded
   `LIDMigrationMappingSyncMessage.encodedMappingPayload` with `LIDMigrationMapping`/
   `LIDMigrationMappingSyncPayload` - two message types that were never part of WhatsApp Web's own exported

@@ -259,6 +259,34 @@ export async function uploadMedia(
 	throw new Error('media upload failed on all hosts', { cause: lastError })
 }
 
+/** Delete an uploaded blob from the first media host that accepts it (e.g. after a failed/unwanted send). Only
+ * the upload itself is removed - any message already pointing at it keeps failing to load, same as whatsmeow's
+ * own `DeleteMedia`. `handle` is a channel upload's own `UploadResult.handle`, if there is one. */
+export async function deleteMedia(
+	conn: MediaConn,
+	type: MediaType,
+	directPath: string,
+	fileEncSha256: Uint8Array,
+	handle?: string,
+	fetchImpl: Fetch = fetch,
+): Promise<void> {
+	const path = directPath.split('?')[0]!
+	const token = uploadToken(fileEncSha256)
+	const dMd = Buffer.from(path, 'utf8').toString('base64url')
+	let lastError: unknown
+	for (const host of conn.hosts) {
+		const url = `https://${host}${UPLOAD_PATH[type]}/${token}?token=${token}&d_md=${dMd}&auth=${encodeURIComponent(conn.auth)}${handle ? `&e_handle=${encodeURIComponent(handle)}` : ''}`
+		try {
+			const res = await fetchImpl(url, { method: 'DELETE', headers: { Origin: ORIGIN } })
+			if (res.ok) return
+			lastError = new Error(`delete on ${host} failed (HTTP ${res.status})`)
+		} catch (e) {
+			lastError = e
+		}
+	}
+	throw new Error('media delete failed on all hosts', { cause: lastError })
+}
+
 export interface MediaRef {
 	url?: string
 	directPath?: string

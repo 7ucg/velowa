@@ -901,6 +901,21 @@ export class Sender {
 			this.#memory[memoryKey] = [...known]
 			this.#saveMemory()
 		}
+		if (isStatus) {
+			// status@broadcast has no server-side roster: a bare <to jid="user@..."/> (no device, no <enc>) is the
+			// only thing that tells the server who should get this post at all - the SKDM <to> entries above
+			// only reach devices that needed a *fresh* sender key. Skipping this for an audience whose keys were
+			// already fresh (so `nodes` stayed empty, as whatsapp-rust's ensure_status_participants guards
+			// against) would otherwise ack successfully while reaching nobody.
+			const already = new Set(nodes.map((n) => n.attrs['jid']))
+			for (const p of participants) {
+				const bare = jidDecode(p).user + '@' + jidDecode(p).server
+				if (!already.has(bare)) {
+					nodes.push({ tag: 'to', attrs: { jid: bare }, content: [] })
+					already.add(bare)
+				}
+			}
+		}
 		const content: BinaryNode[] = [
 			{ tag: 'enc', attrs: { v: '2', type: 'skmsg', ...opts.encAttrs }, content: skmsg },
 		]

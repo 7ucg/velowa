@@ -731,6 +731,22 @@ export class Client {
 			return media.downloadMedia(again.ref, again.type, undefined, extraHosts)
 		}
 	}
+	/** Delete an uploaded media blob from the server (e.g. right after a send you want to undo). Only removes
+	 * the upload itself; a message that already points at it still fails to load afterwards. */
+	async deleteMedia(message: Record<string, unknown>): Promise<void> {
+		const m = media.mediaOf(message)
+		if (!m) throw new Error('message carries no deletable media')
+		if (!m.ref.directPath || !m.ref.fileEncSha256)
+			throw new Error(
+				'media has no directPath/fileEncSha256 to delete by (a channel post strips both)',
+			)
+		await media.deleteMedia(
+			await this.#getMediaConn(),
+			m.type,
+			m.ref.directPath,
+			m.ref.fileEncSha256,
+		)
+	}
 
 	async #peerDataOperation(request: Record<string, unknown>): Promise<string> {
 		const { sender } = await this.#live()
@@ -1236,6 +1252,12 @@ export class Client {
 	async fetchStatus(...jids: string[]) {
 		return contacts.fetchStatus(this.#q, await this.#sid(), jids)
 	}
+	/** Resolve a `wa.me/message/<code>` "click to chat" link to the business account and pre-filled text it opens. */
+	resolveBusinessMessageLink = (link: string) => contacts.resolveBusinessMessageLink(this.#q, link)
+	/** Resolve a `wa.me/qr/<code>` contact-share link to the account it points at. */
+	resolveContactQRLink = (link: string) => contacts.resolveContactQRLink(this.#q, link)
+	/** Our own `wa.me/qr/<code>` contact-share link; `revoke: true` issues a fresh one. */
+	getContactQRLink = (revoke = false) => contacts.getContactQRLink(this.#q, revoke)
 	/** The usernames some contacts have set. */
 	async contactUsernames(...jids: string[]) {
 		return contacts.contactUsernames(this.#q, await this.#sid(), jids)
@@ -1361,6 +1383,8 @@ export class Client {
 	/** Who may see our statuses (the "Status privacy" screen). */
 	setStatusPrivacy = (audience: act.StatusAudience, jids: string[] = []) =>
 		this.#push(act.statusPrivacy(audience, jids))
+	/** Read the current "Status privacy" lists back from the server. */
+	fetchStatusPrivacy = () => contacts.fetchStatusPrivacy(this.#q)
 
 	/** Group permission "Add other members": everyone or only admins. */
 	setGroupMemberAddMode = (jid: string, mode: 'admin_add' | 'all_member_add') =>

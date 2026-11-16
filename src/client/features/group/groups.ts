@@ -555,7 +555,7 @@ export interface GroupNotification {
 	threshold?: string
 	/** `ephemeral` / `growth_locked` only: seconds until messages disappear, or until invite links reopen. */
 	expiration?: number
-	/** `ephemeral` only: who/what set it off, when the server says. */
+	/** `ephemeral` / `limit_sharing_enabled` only: who/what set it off, when the server says. */
 	trigger?: number
 	/** `growth_locked` only: why invite links are unavailable. */
 	lockType?: string
@@ -597,6 +597,8 @@ export function parseGroupNotification(node: BinaryNode): GroupNotification[] {
 			n.expiration = Number(c.attrs['expiration'] ?? 0)
 			if (c.attrs['trigger']) n.trigger = Number(c.attrs['trigger'])
 		}
+		if (c.tag === 'limit_sharing_enabled' && c.attrs['trigger'])
+			n.trigger = Number(c.attrs['trigger'])
 		if (c.tag === 'growth_locked') {
 			n.expiration = Number(c.attrs['expiration'] ?? 0)
 			n.lockType = c.attrs['type'] ?? ''
