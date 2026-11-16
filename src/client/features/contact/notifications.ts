@@ -1,5 +1,6 @@
 // velowa (https://github.com/7ucg/velowa) (c) 2026 Baron. Copying any part of this file, however small, requires credit: see LICENSE.
 import type { BinaryNode } from '../../../codec/index.js'
+import { jidDecode } from '../../../jid.js'
 
 const kids = (n: BinaryNode, tag?: string): BinaryNode[] =>
 	Array.isArray(n.content) ? n.content.filter((c) => !tag || c.tag === tag) : []
@@ -86,6 +87,36 @@ export function parseDisappearingModeNotification(
 		jid: from,
 		duration: Number(dm.attrs['duration'] ?? 0),
 		settingTimestamp: Number(dm.attrs['t']),
+	}
+}
+
+export interface BlocklistChange {
+	/** The kind of change the server reports (e.g. `modify`), when it says one. */
+	action?: string
+	dhash?: string
+	prevDhash?: string
+	changes: { jid: string; action: string }[]
+}
+
+/** The `<blocklist>` child of `<notification type="account_sync">`: our own blocklist changed
+ * (from another linked device, or a server-side migration) - distinct from a top-level blocklist
+ * fetch, this is the only way a live change to it is ever pushed. */
+export function parseBlocklistNotification(node: BinaryNode): BlocklistChange {
+	return {
+		...(node.attrs['action'] && { action: node.attrs['action'] }),
+		...(node.attrs['dhash'] && { dhash: node.attrs['dhash'] }),
+		...(node.attrs['prev_dhash'] && { prevDhash: node.attrs['prev_dhash'] }),
+		changes: kids(node)
+			.map((c) => ({ jid: c.attrs['jid'] ?? '', action: c.attrs['action'] ?? '' }))
+			.filter((c) => {
+				if (!c.jid) return false
+				try {
+					jidDecode(c.jid)
+					return true
+				} catch {
+					return false
+				}
+			}),
 	}
 }
 

@@ -1,6 +1,18 @@
 # Changelog
 
 ## Unreleased
+- Added: `offline.preview`/`offline.completed` events - right after connecting, `<ib>` carries how many
+  messages/notifications/receipts/app-data changes the server is about to redeliver from while we were
+  offline (`offline_preview`), then a completion marker (`offline`) once caught up. Previously dropped
+  silently (only the `<ib>`'s `dirty` child was read).
+- Added: `self.picture`, `self.privacy` and `contact.blocklist` events - our own profile photo, privacy
+  settings or blocklist changing from another linked device (or a server-side migration, for the
+  blocklist) is only ever pushed nested inside a `<notification type="account_sync">`, never as its
+  own top-level notification type; this was previously only visible as the raw, unparsed `notification`
+  event. Guarded on the notification's `from` actually being our own account (or absent, as the
+  server's own account_sync pushes have historically sent it), a `<privacy>` child refetches settings
+  at most once per notification instead of once per such child, and a blocklist change with a jid that
+  doesn't decode as a real one is dropped rather than surfaced.
 - Added: `downloadMedia` retries a transient failure (network error, HTTP 429, or a 5xx) on the same
   url up to 3 times, honoring the server's `Retry-After` header when present, before moving on to the
   next candidate url - previously any failure on a url, transient or not, moved straight to the next

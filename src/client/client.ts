@@ -97,13 +97,16 @@ import {
 import type { ChannelStatusEvent, NewsletterLiveUpdate } from './features/channel/newsletters.js'
 import { Usernames } from './features/contact/username.js'
 import {
+	parseBlocklistNotification,
 	parseContactsNotification,
 	parseDisappearingModeNotification,
 	parsePictureNotification,
 	parseStatusNotification,
 } from './features/contact/notifications.js'
+import { parseOfflineCompleted, parseOfflinePreview } from './features/account/offline-sync.js'
 import type {
 	AboutUpdate,
+	BlocklistChange,
 	ContactChange,
 	DisappearingModeChanged,
 	PictureUpdate,
@@ -316,6 +319,25 @@ export type ClientEvents = {
 	'contact.disappearing-mode': DisappearingModeChanged
 	/** A contact's profile changed, their phone number changed, or the server asks for a full re-sync. */
 	'contact.change': ContactChange
+	/** Our own profile photo changed from another linked device - the server gives no detail beyond
+	 * "go check it", not whether it was set or removed. */
+	'self.picture': { timestamp?: number }
+	/** Our own privacy settings changed from another linked device - `{ category: value }`, refetched
+	 * fresh rather than trusting whatever the notification claims changed. */
+	'self.privacy': Record<string, string>
+	/** Our own blocklist changed from another linked device or a server-side migration - the only way
+	 * such a change is ever pushed live (a direct fetch only sees the current list, not a change). */
+	'contact.blocklist': BlocklistChange
+	/** Right after connecting, how much the server is about to redeliver while we were offline. */
+	'offline.preview': {
+		total: number
+		appDataChanges: number
+		messages: number
+		notifications: number
+		receipts: number
+	}
+	/** The offline redelivery from `offline.preview` has finished catching up. */
+	'offline.completed': { count: number }
 	/** Live counters (forwards, reactions, poll votes) for recent channel posts. */
 	'newsletter.live-update': NewsletterLiveUpdate
 	/** A delivery/read/played receipt named a message id we never sent - a known scam technique: a
@@ -3271,6 +3293,12 @@ export class Client {
 			if (p) this.#events.emit('presence', p)
 			return
 		}
+		if (node.tag === 'ib') {
+			const preview = parseOfflinePreview(node)
+			if (preview) this.#events.emit('offline.preview', preview)
+			const done = parseOfflineCompleted(node)
+			if (done) this.#events.emit('offline.completed', done)
+		}
 		const dirty = node.tag === 'ib' ? child('dirty') : undefined
 		if (dirty) {
 			if (dirty.attrs['type'] === 'account_sync') void this.#appState?.sync()
@@ -3636,6 +3664,44 @@ export class Client {
 				if (type === 'newsletter') {
 					const n = parseNewsletterLiveUpdate(node)
 					if (n) this.#events.emit('newsletter.live-update', n)
+				}
+				// Our own picture/privacy/blocklist changing from another linked device is only ever pushed
+				// nested inside `account_sync`, never as its own top-level notification type - this is only
+				// ever genuinely sent by the server about our own account, but check anyway rather than
+				// trust the claim: a `from` that isn't ours (or missing, since the server's own account_sync
+				// pushes have historically omitted it) is the only case worth acting on.
+				if (type === 'account_sync') {
+					const from = node.attrs['from']
+					const isOwn = (() => {
+						if (!from) return true
+						try {
+							const u = jidDecode(from).user
+							return (
+								(!!creds.me && jidDecode(creds.me.id).user === u) ||
+								(!!creds.me?.lid && jidDecode(creds.me.lid).user === u)
+							)
+						} catch {
+							return false
+						}
+					})()
+					const childTags = new Set(
+						(Array.isArray(node.content) ? node.content : []).map((c) => c.tag),
+					)
+					if (isOwn) {
+						if (childTags.has('picture'))
+							this.#events.emit('self.picture', {
+								...(node.attrs['t'] && { timestamp: Number(node.attrs['t']) }),
+							})
+						const blocklistChild = (Array.isArray(node.content) ? node.content : []).find(
+							(c) => c.tag === 'blocklist',
+						)
+						if (blocklistChild)
+							this.#events.emit('contact.blocklist', parseBlocklistNotification(blocklistChild))
+						if (childTags.has('privacy'))
+							this.fetchPrivacySettings()
+								.then((settings) => this.#events.emit('self.privacy', settings))
+								.catch((e) => this.logger.event('privacy.refetch-failed', e))
+					}
 				}
 			},
 			onIdentityChange: (jid) => this.#events.emit('identity.changed', { jid }),

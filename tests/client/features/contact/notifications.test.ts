@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { BinaryNode } from '../../../../src/codec/index.js'
 import {
+	parseBlocklistNotification,
 	parseContactsNotification,
 	parseDisappearingModeNotification,
 	parsePictureNotification,
@@ -121,5 +122,41 @@ describe('parseContactsNotification', () => {
 	it('ignores add/remove housekeeping and an empty notification', () => {
 		expect(parseContactsNotification(node('notification', {}, [node('add', {})]))).toBeUndefined()
 		expect(parseContactsNotification(node('notification', {}))).toBeUndefined()
+	})
+})
+
+describe('parseBlocklistNotification', () => {
+	it('parses the action/dhash and each changed jid', () => {
+		expect(
+			parseBlocklistNotification(
+				node('blocklist', { action: 'modify', dhash: 'abc', prev_dhash: 'xyz' }, [
+					node('item', { jid: 'a@s.whatsapp.net', action: 'block' }),
+					node('item', { jid: 'b@s.whatsapp.net', action: 'unblock' }),
+				]),
+			),
+		).toEqual({
+			action: 'modify',
+			dhash: 'abc',
+			prevDhash: 'xyz',
+			changes: [
+				{ jid: 'a@s.whatsapp.net', action: 'block' },
+				{ jid: 'b@s.whatsapp.net', action: 'unblock' },
+			],
+		})
+	})
+
+	it('drops a change with no jid and tolerates no attrs/children at all', () => {
+		expect(
+			parseBlocklistNotification(node('blocklist', {}, [node('item', { action: 'block' })])),
+		).toEqual({ changes: [] })
+		expect(parseBlocklistNotification(node('blocklist', {}))).toEqual({ changes: [] })
+	})
+
+	it('drops a change whose jid does not decode as a real jid', () => {
+		expect(
+			parseBlocklistNotification(
+				node('blocklist', {}, [node('item', { jid: 'not a jid', action: 'block' })]),
+			),
+		).toEqual({ changes: [] })
 	})
 })
