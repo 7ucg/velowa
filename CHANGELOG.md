@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Added: `client.business.getOrderDetails(orderId, tokenBase64)` - the line items, price and catalog of
+  an order message (the id and token both come off the `orderMessage` itself); was entirely missing.
 - Added: `offline.preview`/`offline.completed` events - right after connecting, `<ib>` carries how many
   messages/notifications/receipts/app-data changes the server is about to redeliver from while we were
   offline (`offline_preview`), then a completion marker (`offline`) once caught up. Previously dropped

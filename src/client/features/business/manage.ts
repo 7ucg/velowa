@@ -65,6 +65,89 @@ export function productNode(id: string | undefined, p: ProductInput): BinaryNode
 	return { tag: 'product', attrs, content }
 }
 
+const childText = (n: BinaryNode | undefined, tag: string): string => {
+	const c = kids(n, tag)[0]?.content
+	return typeof c === 'string' ? c : c instanceof Uint8Array ? Buffer.from(c).toString('utf8') : ''
+}
+const int = (n: BinaryNode | undefined, tag: string): number => parseInt(childText(n, tag), 10) || 0
+
+export interface OrderProduct {
+	id: string
+	price: number
+	currency: string
+	name: string
+	quantity: number
+	imageId?: string
+	imageUrl?: string
+	variantProperties?: string
+}
+
+export interface OrderDetails {
+	id: string
+	createdAt: number
+	price: { subtotal: number; total: number; currency: string; status: string }
+	catalogId?: string
+	products: OrderProduct[]
+}
+
+function parseOrderDetails(order: BinaryNode): OrderDetails {
+	const priceNode = kids(order, 'price')[0]
+	const catalogNode = kids(order, 'catalog')[0]
+	return {
+		id: order.attrs['id'] ?? '',
+		createdAt: Number(order.attrs['creation_ts'] ?? 0),
+		price: {
+			subtotal: int(priceNode, 'subtotal'),
+			total: int(priceNode, 'total'),
+			currency: childText(priceNode, 'currency'),
+			status: childText(priceNode, 'price_status'),
+		},
+		...(catalogNode && { catalogId: childText(catalogNode, 'id') }),
+		products: kids(order, 'product').map((p) => {
+			const image = kids(p, 'image')[0]
+			const variant = kids(p, 'variant_info')[0]
+			return {
+				id: childText(p, 'id'),
+				price: int(p, 'price'),
+				currency: childText(p, 'currency'),
+				name: childText(p, 'name'),
+				quantity: int(p, 'quantity'),
+				...(image && { imageId: childText(image, 'id'), imageUrl: childText(image, 'url') }),
+				...(variant && { variantProperties: childText(variant, 'properties') }),
+			}
+		}),
+	}
+}
+
+/** The line items, price and catalog of a message's order (its `OrderMessage`'s own `orderId`/`token`). */
+export async function fetchOrderDetails(
+	request: RequestFn,
+	orderId: string,
+	tokenBase64: string,
+): Promise<OrderDetails> {
+	const res = await request({
+		tag: 'iq',
+		attrs: { to: 's.whatsapp.net', type: 'get', xmlns: 'fb:thrift_iq', smax_id: '5' },
+		content: [
+			{
+				tag: 'order',
+				attrs: { op: 'get', id: orderId },
+				content: [
+					{
+						tag: 'image_dimensions',
+						attrs: {},
+						content: [text('width', '100'), text('height', '100')],
+					},
+					text('token', tokenBase64),
+				],
+			},
+		],
+	})
+	const order = kids(res, 'order')[0]
+	if (!order) throw new Error('order details: no <order> in the answer')
+	return parseOrderDetails(order)
+}
+
 /** What the cover photo upload answers with and the profile change needs back. */
 export interface CoverPhotoUpload {
 	id: string
@@ -106,6 +189,10 @@ export class Business {
 		if (!product) throw new Error(`${op}: no product in the answer`)
 		return parseProduct(product)
 	}
+
+	/** The line items, price and catalog of a message's order (its `orderId`/`token`). */
+	getOrderDetails = (orderId: string, tokenBase64: string): Promise<OrderDetails> =>
+		fetchOrderDetails(this.request, orderId, tokenBase64)
 
 	/** Add a product to the catalog. */
 	createProduct = (p: ProductInput): Promise<Product> =>

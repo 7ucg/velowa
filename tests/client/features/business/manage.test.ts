@@ -120,6 +120,67 @@ describe('business', () => {
 		expect(await fake().b.broadcastQuota()).toBeNull()
 	})
 
+	it('fetches and parses an order', async () => {
+		const { b, sent } = fake({
+			tag: 'iq',
+			attrs: {},
+			content: [
+				{
+					tag: 'order',
+					attrs: { id: 'o1', creation_ts: '1700000000' },
+					content: [
+						{
+							tag: 'price',
+							attrs: {},
+							content: [
+								t('subtotal', '1000'),
+								t('total', '1200'),
+								t('currency', 'USD'),
+								t('price_status', 'CURRENT'),
+							],
+						},
+						{ tag: 'catalog', attrs: {}, content: [t('id', 'cat1')] },
+						{
+							tag: 'product',
+							attrs: {},
+							content: [
+								t('id', 'p1'),
+								t('price', '600'),
+								t('currency', 'USD'),
+								t('name', 'Tee'),
+								t('quantity', '2'),
+								{ tag: 'image', attrs: {}, content: [t('id', 'img1'), t('url', 'https://x/img')] },
+							],
+						},
+					],
+				},
+			],
+		})
+		const order = await b.getOrderDetails('o1', 'dG9rZW4=')
+		expect(order).toEqual({
+			id: 'o1',
+			createdAt: 1700000000,
+			price: { subtotal: 1000, total: 1200, currency: 'USD', status: 'CURRENT' },
+			catalogId: 'cat1',
+			products: [
+				{
+					id: 'p1',
+					price: 600,
+					currency: 'USD',
+					name: 'Tee',
+					quantity: 2,
+					imageId: 'img1',
+					imageUrl: 'https://x/img',
+				},
+			],
+		})
+		expect(sent[0]).toMatchObject({ attrs: { xmlns: 'fb:thrift_iq', smax_id: '5' } })
+	})
+
+	it('throws when the answer has no order', async () => {
+		await expect(fake().b.getOrderDetails('o1', 'dG9rZW4=')).rejects.toThrow(/no <order>/)
+	})
+
 	it('plans a quick reply as app state', () => {
 		const p = quickReply({ shortcut: 'hi', message: 'Hello', timestamp: '1700000000' })
 		expect(JSON.parse(p.mutation.index)).toEqual(['quick_reply', '1700000000'])
