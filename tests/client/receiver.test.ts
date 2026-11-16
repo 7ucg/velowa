@@ -18,7 +18,6 @@ import { encryptAddon } from '../../src/client/features/message/comment.js'
 import { encodeProto } from '../../src/client/proto.js'
 import {
 	Receiver,
-	applyLidMigrationMapping,
 	buildAck,
 	noteLidFromAttrs,
 	unpadRandomMax16,
@@ -658,30 +657,6 @@ describe('helpers', () => {
 		noteLidFromAttrs({ from: '34111111111111@lid', addressing_mode: 'lid' }, lids)
 		expect(lids.pnUser('34111111111111')).toBeUndefined()
 	})
-
-	it('applies a LID migration mapping payload, preferring latestLid over assignedLid', () => {
-		const lids = new LidMap()
-		const payload = encodeProto('LIDMigrationMappingSyncPayload', {
-			pnToLidMappings: [
-				{ pn: '34600000000', assignedLid: '34111111111111', latestLid: '34222222222222' },
-				{ pn: '34600000001', assignedLid: '34333333333333' },
-			],
-		})
-		applyLidMigrationMapping(payload, lids)
-		expect(lids.pnUser('34222222222222')).toBe('34600000000')
-		expect(lids.pnUser('34111111111111')).toBeUndefined()
-		expect(lids.pnUser('34333333333333')).toBe('34600000001')
-	})
-
-	it('skips a zero pn or lid, and is a no-op on garbage bytes', () => {
-		const lids = new LidMap()
-		const payload = encodeProto('LIDMigrationMappingSyncPayload', {
-			pnToLidMappings: [{ pn: '0', assignedLid: '34111111111111' }],
-		})
-		applyLidMigrationMapping(payload, lids)
-		expect(lids.pnUser('34111111111111')).toBeUndefined()
-		expect(() => applyLidMigrationMapping(new Uint8Array([1, 2, 3]), lids)).not.toThrow()
-	})
 })
 
 describe('Receiver: identity change', () => {
@@ -855,49 +830,6 @@ describe('Receiver: app-state key shares', () => {
 
 	it('drops keys shared by anyone else', async () => {
 		expect(await shareFrom('4915699999999@s.whatsapp.net')).toHaveLength(0)
-	})
-})
-
-describe('Receiver: LID migration mapping', () => {
-	async function mappingFrom(authorJid: string, category: string | undefined = 'peer') {
-		const w = await setup()
-		const lids = new LidMap()
-		const payload = encodeProto('LIDMigrationMappingSyncPayload', {
-			pnToLidMappings: [{ pn: '4915699999999', assignedLid: '34111111111111' }],
-		})
-		const share = text('', {
-			protocolMessage: {
-				type: 'LID_MIGRATION_MAPPING_SYNC',
-				lidMigrationMappingSyncMessage: { encodedMappingPayload: payload },
-			},
-		})
-		const enc = await w.alice.encrypt('bob', 1, pad(share))
-		const withHook = new Receiver({
-			creds: w.creds,
-			saveCreds() {},
-			lids,
-			storage: w.storage,
-			cipher: createSignalCipher(w.storage),
-			logger: new ProtocolLogger({ enabled: false }),
-			send: () => {},
-		})
-		withHook.handle({
-			tag: 'message',
-			attrs: { from: authorJid, id: 'K1', type: 'text', ...(category && { category }) },
-			content: [{ tag: 'enc', attrs: { v: '2', type: enc.type }, content: enc.ciphertext }],
-		})
-		await withHook.idle()
-		return lids
-	}
-
-	it('applies a mapping pushed by our own account (phone, by LID or number)', async () => {
-		const lids = await mappingFrom('48699911223344@lid')
-		expect(lids.pnUser('34111111111111')).toBe('4915699999999')
-	})
-
-	it('drops a mapping from anyone else, even in the right shape', async () => {
-		const lids = await mappingFrom('4915699999998@s.whatsapp.net')
-		expect(lids.pnUser('34111111111111')).toBeUndefined()
 	})
 })
 

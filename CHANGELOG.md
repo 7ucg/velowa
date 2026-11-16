@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- Removed: `applyLidMigrationMapping()` and the LID-migration-mapping handling in `receiver.ts`. It decoded
+  `LIDMigrationMappingSyncMessage.encodedMappingPayload` with `LIDMigrationMapping`/
+  `LIDMigrationMappingSyncPayload` - two message types that were never part of WhatsApp Web's own exported
+  schema, reconstructed locally from whatsapp-rust/baileyrs. The latest WA Web proto export removed both
+  types outright (the wrapper message that carries the opaque payload is still there, unchanged) rather
+  than renaming or restructuring them, so there is no current official shape left to decode that payload
+  with. `noteLidFromAttrs()` (learned from ordinary stanza attributes) remains as the other, still-live
+  source of phone-number/LID pairings.
 
 ## 1.3.0 - 2026-11-11
 - Added: `client.postChannelStatus(channel, text)` and `client.postChannelStatusMedia(channel, type, data, opts)` -
