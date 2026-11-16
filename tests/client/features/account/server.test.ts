@@ -3,6 +3,7 @@ import type { BinaryNode } from '../../../../src/codec/index.js'
 import {
 	ServerInfo,
 	abPropsRequest,
+	markNotDirtyNode,
 	parseAbProps,
 	passiveNode,
 } from '../../../../src/client/features/account/server.js'
@@ -43,6 +44,24 @@ describe('server info', () => {
 	it('builds the passive and active stanzas', () => {
 		expect(passiveNode(true).content).toEqual([{ tag: 'active', attrs: {} }])
 		expect(passiveNode(false).content).toEqual([{ tag: 'passive', attrs: {} }])
+	})
+
+	it('builds the mark-not-dirty stanza', () => {
+		const n = markNotDirtyNode('groups', 1700000000)
+		expect(n.attrs['xmlns']).toBe('urn:xmpp:whatsapp:dirty')
+		expect(n.content).toEqual([
+			{ tag: 'clean', attrs: { type: 'groups', timestamp: '1700000000' } },
+		])
+	})
+
+	it('acknowledges a dirty category as clean', async () => {
+		const sent: BinaryNode[] = []
+		const s = new ServerInfo(
+			async (n) => (sent.push(n), { tag: 'iq', attrs: {} }),
+			(async () => ({}) as never) as never,
+		)
+		await s.markNotDirty('groups', 42)
+		expect(sent[0]!.content).toEqual([{ tag: 'clean', attrs: { type: 'groups', timestamp: '42' } }])
 	})
 
 	it('uses the ids from WhatsApp Web for the account checks', async () => {

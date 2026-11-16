@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Added: `client.server.markNotDirty(cleanType, timestampSec?)` - acknowledges a `dirty` notification's
+  category (`notification` event, `type: 'dirty'`, a `<dirty type="..." timestamp="...">` child) as
+  handled up to that timestamp, so the server stops flagging it. Matches whatsmeow's `MarkNotDirty`.
 - Added: `client.downloadThumbnail(message)` and `client.fetchStickerPack(packId)` /
   `downloadStickerPackItem(item)` - a message's own small preview (e.g. a link preview's picture),
   independent of its main attachment, and looking up a sticker pack's metadata/stickers by id

@@ -59,6 +59,15 @@ export const passiveNode = (active: boolean): BinaryNode => ({
 	content: [{ tag: active ? 'active' : 'passive', attrs: {} }],
 })
 
+/** Tells the server a `dirty` notification's category (`notification` event, `type: 'dirty'`, a `<dirty
+ * type="..." timestamp="...">` child) has been handled - a full resync of that category is clean up to
+ * `timestamp`, so the server can stop flagging it. Matches whatsmeow's `MarkNotDirty`. */
+export const markNotDirtyNode = (cleanType: string, timestampSec: number): BinaryNode => ({
+	tag: 'iq',
+	attrs: { to: 's.whatsapp.net', type: 'set', xmlns: 'urn:xmpp:whatsapp:dirty' },
+	content: [{ tag: 'clean', attrs: { type: cleanType, timestamp: String(timestampSec) } }],
+})
+
 export class ServerInfo {
 	constructor(
 		private readonly request: RequestFn,
@@ -85,5 +94,12 @@ export class ServerInfo {
 	/** Go active (get every notification) or passive (background; fewer stanzas). */
 	setPassive = async (passive: boolean): Promise<void> => {
 		await this.request(passiveNode(!passive))
+	}
+	/** Acknowledge a `dirty` notification's category as handled, up to `timestampSec` (default: now). */
+	markNotDirty = async (
+		cleanType: string,
+		timestampSec = Math.floor(Date.now() / 1000),
+	): Promise<void> => {
+		await this.request(markNotDirtyNode(cleanType, timestampSec))
 	}
 }
