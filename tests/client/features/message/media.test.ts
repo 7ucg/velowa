@@ -50,15 +50,25 @@ describe('media crypto', () => {
 		expect(mediaKeys(k, 'image').cipherKey.equals(mediaKeys(k, 'video').cipherKey)).toBe(false)
 	})
 
-	it('passes unencrypted bytes through as-is when mediaKey is empty, still checking fileSha256', () => {
-		expect(decryptMedia(plain, new Uint8Array(0), 'image').equals(plain)).toBe(true)
+	it('rejects an empty mediaKey unless the caller explicitly opts into unencrypted', () => {
+		expect(() => decryptMedia(plain, new Uint8Array(0), 'image')).toThrow(/32 bytes/)
 		const sha = createHash('sha256').update(plain).digest()
-		expect(decryptMedia(plain, new Uint8Array(0), 'image', { fileSha256: sha }).equals(plain)).toBe(
-			true,
-		)
+		expect(
+			decryptMedia(plain, new Uint8Array(0), 'image', {
+				unencrypted: true,
+				fileSha256: sha,
+			}).equals(plain),
+		).toBe(true)
 		expect(() =>
-			decryptMedia(plain, new Uint8Array(0), 'image', { fileSha256: Buffer.alloc(32) }),
+			decryptMedia(plain, new Uint8Array(0), 'image', {
+				unencrypted: true,
+				fileSha256: Buffer.alloc(32),
+			}),
 		).toThrow(/hash/)
+		// unencrypted mode still needs something to verify against - no silent, unauthenticated accept.
+		expect(() => decryptMedia(plain, new Uint8Array(0), 'image', { unencrypted: true })).toThrow(
+			/needs fileSha256/,
+		)
 	})
 })
 
@@ -335,19 +345,34 @@ describe('media messages', () => {
 })
 
 describe('thumbnailOf', () => {
-	it('reads an encrypted thumbnail (mediaKey only used when there is an encSha256)', () => {
+	it('reads an encrypted thumbnail (a real 32 byte mediaKey required alongside encSha256)', () => {
+		const key = Buffer.alloc(32, 7)
 		const ref = thumbnailOf({
 			extendedTextMessage: {
 				text: 'hi',
 				thumbnailDirectPath: '/t/1',
 				thumbnailEncSha256: Buffer.from('enc').toString('base64'),
 				thumbnailSha256: Buffer.from('plain').toString('base64'),
-				mediaKey: Buffer.from('key').toString('base64'),
+				mediaKey: key.toString('base64'),
 			},
 		})!
 		expect(ref.directPath).toBe('/t/1')
-		expect(Buffer.from(ref.mediaKey).toString()).toBe('key')
+		expect(Buffer.from(ref.mediaKey).equals(key)).toBe(true)
 		expect(Buffer.from(ref.fileEncSha256!).toString()).toBe('enc')
+		expect(ref.unencrypted).toBeUndefined()
+	})
+
+	it('rejects a thumbnail that claims encryption but has no real mediaKey, instead of downgrading it', () => {
+		expect(() =>
+			thumbnailOf({
+				extendedTextMessage: {
+					text: 'hi',
+					thumbnailDirectPath: '/t/1',
+					thumbnailEncSha256: Buffer.from('enc').toString('base64'),
+					mediaKey: Buffer.from('too-short').toString('base64'),
+				},
+			}),
+		).toThrow(/no valid mediaKey/)
 	})
 
 	it('treats a thumbnail with no encSha256 as unencrypted, ignoring any mediaKey field', () => {
@@ -357,6 +382,7 @@ describe('thumbnailOf', () => {
 		expect(ref.directPath).toBe('/t/2')
 		expect(ref.mediaKey.length).toBe(0)
 		expect(ref.fileEncSha256).toBeUndefined()
+		expect(ref.unencrypted).toBe(true)
 	})
 
 	it('is undefined for a message with no thumbnail', () => {

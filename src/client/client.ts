@@ -742,15 +742,23 @@ export class Client {
 	}
 	/** Look up a sticker pack's metadata and stickers by id (`stickerPackMessage.stickerPackId`). */
 	fetchStickerPack = (packId: string) => media.fetchStickerPack(packId)
-	/** Download one sticker from a pack returned by `fetchStickerPack`. */
+	/** Download one sticker from a pack returned by `fetchStickerPack`. Most packs are encrypted like any
+	 * other sticker; an item with no `mediaKey` at all is treated as unencrypted, but only when a hash to
+	 * verify it against is actually present - never silently, unauthenticated. */
 	async downloadStickerPackItem(item: media.StickerPackItem): Promise<Buffer> {
+		const hasKey = !!item.mediaKey && item.mediaKey.length === 32
+		if (!hasKey && !item.fileSha256 && !item.fileEncSha256)
+			throw new Error(
+				'sticker pack item has no mediaKey and no hash to verify an unencrypted download',
+			)
 		return media.downloadMedia(
 			{
 				...(item.directPath && { directPath: item.directPath }),
 				...(item.url && { url: item.url }),
-				mediaKey: item.mediaKey ?? new Uint8Array(0),
+				mediaKey: hasKey ? item.mediaKey! : new Uint8Array(0),
 				...(item.fileSha256 && { fileSha256: item.fileSha256 }),
 				...(item.fileEncSha256 && { fileEncSha256: item.fileEncSha256 }),
+				...(!hasKey && { unencrypted: true }),
 			},
 			'sticker',
 			undefined,

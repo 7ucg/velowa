@@ -1,6 +1,15 @@
 # Changelog
 
 ## Unreleased
+- Fixed (security): `decryptMedia`'s unencrypted-media branch (added for thumbnails/channel media
+  last commit) activated on `mediaKey.length === 0` alone - a message an attacker shaped to strip its
+  `mediaKey` would downgrade what should be an authenticated AES+HMAC download into an unauthenticated
+  one, verified (if at all) only by an optional `fileSha256`. Now needs an explicit `unencrypted: true`
+  the *caller* sets from its own context (never inferred from the data), and that mode requires
+  `fileSha256` or `fileEncSha256` - refuses outright with neither, instead of accepting anything.
+  `thumbnailOf()` now throws instead of silently downgrading when a thumbnail claims encryption
+  (`thumbnailEncSha256` present) but has no real 32 byte `mediaKey` to go with it, and
+  `downloadStickerPackItem` requires a hash before treating a key-less item as unencrypted.
 - Added: `client.server.markNotDirty(cleanType, timestampSec?)` - acknowledges a `dirty` notification's
   category (`notification` event, `type: 'dirty'`, a `<dirty type="..." timestamp="...">` child) as
   handled up to that timestamp, so the server stops flagging it. Matches whatsmeow's `MarkNotDirty`.

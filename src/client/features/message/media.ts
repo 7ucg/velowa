@@ -108,24 +108,27 @@ export function stripMediaKeys(message: Record<string, unknown>): void {
 	}
 }
 
-/** Decrypt downloaded media; throws if the MAC (or the optional plaintext hash) does not match. An empty
- * `mediaKey` means the blob was never encrypted to begin with (channel media, most thumbnails): the bytes
- * are returned as they are, only checked against `fileSha256` if one was given. */
+/** Decrypt downloaded media; throws if the MAC (or the optional plaintext hash) does not match.
+ * `expect.unencrypted` must be set by the *caller* (channel media, most thumbnails) - never inferred from
+ * `mediaKey` being empty, which an attacker-shaped message could claim just as easily to downgrade a
+ * normally-encrypted download into an unauthenticated one. In that mode at least one of `fileSha256`/
+ * `fileEncSha256` (the same value either way, nothing is encrypted) is required, not optional. */
 export function decryptMedia(
 	encrypted: Uint8Array,
 	mediaKey: Uint8Array,
 	type: BlobType,
-	expect: { fileSha256?: Uint8Array; fileEncSha256?: Uint8Array } = {},
+	expect: { fileSha256?: Uint8Array; fileEncSha256?: Uint8Array; unencrypted?: boolean } = {},
 ): Buffer {
-	if (mediaKey.length === 0) {
+	if (expect.unencrypted) {
+		const hash = expect.fileSha256 ?? expect.fileEncSha256
+		if (!hash)
+			throw new Error('unencrypted media needs fileSha256 or fileEncSha256 to verify against')
 		const plain = Buffer.from(encrypted)
-		if (
-			expect.fileSha256 &&
-			!timingSafeEqualSafe(createHash('sha256').update(plain).digest(), expect.fileSha256)
-		)
+		if (!timingSafeEqualSafe(createHash('sha256').update(plain).digest(), hash))
 			throw new Error('media hash mismatch')
 		return plain
 	}
+	if (mediaKey.length !== 32) throw new Error('mediaKey must be 32 bytes')
 	if (encrypted.length <= MAC_LENGTH) throw new Error('media payload too short')
 	if (
 		expect.fileEncSha256 &&
@@ -309,6 +312,10 @@ export interface MediaRef {
 	fileEncSha256?: Uint8Array
 	/** Plaintext length announced by the sender; bounds the download. */
 	fileLength?: number
+	/** Set only by a caller that knows, from its own context (channel media, a thumbnail with no
+	 * `thumbnailEncSha256`) - never inferred from `mediaKey` alone - that this blob was never encrypted.
+	 * Requires `fileSha256` or `fileEncSha256` to verify against; see `decryptMedia`. */
+	unencrypted?: boolean
 }
 
 /** Hard ceiling for any single download (the largest WhatsApp media is 2 GB; this client buffers in memory). */
@@ -394,6 +401,7 @@ export async function downloadMedia(
 			return decryptMedia(await readCapped(res, limit), ref.mediaKey, type, {
 				...(ref.fileSha256 && { fileSha256: ref.fileSha256 }),
 				...(ref.fileEncSha256 && { fileEncSha256: ref.fileEncSha256 }),
+				...(ref.unencrypted && { unencrypted: true }),
 			})
 		} catch (e) {
 			lastError = e
@@ -558,8 +566,10 @@ export function mediaOf(
 
 /** A message's own thumbnail (a link preview's picture, or a media message's small preview), independent
  * of its main attachment - e.g. `extendedTextMessage.contextInfo.externalAdReply`'s or an image/video
- * message's `thumbnailDirectPath`. Unencrypted when `thumbnailEncSha256`/a usable `mediaKey` is absent
- * (most link previews), same as whatsmeow's own `DownloadThumbnail`. */
+ * message's `thumbnailDirectPath`. Unencrypted when `thumbnailEncSha256` is absent (most link previews),
+ * same as whatsmeow's own `DownloadThumbnail`; a present `thumbnailEncSha256` requires a real 32 byte
+ * `mediaKey` to go with it, or the message is rejected outright rather than silently downgraded to an
+ * unauthenticated download. */
 export function thumbnailOf(message: Record<string, unknown>): MediaRef | undefined {
 	const b = (x: unknown): Uint8Array | undefined =>
 		typeof x === 'string'
@@ -572,12 +582,21 @@ export function thumbnailOf(message: Record<string, unknown>): MediaRef | undefi
 		const directPath = m?.['thumbnailDirectPath']
 		if (typeof directPath !== 'string') continue
 		const encSha256 = b(m!['thumbnailEncSha256'])
-		const mediaKey = encSha256 ? b(m!['mediaKey']) : undefined
+		if (!encSha256)
+			return {
+				directPath,
+				mediaKey: new Uint8Array(0),
+				unencrypted: true,
+				...(b(m!['thumbnailSha256']) && { fileSha256: b(m!['thumbnailSha256'])! }),
+			}
+		const mediaKey = b(m!['mediaKey'])
+		if (!mediaKey || mediaKey.length !== 32)
+			throw new Error('thumbnail claims encryption (thumbnailEncSha256) but has no valid mediaKey')
 		return {
 			directPath,
-			mediaKey: mediaKey ?? new Uint8Array(0),
+			mediaKey,
+			fileEncSha256: encSha256,
 			...(b(m!['thumbnailSha256']) && { fileSha256: b(m!['thumbnailSha256'])! }),
-			...(encSha256 && { fileEncSha256: encSha256 }),
 		}
 	}
 	return undefined
