@@ -186,6 +186,70 @@ describe('upload / download', () => {
 	})
 })
 
+describe('download retry', () => {
+	it('retries a transient HTTP failure on the same url before giving up, honoring Retry-After', async () => {
+		const enc = encryptMedia(plain, 'document')
+		let calls = 0
+		const fakeFetch = (async () => {
+			calls++
+			if (calls < 3) return new Response('busy', { status: 503, headers: { 'retry-after': '0' } })
+			return new Response(new Uint8Array(enc.encrypted))
+		}) as unknown as typeof fetch
+		const out = await downloadMedia(
+			{
+				directPath: '/v/t62/x',
+				mediaKey: enc.mediaKey,
+				fileSha256: enc.fileSha256,
+				fileEncSha256: enc.fileEncSha256,
+			},
+			'document',
+			fakeFetch,
+		)
+		expect(out.equals(plain)).toBe(true)
+		expect(calls).toBe(3)
+	})
+
+	it('gives up on a url after exhausting retries on a persistent transient failure', async () => {
+		const enc = encryptMedia(plain, 'document')
+		let calls = 0
+		const fakeFetch = (async () => {
+			calls++
+			return new Response('busy', { status: 429, headers: { 'retry-after': '0' } })
+		}) as unknown as typeof fetch
+		await expect(
+			downloadMedia(
+				{ directPath: '/v/t62/x', mediaKey: enc.mediaKey, fileEncSha256: enc.fileEncSha256 },
+				'document',
+				fakeFetch,
+			),
+		).rejects.toThrow(/media download failed/)
+		expect(calls).toBe(3)
+	})
+
+	it('does not retry a non-transient client error, moving straight to the next url', async () => {
+		const enc = encryptMedia(plain, 'document')
+		let calls = 0
+		const fakeFetch = (async (url: string) => {
+			calls++
+			return url.includes('mmg.whatsapp.net')
+				? new Response('gone', { status: 404 })
+				: new Response(new Uint8Array(enc.encrypted))
+		}) as unknown as typeof fetch
+		const out = await downloadMedia(
+			{
+				directPath: '/v/t62/x',
+				url: 'https://media.whatsapp.net/alt',
+				mediaKey: enc.mediaKey,
+				fileEncSha256: enc.fileEncSha256,
+			},
+			'document',
+			fakeFetch,
+		)
+		expect(out.equals(plain)).toBe(true)
+		expect(calls).toBe(2)
+	})
+})
+
 describe('download safety', () => {
 	it('only accepts WhatsApp media hosts and plain paths', () => {
 		expect(

@@ -378,7 +378,21 @@ async function readCapped(res: Response, limit: number): Promise<Uint8Array> {
 	return Buffer.concat(chunks)
 }
 
-/** Download and decrypt one media message's payload. */
+/** A failed HTTP response worth retrying: rate-limited, or a server-side error, not a client one. */
+class RetryableHttpError extends Error {
+	constructor(
+		readonly status: number,
+		readonly retryAfterSec: number | undefined,
+	) {
+		super(`download failed: HTTP ${status}`)
+	}
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** Download and decrypt one media message's payload, retrying a transient failure on each
+ * candidate URL (network error, HTTP 429, or a 5xx) with capped, `Retry-After`-aware backoff
+ * before giving up on that URL and moving to the next. */
 export async function downloadMedia(
 	ref: MediaRef,
 	type: BlobType,
@@ -393,18 +407,35 @@ export async function downloadMedia(
 		MAX_DOWNLOAD_BYTES,
 		ref.fileLength !== undefined ? ref.fileLength + 16 + MAC_LENGTH : MAX_DOWNLOAD_BYTES,
 	)
+	const MAX_ATTEMPTS_PER_URL = 3
 	let lastError: unknown
 	for (const url of [...new Set(urls)]) {
-		try {
-			const res = await fetchImpl(url, { headers: { Origin: ORIGIN }, redirect: 'error' })
-			if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`)
-			return decryptMedia(await readCapped(res, limit), ref.mediaKey, type, {
-				...(ref.fileSha256 && { fileSha256: ref.fileSha256 }),
-				...(ref.fileEncSha256 && { fileEncSha256: ref.fileEncSha256 }),
-				...(ref.unencrypted && { unencrypted: true }),
-			})
-		} catch (e) {
-			lastError = e
+		for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_URL; attempt++) {
+			try {
+				const res = await fetchImpl(url, { headers: { Origin: ORIGIN }, redirect: 'error' })
+				if (!res.ok) {
+					if (res.status === 429 || res.status >= 500) {
+						const retryAfter = Number(res.headers.get('retry-after'))
+						throw new RetryableHttpError(
+							res.status,
+							Number.isFinite(retryAfter) ? retryAfter : undefined,
+						)
+					}
+					throw new Error(`download failed: HTTP ${res.status}`)
+				}
+				return decryptMedia(await readCapped(res, limit), ref.mediaKey, type, {
+					...(ref.fileSha256 && { fileSha256: ref.fileSha256 }),
+					...(ref.fileEncSha256 && { fileEncSha256: ref.fileEncSha256 }),
+					...(ref.unencrypted && { unencrypted: true }),
+				})
+			} catch (e) {
+				lastError = e
+				const retryable = e instanceof RetryableHttpError || e instanceof TypeError
+				if (!retryable || attempt === MAX_ATTEMPTS_PER_URL) break
+				const retryAfterMs =
+					e instanceof RetryableHttpError && e.retryAfterSec ? e.retryAfterSec * 1000 : 0
+				await sleep(Math.max(retryAfterMs, 300 * 2 ** (attempt - 1)))
+			}
 		}
 	}
 	throw new Error('media download failed', { cause: lastError })

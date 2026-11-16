@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Added: `downloadMedia` retries a transient failure (network error, HTTP 429, or a 5xx) on the same
+  url up to 3 times, honoring the server's `Retry-After` header when present, before moving on to the
+  next candidate url - previously any failure on a url, transient or not, moved straight to the next
+  one with no retry or backoff at all.
 - Fixed: `MessageSecrets` (Meta AI reply decryption) kept one entry per decoded message forever in
   its `#byId`/`#originById` maps - only the per-chat list (`#byChat`) was bounded. A long-running
   connection grew these two maps without limit. Now bounds the stored secret bytes to the 5000 most
