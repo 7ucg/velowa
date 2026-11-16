@@ -131,6 +131,16 @@ export class Newsletters {
 			),
 		)
 
+	/** Accept a channel-related terms-of-service notice. `create()` does not call this itself: an account
+	 * that has never created a channel needs it done once first, with the ids WhatsApp Web's own channel
+	 * composer uses (`noticeId: '20601218'`, `stage: '5'`) - see whatsmeow's `AcceptTOSNotice`. */
+	acceptTOSNotice = (noticeId: string, stage: string) =>
+		this.request({
+			tag: 'iq',
+			attrs: { to: 's.whatsapp.net', type: 'set', xmlns: 'tos' },
+			content: [{ tag: 'notice', attrs: { id: noticeId, stage } }],
+		})
+
 	/** Look up by `jid` (`1203...@newsletter`) or by `invite` code. */
 	metadata = async (type: 'jid' | 'invite', key: string) =>
 		parseNewsletter(

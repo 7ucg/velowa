@@ -56,6 +56,12 @@ pub enum AppStateError {
     // proto2-default-value situation to paper over.
     #[error("mutation has no operation field")]
     MissingSyncdOperation,
+    // WA Web (MISSING_MUTATION_RECORD, fatal) rejects a mutation with no record at all, the same
+    // way MISSING_MUTATION_OPERATION rejects one with no operation: a genuine mutation always
+    // carries a record, so an absent one is a tampering/corruption signal, not something to skip
+    // quietly and keep going as if it had never been sent.
+    #[error("mutation has no record")]
+    MissingMutationRecord,
 }
 
 pub type Result<T> = std::result::Result<T, AppStateError>;

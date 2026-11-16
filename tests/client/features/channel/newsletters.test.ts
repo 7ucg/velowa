@@ -142,6 +142,20 @@ describe('newsletters', () => {
 			content: [{ tag: 'message_updates', attrs: { count: '10', since: '5' } }],
 		})
 	})
+
+	it('accepts a channel terms-of-service notice', async () => {
+		const sent: BinaryNode[] = []
+		const n = new Newsletters(
+			async () => ({}) as never,
+			async (s) => (sent.push(s), { tag: 'iq', attrs: {} }),
+			() => 'mid',
+		)
+		await n.acceptTOSNotice('20601218', '5')
+		expect(sent[0]).toMatchObject({
+			attrs: { to: 's.whatsapp.net', type: 'set', xmlns: 'tos' },
+			content: [{ tag: 'notice', attrs: { id: '20601218', stage: '5' } }],
+		})
+	})
 })
 
 describe('post labels', () => {

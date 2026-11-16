@@ -190,6 +190,27 @@ describe('parseGroupNotification', () => {
 		expect(events[1]!.subject).toBe('Neuer Name')
 	})
 
+	it("reads the actor's username/country code alongside the participant jid, when the server sends them", async () => {
+		const { parseGroupNotification } =
+			await import('../../../../src/client/features/group/groups.js')
+		const events = parseGroupNotification({
+			tag: 'notification',
+			attrs: {
+				from: 'g@g.us',
+				type: 'w:gp2',
+				participant: 'admin@lid',
+				participant_username: 'alice',
+				participant_country_code: 'DE',
+			},
+			content: [{ tag: 'announcement', attrs: {} }],
+		})
+		expect(events[0]).toMatchObject({
+			actor: 'admin@lid',
+			actorUsername: 'alice',
+			actorCountryCode: 'DE',
+		})
+	})
+
 	it('decodes the typed fields of settings-change notifications', async () => {
 		const { parseGroupNotification } =
 			await import('../../../../src/client/features/group/groups.js')

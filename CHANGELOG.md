@@ -1,6 +1,17 @@
 # Changelog
 
 ## Unreleased
+- Added: `client.newsletters.acceptTOSNotice(noticeId, stage)` - an account that has never created a
+  channel needs this called once (`acceptTOSNotice('20601218', '5')`, the ids WhatsApp Web's own
+  channel composer uses) before `create()` will work. Matches whatsmeow's `AcceptTOSNotice`.
+- Added: `GroupNotification.actorUsername`/`actorCountryCode` - the server's `participant_username`/
+  `participant_country_code` attributes alongside `participant` (`actor`), when it sends them.
+- Fixed (security): `wacore-appstate`'s mutation loop silently skipped a mutation with no `record`
+  at all instead of rejecting it, the same gap the `MISSING_MUTATION_OPERATION` fix closed for a
+  missing `operation` field - WA Web's own validation (`MISSING_MUTATION_RECORD`) treats both as
+  fatal. A genuine mutation always carries a record; an absent one is a corruption/tampering signal,
+  not something to quietly skip and keep going as if it had never been sent. Found on a repeat pass
+  of the same whatsapp-rust `validation_generated.rs` comparison that caught the operation gap.
 - Fixed (security): `decryptMedia`'s unencrypted-media branch (added for thumbnails/channel media
   last commit) activated on `mediaKey.length === 0` alone - a message an attacker shaped to strip its
   `mediaKey` would downgrade what should be an authenticated AES+HMAC download into an unauthenticated

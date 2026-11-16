@@ -540,6 +540,9 @@ export interface GroupNotification {
 	group: string
 	/** Who did it, when known. */
 	actor?: string
+	/** The actor's username and ISO country code, when the server includes them alongside `actor`. */
+	actorUsername?: string
+	actorCountryCode?: string
 	timestamp?: number
 	/** `add` / `remove` / `promote` / `demote` / `subject` / `description` / `announcement` / `locked` / `ephemeral` / ... */
 	action: string
@@ -571,6 +574,12 @@ export function parseGroupNotification(node: BinaryNode): GroupNotification[] {
 	const base = {
 		group: node.attrs['from'] ?? '',
 		...(node.attrs['participant'] && { actor: node.attrs['participant'] }),
+		...(node.attrs['participant_username'] && {
+			actorUsername: node.attrs['participant_username'],
+		}),
+		...(node.attrs['participant_country_code'] && {
+			actorCountryCode: node.attrs['participant_country_code'],
+		}),
 		...(node.attrs['t'] && { timestamp: Number(node.attrs['t']) }),
 	}
 	for (const c of kids(node)) {

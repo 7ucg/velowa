@@ -316,12 +316,15 @@ where
         });
     }
 
-    // SyncdOperation is an open enum: reject unknown operations up front,
-    // before any state is mutated — the LTHash math below can only add
-    // (SET) or subtract (REMOVE), so guessing at an unknown op corrupts the
-    // hash in a way that only surfaces later as MismatchingLTHash.
+    // SyncdOperation is an open enum: reject unknown/missing operations and a missing record up
+    // front, before any state is mutated — the LTHash math below can only add (SET) or subtract
+    // (REMOVE), so guessing at an unknown op corrupts the hash in a way that only surfaces later
+    // as MismatchingLTHash, and state.version below must not move at all on a rejected patch.
     for m in &patch.mutations {
         known_op(m.operation)?;
+        if !m.record.is_set() {
+            return Err(AppStateError::MissingMutationRecord);
+        }
     }
 
     state.version = patch_version;
@@ -427,33 +430,34 @@ where
     let mut removed_index_macs = Vec::with_capacity(patch.mutations.len() - sets);
 
     for m in &patch.mutations {
-        if m.record.is_set() {
-            let op = known_op(m.operation)?;
-
-            let key_id = m
-                .record
-                .key_id
-                .id
-                .as_ref()
-                .ok_or(AppStateError::MissingKeyId)?;
-            let keys = get_keys(key_id)?;
-
-            let (mutation, macs) = decode_record(op, &m.record, &keys, key_id, validate_macs)?;
-
-            match op {
-                wa::syncd_mutation::SyncdOperation::SET => {
-                    added_macs.push(AppStateMutationMAC {
-                        index_mac: macs.index_mac,
-                        value_mac: macs.value_mac.to_vec(),
-                    });
-                }
-                wa::syncd_mutation::SyncdOperation::REMOVE => {
-                    removed_index_macs.push(macs.index_mac);
-                }
-            }
-
-            mutations.push(mutation);
+        if !m.record.is_set() {
+            return Err(AppStateError::MissingMutationRecord);
         }
+        let op = known_op(m.operation)?;
+
+        let key_id = m
+            .record
+            .key_id
+            .id
+            .as_ref()
+            .ok_or(AppStateError::MissingKeyId)?;
+        let keys = get_keys(key_id)?;
+
+        let (mutation, macs) = decode_record(op, &m.record, &keys, key_id, validate_macs)?;
+
+        match op {
+            wa::syncd_mutation::SyncdOperation::SET => {
+                added_macs.push(AppStateMutationMAC {
+                    index_mac: macs.index_mac,
+                    value_mac: macs.value_mac.to_vec(),
+                });
+            }
+            wa::syncd_mutation::SyncdOperation::REMOVE => {
+                removed_index_macs.push(macs.index_mac);
+            }
+        }
+
+        mutations.push(mutation);
     }
 
     Ok(PatchProcessingResult {
@@ -1208,6 +1212,38 @@ mod tests {
             .expect_err("a missing operation field must be rejected, not defaulted to SET");
 
         assert!(matches!(err, AppStateError::MissingSyncdOperation));
+        assert_eq!(state.hash, before, "hash must be untouched on rejection");
+        assert_eq!(state.version, 0, "version must be untouched on rejection");
+    }
+
+    #[test]
+    // WA Web (MISSING_MUTATION_RECORD) rejects a mutation with no record at all, fatal - never
+    // silently skipped as if it had never been sent.
+    fn test_process_patch_rejects_missing_record() {
+        let keys = expand_app_state_keys(&[7u8; 32]);
+        let key_id = b"test_key_id".to_vec();
+
+        let patch = wa::SyncdPatch {
+            version: buffa::MessageField::some(wa::SyncdVersion { version: Some(2) }),
+            mutations: vec![wa::SyncdMutation {
+                operation: Some(buffa::EnumValue::Known(wa::syncd_mutation::SyncdOperation::SET)),
+                record: buffa::MessageField::none(),
+            }],
+            key_id: buffa::MessageField::some(wa::KeyId {
+                id: Some(key_id.clone()),
+            }),
+            ..Default::default()
+        };
+
+        let get_keys = |_: &[u8]| Ok(Arc::new(keys.clone()));
+        let get_prev = |_: &[u8]| Ok(None);
+
+        let mut state = HashState::default();
+        let before = state.hash;
+        let err = process_patch(&patch, &mut state, get_keys, get_prev, false, "regular")
+            .expect_err("a mutation with no record must be rejected, not skipped");
+
+        assert!(matches!(err, AppStateError::MissingMutationRecord));
         assert_eq!(state.hash, before, "hash must be untouched on rejection");
         assert_eq!(state.version, 0, "version must be untouched on rejection");
     }
