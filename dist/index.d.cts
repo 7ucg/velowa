@@ -606,6 +606,9 @@ interface GroupNotification {
     group: string;
     /** Who did it, when known. */
     actor?: string;
+    /** The actor's username and ISO country code, when the server includes them alongside `actor`. */
+    actorUsername?: string;
+    actorCountryCode?: string;
     timestamp?: number;
     /** `add` / `remove` / `promote` / `demote` / `subject` / `description` / `announcement` / `locked` / `ephemeral` / ... */
     action: string;
@@ -621,7 +624,7 @@ interface GroupNotification {
     threshold?: string;
     /** `ephemeral` / `growth_locked` only: seconds until messages disappear, or until invite links reopen. */
     expiration?: number;
-    /** `ephemeral` only: who/what set it off, when the server says. */
+    /** `ephemeral` / `limit_sharing_enabled` only: who/what set it off, when the server says. */
     trigger?: number;
     /** `growth_locked` only: why invite links are unavailable. */
     lockType?: string;
@@ -1043,6 +1046,29 @@ interface MediaOptions {
     /** 64 byte waveform for voice notes. */
     waveform?: Uint8Array;
 }
+interface StickerPackItem {
+    directPath?: string;
+    url?: string;
+    mediaKey?: Uint8Array;
+    fileEncSha256?: Uint8Array;
+    fileSha256?: Uint8Array;
+    fileSize?: number;
+    mimetype?: string;
+    width?: number;
+    height?: number;
+    emojis: string[];
+    accessibilityText?: string;
+    handle?: string;
+}
+interface StickerPackInfo {
+    packId: string;
+    name: string;
+    publisher: string;
+    description: string;
+    stickers: StickerPackItem[];
+    animated: boolean;
+    trayImageId?: string;
+}
 
 declare const APP_STATE_COLLECTIONS: readonly ["critical_block", "critical_unblock_low", "regular_high", "regular_low", "regular"];
 type CollectionName = (typeof APP_STATE_COLLECTIONS)[number];
@@ -1123,6 +1149,26 @@ interface BlockOptions {
 }
 type PrivacyCategory = 'last' | 'online' | 'profile' | 'status' | 'groupadd' | 'readreceipts' | 'calladd' | 'messages' | 'stickers' | 'about';
 type PrivacyValue = 'all' | 'contacts' | 'contact_blacklist' | 'none' | 'match_last_seen';
+interface StatusPrivacy {
+    type: 'contacts' | 'blacklist' | 'whitelist' | string;
+    isDefault: boolean;
+    /** Who's on the list, for `blacklist`/`whitelist`. */
+    list: string[];
+}
+interface BusinessMessageLinkTarget {
+    jid: string;
+    pushName?: string;
+    /** The pre-filled message text the link opens the chat with, if the link carries one. */
+    message?: string;
+    isSigned?: boolean;
+    verifiedName?: string;
+    verifiedLevel?: string;
+}
+interface ContactQRLinkTarget {
+    jid: string;
+    pushName?: string;
+    type: string;
+}
 
 /** `V3` is phone-number based (what the app calls it for a PN contact), `V4` is LID based. Never compare the two. */
 type SecurityCodeVersion = 'V3' | 'V4';
@@ -1297,7 +1343,7 @@ interface Product {
     isHidden: boolean;
     imageUrls: string[];
 }
-interface OrderProduct {
+interface OrderProduct$1 {
     id?: string;
     name?: string;
     /** Amount in thousandths of the currency unit (as WhatsApp sends it), and its ISO 4217 code. */
@@ -1314,7 +1360,7 @@ interface OrderProduct {
     }[];
 }
 interface Order {
-    products: OrderProduct[];
+    products: OrderProduct$1[];
     priceDetails?: {
         subtotal?: {
             amount1000: number;
@@ -1495,6 +1541,10 @@ declare class Newsletters {
     /** Mark one of our posts as a paid partnership. */
     labelPaidPartnership: (jid: string, serverId: string | number, messageType?: string) => Promise<unknown>;
     create: (name: string, description?: string) => Promise<NewsletterMetadata>;
+    /** Accept a channel-related terms-of-service notice. `create()` does not call this itself: an account
+     * that has never created a channel needs it done once first, with the ids WhatsApp Web's own channel
+     * composer uses (`noticeId: '20601218'`, `stage: '5'`) - see whatsmeow's `AcceptTOSNotice`. */
+    acceptTOSNotice: (noticeId: string, stage: string) => Promise<BinaryNode>;
     /** Look up by `jid` (`1203...@newsletter`) or by `invite` code. */
     metadata: (type: "jid" | "invite", key: string) => Promise<NewsletterMetadata>;
     follow: (jid: string) => Promise<unknown>;
@@ -1697,6 +1747,16 @@ interface DisappearingModeChanged {
     duration: number;
     settingTimestamp: number;
 }
+interface BlocklistChange {
+    /** The kind of change the server reports (e.g. `modify`), when it says one. */
+    action?: string;
+    dhash?: string;
+    prevDhash?: string;
+    changes: {
+        jid: string;
+        action: string;
+    }[];
+}
 type ContactChange = {
     action: 'update';
     jid: string;
@@ -1888,6 +1948,8 @@ declare class ServerInfo {
     newChatCap: () => Promise<unknown>;
     /** Go active (get every notification) or passive (background; fewer stanzas). */
     setPassive: (passive: boolean) => Promise<void>;
+    /** Acknowledge a `dirty` notification's category as handled, up to `timestampSec` (default: now). */
+    markNotDirty: (cleanType: string, timestampSec?: number) => Promise<void>;
 }
 
 interface RoomPerson {
@@ -1981,6 +2043,28 @@ interface ProductInput {
     originCountryCode?: string;
     isHidden?: boolean;
 }
+interface OrderProduct {
+    id: string;
+    price: number;
+    currency: string;
+    name: string;
+    quantity: number;
+    imageId?: string;
+    imageUrl?: string;
+    variantProperties?: string;
+}
+interface OrderDetails {
+    id: string;
+    createdAt: number;
+    price: {
+        subtotal: number;
+        total: number;
+        currency: string;
+        status: string;
+    };
+    catalogId?: string;
+    products: OrderProduct[];
+}
 /** What the cover photo upload answers with and the profile change needs back. */
 interface CoverPhotoUpload {
     id: string;
@@ -2000,6 +2084,8 @@ declare class Business {
     private readonly request;
     private readonly mex;
     constructor(request: RequestFn, mex: MexFn);
+    /** The line items, price and catalog of a message's order (its `orderId`/`token`). */
+    getOrderDetails: (orderId: string, tokenBase64: string) => Promise<OrderDetails>;
     /** Add a product to the catalog. */
     createProduct: (p: ProductInput) => Promise<Product>;
     /** Change a product: only the fields you pass are sent. */
@@ -2839,6 +2925,29 @@ type ClientEvents = {
     'contact.disappearing-mode': DisappearingModeChanged;
     /** A contact's profile changed, their phone number changed, or the server asks for a full re-sync. */
     'contact.change': ContactChange;
+    /** Our own profile photo changed from another linked device - the server gives no detail beyond
+     * "go check it", not whether it was set or removed. */
+    'self.picture': {
+        timestamp?: number;
+    };
+    /** Our own privacy settings changed from another linked device - `{ category: value }`, refetched
+     * fresh rather than trusting whatever the notification claims changed. */
+    'self.privacy': Record<string, string>;
+    /** Our own blocklist changed from another linked device or a server-side migration - the only way
+     * such a change is ever pushed live (a direct fetch only sees the current list, not a change). */
+    'contact.blocklist': BlocklistChange;
+    /** Right after connecting, how much the server is about to redeliver while we were offline. */
+    'offline.preview': {
+        total: number;
+        appDataChanges: number;
+        messages: number;
+        notifications: number;
+        receipts: number;
+    };
+    /** The offline redelivery from `offline.preview` has finished catching up. */
+    'offline.completed': {
+        count: number;
+    };
     /** Live counters (forwards, reactions, poll votes) for recent channel posts. */
     'newsletter.live-update': NewsletterLiveUpdate;
     /** A delivery/read/played receipt named a message id we never sent - a known scam technique: a
@@ -2919,6 +3028,24 @@ declare class Client {
     downloadMedia(message: Record<string, unknown>, opts?: {
         key?: MessageKey;
     }): Promise<Buffer>;
+    /** Download a message's own thumbnail (a link preview's picture, or a media message's small preview) -
+     * independent of, and usually much smaller than, its main attachment. Most link-preview thumbnails are
+     * unencrypted. */
+    downloadThumbnail(message: Record<string, unknown>): Promise<Buffer>;
+    /** Look up a sticker pack's metadata and stickers by id (`stickerPackMessage.stickerPackId`). */
+    fetchStickerPack: (packId: string) => Promise<StickerPackInfo>;
+    /** Download one sticker from a pack returned by `fetchStickerPack`. Most packs are encrypted like any
+     * other sticker; an item with no `mediaKey` at all is treated as unencrypted, but only when a hash to
+     * verify it against is actually present - never silently, unauthenticated. */
+    downloadStickerPackItem(item: StickerPackItem): Promise<Buffer>;
+    /** Delete an uploaded media blob from the server (e.g. right after a send you want to undo). Only removes
+     * the upload itself; a message that already points at it still fails to load afterwards. Pass the one
+     * `Quoted` (`{ key, message }`) a *sent* message's event already gives you as one piece (e.g. the id
+     * `sendImage` returned, paired with the content you sent) - a bare `directPath`/hash lifted out of
+     * someone *else's* received message, with an unrelated `key.fromMe: true` tacked on, must not be able to
+     * delete media that was never ours to remove; requiring the matched pair makes that far harder to do by
+     * accident than two independent parameters would. */
+    deleteMedia({ key, message }: Quoted): Promise<void>;
     /**
      * Send a sticker pack: WebP stickers (512x512, up to 60), a WebP cover and a JPEG thumbnail. The recipient
      * can add the whole pack to their stickers.
@@ -3066,6 +3193,12 @@ declare class Client {
     } | null>;
     /** Profile "About" text of users. */
     fetchStatus(...jids: string[]): Promise<StatusInfo[]>;
+    /** Resolve a `wa.me/message/<code>` "click to chat" link to the business account and pre-filled text it opens. */
+    resolveBusinessMessageLink: (link: string) => Promise<BusinessMessageLinkTarget>;
+    /** Resolve a `wa.me/qr/<code>` contact-share link to the account it points at. */
+    resolveContactQRLink: (link: string) => Promise<ContactQRLinkTarget>;
+    /** Our own `wa.me/qr/<code>` contact-share link; `revoke: true` issues a fresh one. */
+    getContactQRLink: (revoke?: boolean) => Promise<string>;
     /** The usernames some contacts have set. */
     contactUsernames(...jids: string[]): Promise<{
         jid: string;
@@ -3120,6 +3253,8 @@ declare class Client {
     sendInteractive(to: string, o: InteractiveOptions): Promise<string>;
     /** Who may see our statuses (the "Status privacy" screen). */
     setStatusPrivacy: (audience: StatusAudience, jids?: string[]) => Promise<void>;
+    /** Read the current "Status privacy" lists back from the server. */
+    fetchStatusPrivacy: () => Promise<StatusPrivacy[]>;
     /** Group permission "Add other members": everyone or only admins. */
     setGroupMemberAddMode: (jid: string, mode: "admin_add" | "all_member_add") => Promise<void>;
     /** Group permission "Send message history" (members may send past messages to new members). */
@@ -3568,4 +3703,4 @@ declare class MemoryStore {
     }[];
 }
 
-export { ANTIBAN_DEFAULTS, type AbProps, AntiBan, type AntiBanConfig, AntiBanError, AppStateCollection, type AppStateKeyLookup, type AppStateMac, type AppStateMutation, type AppStateResult, type AuthStore, type BinaryNode, type BotDirectory, type BotEntry, type BotProfile, type BotSection, type BroadcastQuota, Browsers, type ButtonReply, type ButtonsOptions, type CallFileOptions, Client, type ClientEvents, type ClientOptions, type ConnectionUpdate, DEFAULT_HISTORY_SYNC, DEVICE_PROFILES, type DecryptedMessage, type EncryptedMessage, type EventOptions, type EventResponseType, type FakeChatDetected, type FakeMsg, FrameDecoder, GroupCache, type GroupInfo, HISTORY_SYNC_FLAGS, type HistorySyncFlag, type InteractiveOptions, type LinkPreview, type LinkPreviewOptions, type ListOptions, type ListSection, type Listener, type LocalAudioOptions, type MediaFileOptions, type MediaRetryResult, type MediaSource, MemoryAuthStore, MemorySignalStorage, MemoryStore, type Message, type MessageContent, type MessageIdDevice, type MessageKey, type NativeButton, NoiseTransport, NoiseXxHandshake, type Order, type OrderProduct, PLATFORM_TYPES, type PaymentRequestInput, type PlatformType, type PreKeyBundleInput, type ProductInput, ProtocolLogger, type ProtocolLoggerOptions, type Quoted, type QuotedMessage, RELEASE_CHANNELS, REPORT_FLOWS, type ReleaseChannel, type ReportOptions, ReportStore, type ReportedMessage, type RetentionOptions, type RichResponseOptions, Room, type RoomAdmit, type RoomEvents, type RoomOptions, type RoomPerson, type SecurityCodeVersion, type SendContentOptions, type SessionInfo, SignalCipher, type SignalStorage, type StickerInput, type StickerMetadata, type TemplateOptions, type TextOptions, TypedEmitter, USER_AGENT_PLATFORMS, type Unsubscribe, type UserAgentPlatform, type VideoFileOptions, WAM_EVENTS, WAM_GLOBALS, WEB_SUB_PLATFORMS, type WamEvent, type WamValue, type WebSubPlatform, addStickerMetadata, areJidsSameUser, buildReport, callButton, compressSession, connHeader, copyButton, createSignalCipher, decodeAudioFile, decodeNode, decodeVideoFile, deviceOf, deviceProfile, encodeFrame, encodeNode, encodeWam, fetchLinkPreview, findUrl, getContentType, getFakeMsg, getStickerMetadata, isGroupAdmin, isJidBroadcast, isJidGroup, isJidNewsletter, isJidStatusBroadcast, isJidUser, isLidUser, isMe, jidDecode, jidEncode, jidNormalizedUser, linkPreviewMessage, listSessions, messageText, migrateFlatSessions, newAppStateCollection, newIdentityKeyPair, newPreKeys, newSignedPreKey, normalizeMessageContent, parseButtonReply, pollOptionHash, pruneSessions, quickReply, restoreAppStateCollection, richResponse, serialize, singleSelect, splitAnnexB, startXxHandshake, tokenizeCode, urlButton, vcardFor, writeWav };
+export { ANTIBAN_DEFAULTS, type AbProps, AntiBan, type AntiBanConfig, AntiBanError, AppStateCollection, type AppStateKeyLookup, type AppStateMac, type AppStateMutation, type AppStateResult, type AuthStore, type BinaryNode, type BotDirectory, type BotEntry, type BotProfile, type BotSection, type BroadcastQuota, Browsers, type ButtonReply, type ButtonsOptions, type CallFileOptions, Client, type ClientEvents, type ClientOptions, type ConnectionUpdate, DEFAULT_HISTORY_SYNC, DEVICE_PROFILES, type DecryptedMessage, type EncryptedMessage, type EventOptions, type EventResponseType, type FakeChatDetected, type FakeMsg, FrameDecoder, GroupCache, type GroupInfo, HISTORY_SYNC_FLAGS, type HistorySyncFlag, type InteractiveOptions, type LinkPreview, type LinkPreviewOptions, type ListOptions, type ListSection, type Listener, type LocalAudioOptions, type MediaFileOptions, type MediaRetryResult, type MediaSource, MemoryAuthStore, MemorySignalStorage, MemoryStore, type Message, type MessageContent, type MessageIdDevice, type MessageKey, type NativeButton, NoiseTransport, NoiseXxHandshake, type Order, type OrderProduct$1 as OrderProduct, PLATFORM_TYPES, type PaymentRequestInput, type PlatformType, type PreKeyBundleInput, type ProductInput, ProtocolLogger, type ProtocolLoggerOptions, type Quoted, type QuotedMessage, RELEASE_CHANNELS, REPORT_FLOWS, type ReleaseChannel, type ReportOptions, ReportStore, type ReportedMessage, type RetentionOptions, type RichResponseOptions, Room, type RoomAdmit, type RoomEvents, type RoomOptions, type RoomPerson, type SecurityCodeVersion, type SendContentOptions, type SessionInfo, SignalCipher, type SignalStorage, type StickerInput, type StickerMetadata, type TemplateOptions, type TextOptions, TypedEmitter, USER_AGENT_PLATFORMS, type Unsubscribe, type UserAgentPlatform, type VideoFileOptions, WAM_EVENTS, WAM_GLOBALS, WEB_SUB_PLATFORMS, type WamEvent, type WamValue, type WebSubPlatform, addStickerMetadata, areJidsSameUser, buildReport, callButton, compressSession, connHeader, copyButton, createSignalCipher, decodeAudioFile, decodeNode, decodeVideoFile, deviceOf, deviceProfile, encodeFrame, encodeNode, encodeWam, fetchLinkPreview, findUrl, getContentType, getFakeMsg, getStickerMetadata, isGroupAdmin, isJidBroadcast, isJidGroup, isJidNewsletter, isJidStatusBroadcast, isJidUser, isLidUser, isMe, jidDecode, jidEncode, jidNormalizedUser, linkPreviewMessage, listSessions, messageText, migrateFlatSessions, newAppStateCollection, newIdentityKeyPair, newPreKeys, newSignedPreKey, normalizeMessageContent, parseButtonReply, pollOptionHash, pruneSessions, quickReply, restoreAppStateCollection, richResponse, serialize, singleSelect, splitAnnexB, startXxHandshake, tokenizeCode, urlButton, vcardFor, writeWav };

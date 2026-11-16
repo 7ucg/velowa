@@ -5020,6 +5020,16 @@ var Sender = class {
       this.#memory[memoryKey] = [...known];
       this.#saveMemory();
     }
+    if (isStatus) {
+      const already = new Set(nodes.map((n) => n.attrs["jid"]));
+      for (const p of participants) {
+        const bare3 = jidDecode(p).user + "@" + jidDecode(p).server;
+        if (!already.has(bare3)) {
+          nodes.push({ tag: "to", attrs: { jid: bare3 }, content: [] });
+          already.add(bare3);
+        }
+      }
+    }
     const content = [
       { tag: "enc", attrs: { v: "2", type: "skmsg", ...opts.encAttrs }, content: skmsg }
     ];
@@ -13958,29 +13968,57 @@ function eventResponse(key, response, c) {
 import { createDecipheriv as createDecipheriv4, hkdfSync as hkdfSync6 } from "crypto";
 var BOT_MESSAGE_INFO = "Bot Message";
 var MAX_SECRETS_PER_CHAT = 20;
+var MAX_SECRETS_TOTAL = 5e3;
 var MessageSecrets = class {
+  // `null` is a tombstone: the id was seen and its secret has been evicted to bound memory, but the
+  // *key* stays forever so `has()` keeps returning true for it - a later message reusing that id (an
+  // attacker's replay, or a collision) can never look "unseen" and get a fresh secret/author bound to
+  // it. Only the heavy payload (the 32-byte buffer) is freed, never the cheap anti-rebind marker.
   #byId = /* @__PURE__ */ new Map();
+  /** Ids with a live (non-evicted) secret, oldest first - the eviction queue. */
+  #liveOrder = [];
   #byChat = /* @__PURE__ */ new Map();
   /** Who actually sent the message this id's secret belongs to (ourselves, for `rememberOwn`), and in
    * which chat - set alongside the secret so a later secret-encrypted edit can be bound to its real
-   * author instead of trusting whoever the *editing* envelope claims to be. */
+   * author instead of trusting whoever the *editing* envelope claims to be. Never evicted: it's two
+   * small strings, not the 32-byte secret, and losing it would defeat the anti-rebind guarantee above
+   * just as surely as deleting the id from `#byId` would. */
   #originById = /* @__PURE__ */ new Map();
-  /** The secret stored for exactly this message id (no chat-wide fallback). */
+  /** The secret stored for exactly this message id (no chat-wide fallback), or `undefined` if never
+   * seen or if its secret has since been evicted. */
   byId(id) {
-    return this.#byId.get(id);
+    return this.#byId.get(id) ?? void 0;
   }
   /** Who sent this id's message, and in which chat - as recorded when its secret was first seen. */
   originOf(id) {
     return this.#originById.get(id);
   }
-  /** Is a secret already stored for this id? (First write wins: a later message with the same id cannot replace it.) */
+  /** Is this id already known (first write wins: a later message with the same id cannot rebind it,
+   * even once its secret has been evicted)? */
   has(id) {
     return this.#byId.has(id);
   }
+  /** First write wins, enforced here rather than left to every caller: an id already known (live or
+   * evicted) is a no-op, so a later message reusing it - whether that's a replay, an id collision, or
+   * eviction having freed the slot - can never rebind its secret or its recorded author. */
   set(id, secret, chat, author) {
+    if (this.#byId.has(id)) return;
     const buf = Buffer.from(secret);
     this.#byId.set(id, buf);
+    this.#liveOrder.push(id);
     if (author && chat) this.#originById.set(id, { author, chat });
+    while (this.#liveOrder.length > MAX_SECRETS_TOTAL) {
+      const oldest = this.#liveOrder.shift();
+      if (oldest === void 0 || this.#byId.get(oldest) == null) continue;
+      this.#byId.set(oldest, null);
+      for (const [chatKey, list2] of this.#byChat) {
+        const idx = list2.findIndex((e) => e.id === oldest);
+        if (idx === -1) continue;
+        list2.splice(idx, 1);
+        if (!list2.length) this.#byChat.delete(chatKey);
+        break;
+      }
+    }
     if (!chat) return;
     const list = (this.#byChat.get(chat) ?? []).filter((e) => e.id !== id && !e.secret.equals(buf));
     list.unshift({ id, secret: buf });
@@ -13991,7 +14029,7 @@ var MessageSecrets = class {
   candidates(ids, chat) {
     const out = [];
     const add = (b) => b && !out.some((o) => o.equals(b)) && out.push(b);
-    for (const id of ids) if (id) add(this.#byId.get(id));
+    for (const id of ids) if (id) add(this.#byId.get(id) ?? void 0);
     for (const e of this.#byChat.get(chat) ?? []) {
       if (out.length >= 6) break;
       add(e.secret);
@@ -14108,21 +14146,6 @@ function noteLidFromAttrs(attrs, lids) {
   const alt = isLid ? attrs["participant_pn"] ?? attrs["sender_pn"] ?? attrs["peer_recipient_pn"] : attrs["participant_lid"] ?? attrs["sender_lid"] ?? attrs["peer_recipient_lid"];
   if (alt) lids.set(acting, alt);
 }
-function applyLidMigrationMapping(encodedPayload, lids) {
-  let mappings;
-  try {
-    const t = protoType("LIDMigrationMappingSyncPayload");
-    const decoded = t.toObject(t.decode(encodedPayload), { longs: String, defaults: true });
-    mappings = decoded.pnToLidMappings ?? [];
-  } catch {
-    return;
-  }
-  for (const m of mappings) {
-    const lid = m.latestLid && m.latestLid !== "0" ? m.latestLid : m.assignedLid;
-    if (!m.pn || m.pn === "0" || !lid || lid === "0") continue;
-    lids.set(`${lid}@lid`, `${m.pn}@s.whatsapp.net`);
-  }
-}
 var be3 = (n, len) => {
   const b = Buffer.alloc(len);
   b.writeUIntBE(n, 0, len);
@@ -14146,6 +14169,18 @@ function buildAck(node, meId) {
   if (node.tag === "message" && meId) attrs["from"] = meId;
   return { tag: "ack", attrs };
 }
+var IqError = class extends Error {
+  constructor(node) {
+    const err = Array.isArray(node.content) ? node.content.find((c) => c.tag === "error") : void 0;
+    super(`iq error: ${JSON.stringify(node.content)}`);
+    this.node = node;
+    this.name = "IqError";
+    this.code = err?.attrs["code"];
+  }
+  node;
+  /** The `<error>` child's `code` attribute, e.g. `'404'` (item-not-found), `'401'`/`'403'` (forbidden). */
+  code;
+};
 var Receiver = class {
   constructor(d) {
     this.d = d;
@@ -14169,8 +14204,7 @@ var Receiver = class {
       const p = this.#pending.get(node.attrs["id"] ?? "");
       if (p) {
         this.#pending.delete(node.attrs["id"]);
-        if (node.attrs["type"] === "error")
-          p.reject(new Error(`iq error: ${JSON.stringify(node.content)}`));
+        if (node.attrs["type"] === "error") p.reject(new IqError(node));
         else p.resolve(node);
         return true;
       }
@@ -14350,7 +14384,7 @@ var Receiver = class {
         content: [{ tag: "digest", attrs: {} }]
       });
     } catch (e) {
-      if (/"code":"404"/.test(e.message)) {
+      if (e instanceof IqError && e.code === "404") {
         this.d.logger.event("prekeys.digest-missing", {});
         await this.uploadPreKeys(UPLOAD_PREKEY_COUNT);
       } else {
@@ -14771,14 +14805,6 @@ var Receiver = class {
       );
       if (keys.length) this.d.onAppStateKeys(keys);
     }
-    const migrationPayload = raw.protocolMessage?.lidMigrationMappingSyncMessage?.encodedMappingPayload;
-    if (migrationPayload) {
-      if (this.#isOwnPeer(node, author)) {
-        applyLidMigrationMapping(new Uint8Array(migrationPayload), this.d.lids);
-      } else {
-        this.d.logger.event("lid-migration.rejected", { author });
-      }
-    }
     const pdo = raw.protocolMessage?.peerDataOperationRequestResponseMessage?.peerDataOperationResult;
     if (pdo?.length && this.d.onResentMessage) {
       if (!this.#isOwnPeer(node, author)) {
@@ -15003,6 +15029,16 @@ function stripMediaKeys(message) {
   }
 }
 function decryptMedia(encrypted, mediaKey, type, expect = {}) {
+  if (expect.unencrypted) {
+    const hash = expect.fileSha256 ?? expect.fileEncSha256;
+    if (!hash)
+      throw new Error("unencrypted media needs fileSha256 or fileEncSha256 to verify against");
+    const plain2 = Buffer.from(encrypted);
+    if (!timingSafeEqualSafe(createHash5("sha256").update(plain2).digest(), hash))
+      throw new Error("media hash mismatch");
+    return plain2;
+  }
+  if (mediaKey.length !== 32) throw new Error("mediaKey must be 32 bytes");
   if (encrypted.length <= MAC_LENGTH) throw new Error("media payload too short");
   if (expect.fileEncSha256 && !timingSafeEqualSafe(createHash5("sha256").update(encrypted).digest(), expect.fileEncSha256)) {
     throw new Error("encrypted media hash mismatch");
@@ -15072,6 +15108,26 @@ async function uploadMedia(conn, type, media, fetchImpl = fetch, channel = false
   }
   throw new Error("media upload failed on all hosts", { cause: lastError });
 }
+async function deleteMedia(conn, type, directPath, fileEncSha256, handle, fetchImpl = fetch) {
+  const path = directPath.split("?")[0];
+  if (!path.startsWith("/") || path.startsWith("//") || /[\\@\s]|\.\.|[\u0000-\u001f]/.test(path))
+    throw new Error("unsafe media directPath");
+  if (fileEncSha256.length !== 32) throw new Error("fileEncSha256 must be a 32 byte sha256");
+  const token = uploadToken(fileEncSha256);
+  const dMd = Buffer.from(path, "utf8").toString("base64url");
+  let lastError;
+  for (const host of conn.hosts) {
+    const url = `https://${host}${UPLOAD_PATH[type]}/${token}?token=${token}&d_md=${dMd}&auth=${encodeURIComponent(conn.auth)}${handle ? `&e_handle=${encodeURIComponent(handle)}` : ""}`;
+    try {
+      const res = await fetchImpl(url, { method: "DELETE", headers: { Origin: ORIGIN } });
+      if (res.ok) return;
+      lastError = new Error(`delete on ${host} failed (HTTP ${res.status})`);
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw new Error("media delete failed on all hosts", { cause: lastError });
+}
 var MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 function safeMediaUrls(ref, extraHosts = []) {
   const urls = [];
@@ -15117,6 +15173,16 @@ async function readCapped(res, limit) {
   }
   return Buffer.concat(chunks);
 }
+var RetryableHttpError = class extends Error {
+  constructor(status, retryAfterSec) {
+    super(`download failed: HTTP ${status}`);
+    this.status = status;
+    this.retryAfterSec = retryAfterSec;
+  }
+  status;
+  retryAfterSec;
+};
+var sleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
 async function downloadMedia(ref, type, fetchImpl = fetch, extraHosts = []) {
   const urls = safeMediaUrls(ref, extraHosts);
   if (!urls.length)
@@ -15125,17 +15191,34 @@ async function downloadMedia(ref, type, fetchImpl = fetch, extraHosts = []) {
     MAX_DOWNLOAD_BYTES,
     ref.fileLength !== void 0 ? ref.fileLength + 16 + MAC_LENGTH : MAX_DOWNLOAD_BYTES
   );
+  const MAX_ATTEMPTS_PER_URL = 3;
   let lastError;
   for (const url of [...new Set(urls)]) {
-    try {
-      const res = await fetchImpl(url, { headers: { Origin: ORIGIN }, redirect: "error" });
-      if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
-      return decryptMedia(await readCapped(res, limit), ref.mediaKey, type, {
-        ...ref.fileSha256 && { fileSha256: ref.fileSha256 },
-        ...ref.fileEncSha256 && { fileEncSha256: ref.fileEncSha256 }
-      });
-    } catch (e) {
-      lastError = e;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_URL; attempt++) {
+      try {
+        const res = await fetchImpl(url, { headers: { Origin: ORIGIN }, redirect: "error" });
+        if (!res.ok) {
+          if (res.status === 429 || res.status >= 500) {
+            const retryAfter = Number(res.headers.get("retry-after"));
+            throw new RetryableHttpError(
+              res.status,
+              Number.isFinite(retryAfter) ? retryAfter : void 0
+            );
+          }
+          throw new Error(`download failed: HTTP ${res.status}`);
+        }
+        return decryptMedia(await readCapped(res, limit), ref.mediaKey, type, {
+          ...ref.fileSha256 && { fileSha256: ref.fileSha256 },
+          ...ref.fileEncSha256 && { fileEncSha256: ref.fileEncSha256 },
+          ...ref.unencrypted && { unencrypted: true }
+        });
+      } catch (e) {
+        lastError = e;
+        const retryable = e instanceof RetryableHttpError || e instanceof TypeError;
+        if (!retryable || attempt === MAX_ATTEMPTS_PER_URL) break;
+        const retryAfterMs = e instanceof RetryableHttpError && e.retryAfterSec ? e.retryAfterSec * 1e3 : 0;
+        await sleep(Math.max(retryAfterMs, 300 * 2 ** (attempt - 1)));
+      }
     }
   }
   throw new Error("media download failed", { cause: lastError });
@@ -15237,6 +15320,63 @@ function mediaOf(message) {
     }
   }
   return void 0;
+}
+function thumbnailOf(message) {
+  const b = (x) => typeof x === "string" ? new Uint8Array(Buffer.from(x, "base64")) : x instanceof Uint8Array ? x : void 0;
+  for (const body of Object.values(message)) {
+    const m = body;
+    const directPath = m?.["thumbnailDirectPath"];
+    if (typeof directPath !== "string") continue;
+    const encSha256 = b(m["thumbnailEncSha256"]);
+    if (!encSha256)
+      return {
+        directPath,
+        mediaKey: new Uint8Array(0),
+        unencrypted: true,
+        ...b(m["thumbnailSha256"]) && { fileSha256: b(m["thumbnailSha256"]) }
+      };
+    const mediaKey = b(m["mediaKey"]);
+    if (!mediaKey || mediaKey.length !== 32)
+      throw new Error("thumbnail claims encryption (thumbnailEncSha256) but has no valid mediaKey");
+    return {
+      directPath,
+      mediaKey,
+      fileEncSha256: encSha256,
+      ...b(m["thumbnailSha256"]) && { fileSha256: b(m["thumbnailSha256"]) }
+    };
+  }
+  return void 0;
+}
+async function fetchStickerPack(packId, fetchImpl = fetch) {
+  const url = `https://static.whatsapp.net/sticker?lottie=1&cat=sticker_pack_data&id=${encodeURIComponent(packId)}&lg=en`;
+  const res = await fetchImpl(url, { headers: { Origin: ORIGIN } });
+  if (!res.ok) throw new Error(`sticker pack lookup failed: HTTP ${res.status}`);
+  const packs = await res.json();
+  const pack = packs[0];
+  if (!pack) throw new Error(`no sticker pack found for id ${packId}`);
+  const b642 = (x) => x ? new Uint8Array(Buffer.from(x, "base64")) : void 0;
+  return {
+    packId: pack["sticker-pack-id"] ?? packId,
+    name: pack.name ?? "",
+    publisher: pack.publisher ?? "",
+    description: pack.description ?? "",
+    animated: !!pack.animated,
+    ...pack["tray-image-id"] && { trayImageId: pack["tray-image-id"] },
+    stickers: (pack.stickers ?? []).map((s) => ({
+      ...s["direct-path"] && { directPath: s["direct-path"] },
+      ...s.url && { url: s.url },
+      ...b642(s["media-key"]) && { mediaKey: b642(s["media-key"]) },
+      ...b642(s["enc-file-hash"]) && { fileEncSha256: b642(s["enc-file-hash"]) },
+      ...b642(s["file-hash"]) && { fileSha256: b642(s["file-hash"]) },
+      ...s["file-size"] !== void 0 && { fileSize: s["file-size"] },
+      ...s.mimetype && { mimetype: s.mimetype },
+      ...s.width !== void 0 && { width: s.width },
+      ...s.height !== void 0 && { height: s.height },
+      emojis: s.emojis ?? [],
+      ...s["accessibility-text"] && { accessibilityText: s["accessibility-text"] },
+      ...s.handle && { handle: s.handle }
+    }))
+  };
 }
 
 // src/client/features/chat/appstate-sync.ts
@@ -15496,10 +15636,10 @@ var AppStateSync = class {
   async #applyCollection(name, node) {
     const c = this.#collection(name);
     const macs = this.#macsOf(name);
-    const kids11 = (n, tag) => Array.isArray(n.content) ? n.content.filter((x) => x.tag === tag) : [];
+    const kids12 = (n, tag) => Array.isArray(n.content) ? n.content.filter((x) => x.tag === tag) : [];
     const events = [];
     const download = this.d.download ?? downloadMedia;
-    const snapshotNode = kids11(node, "snapshot")[0];
+    const snapshotNode = kids12(node, "snapshot")[0];
     if (snapshotNode?.content instanceof Uint8Array) {
       const ref = protoType("ExternalBlobReference").toObject(
         protoType("ExternalBlobReference").decode(snapshotNode.content),
@@ -15516,8 +15656,8 @@ var AppStateSync = class {
         mutations: res.mutations.length
       });
     }
-    const patchesNode = kids11(node, "patches")[0] ?? node;
-    for (const p of kids11(patchesNode, "patch")) {
+    const patchesNode = kids12(node, "patches")[0] ?? node;
+    for (const p of kids12(patchesNode, "patch")) {
       if (!(p.content instanceof Uint8Array)) continue;
       const bytes2 = this.#withVersion(
         await this.#withExternalMutations(p.content, download),
@@ -15683,12 +15823,12 @@ var deleteChat = (jid, last) => plan("regular_high", ["deleteChat", jid, "1"], 6
 var clearChat = (jid, last) => plan("regular_high", ["clearChat", jid, "1", "0"], 6, {
   clearChatAction: { ...messageRange(last) && { messageRange: messageRange(last) } }
 });
-var deleteMessageForMe = (key, timestamp, deleteMedia = false) => plan(
+var deleteMessageForMe = (key, timestamp, deleteMedia2 = false) => plan(
   "regular_high",
   ["deleteMessageForMe", key.remoteJid, key.id, key.fromMe ? "1" : "0", "0"],
   3,
   {
-    deleteMessageForMeAction: { deleteMedia, messageTimestamp: timestamp }
+    deleteMessageForMeAction: { deleteMedia: deleteMedia2, messageTimestamp: timestamp }
   }
 );
 var pushName = (name) => plan("critical_block", ["setting_pushName"], 1, { pushNameSetting: { name } });
@@ -15881,7 +16021,7 @@ async function profilePictureUrl(request, jid, type = "preview") {
     });
     return kids(res, "picture")[0]?.attrs["url"];
   } catch (e) {
-    if (/"code":"(404|401|403)"/.test(String(e.message))) return void 0;
+    if (e instanceof IqError && ["404", "401", "403"].includes(e.code ?? "")) return void 0;
     throw e;
   }
 }
@@ -15939,6 +16079,29 @@ async function fetchPrivacySettings(request) {
     if (c.attrs["name"]) out[c.attrs["name"]] = c.attrs["value"] ?? "";
   return out;
 }
+async function fetchStatusPrivacy(request) {
+  const DEFAULT = [{ type: "contacts", isDefault: true, list: [] }];
+  let res;
+  try {
+    res = await request({
+      tag: "iq",
+      attrs: { xmlns: "status", to: "s.whatsapp.net", type: "get" },
+      content: [{ tag: "privacy", attrs: {} }]
+    });
+  } catch (e) {
+    if (e instanceof IqError && e.code === "404") return DEFAULT;
+    throw e;
+  }
+  const lists = kids(kids(res, "privacy")[0], "list").map((list) => ({
+    type: list.attrs["type"] ?? "",
+    isDefault: list.attrs["default"] === "true" || list.attrs["default"] === "1",
+    list: kids(list, "user").map((u) => u.attrs["jid"]).filter((jid) => !!jid)
+  }));
+  if (!lists.length) return DEFAULT;
+  const def = lists.findIndex((l) => l.isDefault);
+  if (def > 0) [lists[0], lists[def]] = [lists[def], lists[0]];
+  return lists;
+}
 async function updatePrivacy(request, name, value) {
   await request({
     tag: "iq",
@@ -15983,6 +16146,59 @@ async function findUserByUsername(request, sid, username, pin2) {
   const e = entries[0];
   if (!e || !e.id) return null;
   return { jid: e.id, exists: e.nodes["contact"]?.attrs["type"] === "in" };
+}
+var stripLinkPrefix = (link, ...prefixes) => {
+  for (const p of prefixes) if (link.startsWith(p)) return link.slice(p.length);
+  return link;
+};
+async function resolveBusinessMessageLink(request, link) {
+  const code = stripLinkPrefix(link, "https://wa.me/message/", "https://api.whatsapp.com/message/");
+  const res = await request({
+    tag: "iq",
+    attrs: { type: "get", xmlns: "w:qr" },
+    content: [{ tag: "qr", attrs: { code } }]
+  });
+  const qr = kids(res, "qr")[0];
+  if (!qr) throw new Error("business message link not found");
+  const business = kids(qr, "business")[0];
+  const message = kids(qr, "message")[0]?.content;
+  return {
+    jid: qr.attrs["jid"] ?? "",
+    ...qr.attrs["notify"] && { pushName: qr.attrs["notify"] },
+    ...message && {
+      message: typeof message === "string" ? message : Buffer.from(message).toString("utf8")
+    },
+    ...business && {
+      isSigned: business.attrs["is_signed"] === "true",
+      verifiedName: business.attrs["verified_name"],
+      verifiedLevel: business.attrs["verified_level"]
+    }
+  };
+}
+async function resolveContactQRLink(request, link) {
+  const code = stripLinkPrefix(link, "https://wa.me/qr/", "https://api.whatsapp.com/qr/");
+  const res = await request({
+    tag: "iq",
+    attrs: { type: "get", xmlns: "w:qr" },
+    content: [{ tag: "qr", attrs: { code } }]
+  });
+  const qr = kids(res, "qr")[0];
+  if (!qr) throw new Error("contact QR link not found");
+  return {
+    jid: qr.attrs["jid"] ?? "",
+    ...qr.attrs["notify"] && { pushName: qr.attrs["notify"] },
+    type: qr.attrs["type"] ?? ""
+  };
+}
+async function getContactQRLink(request, revoke2 = false) {
+  const res = await request({
+    tag: "iq",
+    attrs: { type: "set", xmlns: "w:qr" },
+    content: [{ tag: "qr", attrs: { type: "contact", action: revoke2 ? "revoke" : "get" } }]
+  });
+  const qr = kids(res, "qr")[0];
+  if (!qr?.attrs["code"]) throw new Error("no contact QR code in response");
+  return qr.attrs["code"];
 }
 
 // src/client/features/account/security-code.ts
@@ -16710,6 +16926,12 @@ function parseGroupNotification(node) {
   const base = {
     group: node.attrs["from"] ?? "",
     ...node.attrs["participant"] && { actor: node.attrs["participant"] },
+    ...node.attrs["participant_username"] && {
+      actorUsername: node.attrs["participant_username"]
+    },
+    ...node.attrs["participant_country_code"] && {
+      actorCountryCode: node.attrs["participant_country_code"]
+    },
     ...node.attrs["t"] && { timestamp: Number(node.attrs["t"]) }
   };
   for (const c of kids4(node)) {
@@ -16733,6 +16955,8 @@ function parseGroupNotification(node) {
       n.expiration = Number(c.attrs["expiration"] ?? 0);
       if (c.attrs["trigger"]) n.trigger = Number(c.attrs["trigger"]);
     }
+    if (c.tag === "limit_sharing_enabled" && c.attrs["trigger"])
+      n.trigger = Number(c.attrs["trigger"]);
     if (c.tag === "growth_locked") {
       n.expiration = Number(c.attrs["expiration"] ?? 0);
       n.lockType = c.attrs["type"] ?? "";
@@ -17357,7 +17581,16 @@ async function mexQuery(request, id, queryId, variables, dataPath) {
   const raw = result?.content;
   if (!raw) throw new MexError("empty w:mex response", 400, res);
   const text5 = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf8");
-  const data = JSON.parse(text5);
+  let data;
+  try {
+    data = JSON.parse(text5);
+  } catch {
+    throw new MexError(
+      "w:mex response was not JSON (possibly Argo-encoded, not supported)",
+      400,
+      text5
+    );
+  }
   if (data.errors?.length) {
     const first = data.errors[0];
     throw new MexError(
@@ -17471,6 +17704,14 @@ var Newsletters = class {
       "xwa2_newsletter_create"
     )
   );
+  /** Accept a channel-related terms-of-service notice. `create()` does not call this itself: an account
+   * that has never created a channel needs it done once first, with the ids WhatsApp Web's own channel
+   * composer uses (`noticeId: '20601218'`, `stage: '5'`) - see whatsmeow's `AcceptTOSNotice`. */
+  acceptTOSNotice = (noticeId, stage) => this.request({
+    tag: "iq",
+    attrs: { to: "s.whatsapp.net", type: "set", xmlns: "tos" },
+    content: [{ tag: "notice", attrs: { id: noticeId, stage } }]
+  });
   /** Look up by `jid` (`1203...@newsletter`) or by `invite` code. */
   metadata = async (type, key) => parseNewsletter(
     await this.mex(
@@ -18012,6 +18253,22 @@ function parseDisappearingModeNotification(node) {
     settingTimestamp: Number(dm.attrs["t"])
   };
 }
+function parseBlocklistNotification(node) {
+  return {
+    ...node.attrs["action"] && { action: node.attrs["action"] },
+    ...node.attrs["dhash"] && { dhash: node.attrs["dhash"] },
+    ...node.attrs["prev_dhash"] && { prevDhash: node.attrs["prev_dhash"] },
+    changes: kids6(node).map((c) => ({ jid: c.attrs["jid"] ?? "", action: c.attrs["action"] ?? "" })).filter((c) => {
+      if (!c.jid) return false;
+      try {
+        jidDecode(c.jid);
+        return true;
+      } catch {
+        return false;
+      }
+    })
+  };
+}
 function parseContactsNotification(node) {
   const child4 = kids6(node)[0];
   if (!child4) return void 0;
@@ -18042,6 +18299,25 @@ function parseContactsNotification(node) {
     };
   }
   return void 0;
+}
+
+// src/client/features/account/offline-sync.ts
+var kids7 = (n, tag) => Array.isArray(n.content) ? n.content.find((c) => c.tag === tag) : void 0;
+function parseOfflinePreview(node) {
+  const p = kids7(node, "offline_preview");
+  if (!p) return void 0;
+  return {
+    total: Number(p.attrs["count"] ?? 0),
+    appDataChanges: Number(p.attrs["appdata"] ?? 0),
+    messages: Number(p.attrs["message"] ?? 0),
+    notifications: Number(p.attrs["notification"] ?? 0),
+    receipts: Number(p.attrs["receipt"] ?? 0)
+  };
+}
+function parseOfflineCompleted(node) {
+  const o = kids7(node, "offline");
+  if (!o) return void 0;
+  return { count: Number(o.attrs["count"] ?? 0) };
 }
 
 // src/client/features/account/account.ts
@@ -18142,8 +18418,8 @@ function mediaRetryRequest(key, mediaKey, meId) {
 }
 var bytes = (n) => n && n.content instanceof Uint8Array ? n.content : void 0;
 function decodeMediaRetryNode(node) {
-  const kids11 = Array.isArray(node.content) ? node.content : [];
-  const rmr = kids11.find((c) => c.tag === "rmr");
+  const kids12 = Array.isArray(node.content) ? node.content : [];
+  const rmr = kids12.find((c) => c.tag === "rmr");
   if (!rmr) return void 0;
   const event = {
     key: {
@@ -18153,9 +18429,9 @@ function decodeMediaRetryNode(node) {
       ...rmr.attrs["participant"] && { participant: rmr.attrs["participant"] }
     }
   };
-  const error = kids11.find((c) => c.tag === "error");
+  const error = kids12.find((c) => c.tag === "error");
   if (error) return { ...event, error: { code: Number(error.attrs["code"] ?? 0) } };
-  const enc2 = kids11.find((c) => c.tag === "encrypt");
+  const enc2 = kids12.find((c) => c.tag === "encrypt");
   const sub = Array.isArray(enc2?.content) ? enc2.content : [];
   const ciphertext = bytes(sub.find((c) => c.tag === "enc_p"));
   const iv = bytes(sub.find((c) => c.tag === "enc_iv"));
@@ -18263,7 +18539,7 @@ function createStickerPackZip(packId, stickers, cover) {
 var newPackId = () => randomUUID5().toUpperCase();
 
 // src/client/features/contact/bots.ts
-var kids7 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
+var kids8 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
 var entry = (n) => {
   const jid = n.attrs["jid"];
   const personaId = n.attrs["persona_id"];
@@ -18281,15 +18557,15 @@ var botListRequest = () => ({
   content: [{ tag: "bot", attrs: { v: "2" } }]
 });
 function parseBotList(res) {
-  const bot = kids7(res, "bot")[0];
+  const bot = kids8(res, "bot")[0];
   if (!bot) throw new Error("no <bot> in the bot directory answer");
-  const sections = kids7(bot, "section").map((s) => ({
+  const sections = kids8(bot, "section").map((s) => ({
     name: s.attrs["name"] ?? "",
     type: s.attrs["type"] ?? "all",
     ...s.attrs["display_type"] && { displayType: s.attrs["display_type"] },
-    bots: kids7(s, "bot").map(entry).filter((e) => !!e)
+    bots: kids8(s, "bot").map(entry).filter((e) => !!e)
   }));
-  const d = kids7(bot, "default")[0];
+  const d = kids8(bot, "default")[0];
   const defaultBot = d?.attrs["jid"] && d.attrs["persona_id"] ? { jid: d.attrs["jid"], personaId: d.attrs["persona_id"] } : void 0;
   const seen = /* @__PURE__ */ new Set();
   const bots = sections.flatMap((s) => s.bots).filter((b) => seen.has(b.jid) ? false : seen.add(b.jid));
@@ -18312,33 +18588,33 @@ async function fetchBotProfile(request, sid, jid, personaId) {
     [botProfileProtocol],
     [{ jid, personaId }]
   );
-  const profile = kids7(entry2?.nodes["bot"], "profile")[0];
+  const profile = kids8(entry2?.nodes["bot"], "profile")[0];
   if (!profile) return void 0;
-  const commandsNode = kids7(profile, "commands")[0];
-  const promptsNode = kids7(profile, "prompts")[0];
+  const commandsNode = kids8(profile, "commands")[0];
+  const promptsNode = kids8(profile, "prompts")[0];
   return {
     jid: entry2.id,
     ...profile.attrs["persona_id"] && { personaId: profile.attrs["persona_id"] },
-    ...text3(kids7(profile, "name")[0]) !== void 0 && { name: text3(kids7(profile, "name")[0]) },
-    ...text3(kids7(profile, "attributes")[0]) !== void 0 && {
-      attributes: text3(kids7(profile, "attributes")[0])
+    ...text3(kids8(profile, "name")[0]) !== void 0 && { name: text3(kids8(profile, "name")[0]) },
+    ...text3(kids8(profile, "attributes")[0]) !== void 0 && {
+      attributes: text3(kids8(profile, "attributes")[0])
     },
-    ...text3(kids7(profile, "description")[0]) !== void 0 && {
-      description: text3(kids7(profile, "description")[0])
+    ...text3(kids8(profile, "description")[0]) !== void 0 && {
+      description: text3(kids8(profile, "description")[0])
     },
-    ...text3(kids7(profile, "category")[0]) !== void 0 && {
-      category: text3(kids7(profile, "category")[0])
+    ...text3(kids8(profile, "category")[0]) !== void 0 && {
+      category: text3(kids8(profile, "category")[0])
     },
-    isDefault: kids7(profile, "default").length > 0,
-    commands: kids7(commandsNode, "command").map((c) => ({
-      name: text3(kids7(c, "name")[0]) ?? "",
-      description: text3(kids7(c, "description")[0]) ?? ""
+    isDefault: kids8(profile, "default").length > 0,
+    commands: kids8(commandsNode, "command").map((c) => ({
+      name: text3(kids8(c, "name")[0]) ?? "",
+      description: text3(kids8(c, "description")[0]) ?? ""
     })),
-    prompts: kids7(promptsNode, "prompt").map(
-      (p) => [text3(kids7(p, "emoji")[0]), text3(kids7(p, "text")[0])].filter(Boolean).join(" ")
+    prompts: kids8(promptsNode, "prompt").map(
+      (p) => [text3(kids8(p, "emoji")[0]), text3(kids8(p, "text")[0])].filter(Boolean).join(" ")
     ),
-    ...text3(kids7(commandsNode, "description")[0]) !== void 0 && {
-      commandsDescription: text3(kids7(commandsNode, "description")[0])
+    ...text3(kids8(commandsNode, "description")[0]) !== void 0 && {
+      commandsDescription: text3(kids8(commandsNode, "description")[0])
     }
   };
 }
@@ -18374,7 +18650,7 @@ var IDS2 = {
   REACHOUT_TIMELOCK: "23983697327930364",
   NEW_CHAT_CAP: "27910975521856601"
 };
-var kids8 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
+var kids9 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
 var abPropsRequest = (o = {}) => ({
   tag: "iq",
   attrs: { to: "s.whatsapp.net", type: "get", xmlns: "abt" },
@@ -18390,9 +18666,9 @@ var abPropsRequest = (o = {}) => ({
   ]
 });
 function parseAbProps(res) {
-  const p = kids8(res, "props")[0];
+  const p = kids9(res, "props")[0];
   const props = {};
-  for (const n of kids8(p, "prop"))
+  for (const n of kids9(p, "prop"))
     if (n.attrs["config_code"] !== void 0)
       props[n.attrs["config_code"]] = n.attrs["config_value"] ?? "";
   return {
@@ -18406,6 +18682,11 @@ var passiveNode = (active) => ({
   tag: "iq",
   attrs: { to: "s.whatsapp.net", type: "set", xmlns: "passive" },
   content: [{ tag: active ? "active" : "passive", attrs: {} }]
+});
+var markNotDirtyNode = (cleanType, timestampSec) => ({
+  tag: "iq",
+  attrs: { to: "s.whatsapp.net", type: "set", xmlns: "urn:xmpp:whatsapp:dirty" },
+  content: [{ tag: "clean", attrs: { type: cleanType, timestamp: String(timestampSec) } }]
 });
 var ServerInfo = class {
   constructor(request, mex) {
@@ -18430,6 +18711,10 @@ var ServerInfo = class {
   setPassive = async (passive) => {
     await this.request(passiveNode(!passive));
   };
+  /** Acknowledge a `dirty` notification's category as handled, up to `timestampSec` (default: now). */
+  markNotDirty = async (cleanType, timestampSec = Math.floor(Date.now() / 1e3)) => {
+    await this.request(markNotDirtyNode(cleanType, timestampSec));
+  };
 };
 
 // src/client/features/business/manage.ts
@@ -18442,7 +18727,7 @@ var IDS3 = {
   APPEAL_COLLECTION: "9971242039605207"
 };
 var text4 = (tag, v) => ({ tag, attrs: {}, content: Buffer.from(v) });
-var kids9 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
+var kids10 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => c.tag === tag) : [];
 function productNode(id, p) {
   const attrs = {};
   const content = [];
@@ -18474,6 +18759,62 @@ function productNode(id, p) {
   if (p.isHidden !== void 0) attrs["is_hidden"] = String(p.isHidden);
   return { tag: "product", attrs, content };
 }
+var childText2 = (n, tag) => {
+  const c = kids10(n, tag)[0]?.content;
+  return typeof c === "string" ? c : c instanceof Uint8Array ? Buffer.from(c).toString("utf8") : "";
+};
+var int = (n, tag) => parseInt(childText2(n, tag), 10) || 0;
+function parseOrderDetails(order) {
+  const priceNode = kids10(order, "price")[0];
+  const catalogNode = kids10(order, "catalog")[0];
+  return {
+    id: order.attrs["id"] ?? "",
+    createdAt: Number(order.attrs["creation_ts"] ?? 0),
+    price: {
+      subtotal: int(priceNode, "subtotal"),
+      total: int(priceNode, "total"),
+      currency: childText2(priceNode, "currency"),
+      status: childText2(priceNode, "price_status")
+    },
+    ...catalogNode && { catalogId: childText2(catalogNode, "id") },
+    products: kids10(order, "product").map((p) => {
+      const image = kids10(p, "image")[0];
+      const variant = kids10(p, "variant_info")[0];
+      return {
+        id: childText2(p, "id"),
+        price: int(p, "price"),
+        currency: childText2(p, "currency"),
+        name: childText2(p, "name"),
+        quantity: int(p, "quantity"),
+        ...image && { imageId: childText2(image, "id"), imageUrl: childText2(image, "url") },
+        ...variant && { variantProperties: childText2(variant, "properties") }
+      };
+    })
+  };
+}
+async function fetchOrderDetails(request, orderId, tokenBase64) {
+  const res = await request({
+    tag: "iq",
+    attrs: { to: "s.whatsapp.net", type: "get", xmlns: "fb:thrift_iq", smax_id: "5" },
+    content: [
+      {
+        tag: "order",
+        attrs: { op: "get", id: orderId },
+        content: [
+          {
+            tag: "image_dimensions",
+            attrs: {},
+            content: [text4("width", "100"), text4("height", "100")]
+          },
+          text4("token", tokenBase64)
+        ]
+      }
+    ]
+  });
+  const order = kids10(res, "order")[0];
+  if (!order) throw new Error("order details: no <order> in the answer");
+  return parseOrderDetails(order);
+}
 var Business = class {
   constructor(request, mex) {
     this.request = request;
@@ -18493,10 +18834,12 @@ var Business = class {
         }
       ]
     });
-    const product = kids9(kids9(res, op)[0], "product")[0];
+    const product = kids10(kids10(res, op)[0], "product")[0];
     if (!product) throw new Error(`${op}: no product in the answer`);
     return parseProduct(product);
   }
+  /** The line items, price and catalog of a message's order (its `orderId`/`token`). */
+  getOrderDetails = (orderId, tokenBase64) => fetchOrderDetails(this.request, orderId, tokenBase64);
   /** Add a product to the catalog. */
   createProduct = (p) => this.#edit("product_catalog_add", productNode(void 0, { ...p, isHidden: !!p.isHidden }));
   /** Change a product: only the fields you pass are sent. */
@@ -18518,7 +18861,7 @@ var Business = class {
         }
       ]
     });
-    return { deleted: +(kids9(res, "product_catalog_delete")[0]?.attrs["deleted_count"] ?? 0) };
+    return { deleted: +(kids10(res, "product_catalog_delete")[0]?.attrs["deleted_count"] ?? 0) };
   }
   /** Catalog and collection changes go through GraphQL; `input` is the server's input object. */
   createCatalog = (input2) => this.mex(IDS3.CREATE_CATALOG, { input: input2 }, "xfb_whatsapp_catalog_create");
@@ -18559,12 +18902,12 @@ var Business = class {
       attrs: { xmlns: "w:biz", to: "s.whatsapp.net", type: "get" },
       content: [{ tag: "broadcast_list_quota", attrs: {}, content: [] }]
     });
-    const find = (tag) => kids9(res, tag)[0] ?? kids9(kids9(res, "broadcast_list_quota")[0], tag)[0];
+    const find = (tag) => kids10(res, tag)[0] ?? kids10(kids10(res, "broadcast_list_quota")[0], tag)[0];
     const limits = find("limits");
     const frame = find("timeframe");
     if (!limits) return null;
     const num3 = (n, key) => {
-      const child4 = kids9(n, key)[0]?.content;
+      const child4 = kids10(n, key)[0]?.content;
       const raw = n?.attrs[key] ?? (typeof child4 === "string" ? child4 : child4 && Buffer.from(child4).toString());
       return parseInt(raw ?? "0", 10) || 0;
     };
@@ -18722,7 +19065,7 @@ var IDS4 = {
   REMINDER_CREATE: "32149118614673399",
   REMINDER_DELETE: "25462476600019778"
 };
-var kids10 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => tag === void 0 || c.tag === tag) : [];
+var kids11 = (n, tag) => n && Array.isArray(n.content) ? n.content.filter((c) => tag === void 0 || c.tag === tag) : [];
 var iq = (xmlns, type, content) => ({
   tag: "iq",
   attrs: { to: "s.whatsapp.net", xmlns, type },
@@ -18773,13 +19116,13 @@ var Privacy = class {
         { tag: "query", attrs: {}, content: [{ tag: "blocking_status", attrs: {} }] }
       ])
     );
-    return (kids10(res, "blocking")[0] ?? kids10(kids10(res, "query")[0], "blocking")[0])?.attrs["status"];
+    return (kids11(res, "blocking")[0] ?? kids11(kids11(res, "query")[0], "blocking")[0])?.attrs["status"];
   }
   async setBlocking(action) {
     const res = await this.request(
       iq("w:comms:chat", "set", [{ tag: "blocking", attrs: { action } }])
     );
-    return kids10(res, "blocking")[0]?.attrs["status"];
+    return kids11(res, "blocking")[0]?.attrs["status"];
   }
   /** The server's "opt out" list. Returned as the raw answer. */
   optOutList = () => this.request(iq("optoutlist", "get"));
@@ -18787,7 +19130,7 @@ var Privacy = class {
     const res = await this.request(
       iq("urn:xmpp:whatsapp:push", "get", [{ tag: "settings", attrs: {} }])
     );
-    return kids10(res, "settings")[0]?.attrs;
+    return kids11(res, "settings")[0]?.attrs;
   }
   async setPushConfig(config) {
     await this.request(iq("urn:xmpp:whatsapp:push", "set", [{ tag: "config", attrs: config }]));
@@ -18797,7 +19140,7 @@ var Privacy = class {
     const res = await this.request(
       iq("tos", "get", [{ tag: "get_user_disclosures", attrs: { t: String(since) } }])
     );
-    return kids10(res, "notice").map((n) => ({ ...n.attrs }));
+    return kids11(res, "notice").map((n) => ({ ...n.attrs }));
   }
   // ---- text status ("About" with an emoji) and profile ----
   setTextStatus = (text5, emoji) => this.mex(
@@ -19693,6 +20036,61 @@ var Client = class {
       return downloadMedia(again.ref, again.type, void 0, extraHosts);
     }
   }
+  /** Download a message's own thumbnail (a link preview's picture, or a media message's small preview) -
+   * independent of, and usually much smaller than, its main attachment. Most link-preview thumbnails are
+   * unencrypted. */
+  async downloadThumbnail(message) {
+    const ref = thumbnailOf(message);
+    if (!ref) throw new Error("message carries no thumbnail");
+    return downloadMedia(ref, "image", void 0, this.#options.additionalMediaHosts ?? []);
+  }
+  /** Look up a sticker pack's metadata and stickers by id (`stickerPackMessage.stickerPackId`). */
+  fetchStickerPack = (packId) => fetchStickerPack(packId);
+  /** Download one sticker from a pack returned by `fetchStickerPack`. Most packs are encrypted like any
+   * other sticker; an item with no `mediaKey` at all is treated as unencrypted, but only when a hash to
+   * verify it against is actually present - never silently, unauthenticated. */
+  async downloadStickerPackItem(item) {
+    const hasKey = !!item.mediaKey && item.mediaKey.length === 32;
+    if (!hasKey && !item.fileSha256 && !item.fileEncSha256)
+      throw new Error(
+        "sticker pack item has no mediaKey and no hash to verify an unencrypted download"
+      );
+    return downloadMedia(
+      {
+        ...item.directPath && { directPath: item.directPath },
+        ...item.url && { url: item.url },
+        mediaKey: hasKey ? item.mediaKey : new Uint8Array(0),
+        ...item.fileSha256 && { fileSha256: item.fileSha256 },
+        ...item.fileEncSha256 && { fileEncSha256: item.fileEncSha256 },
+        ...!hasKey && { unencrypted: true }
+      },
+      "sticker",
+      void 0,
+      this.#options.additionalMediaHosts ?? []
+    );
+  }
+  /** Delete an uploaded media blob from the server (e.g. right after a send you want to undo). Only removes
+   * the upload itself; a message that already points at it still fails to load afterwards. Pass the one
+   * `Quoted` (`{ key, message }`) a *sent* message's event already gives you as one piece (e.g. the id
+   * `sendImage` returned, paired with the content you sent) - a bare `directPath`/hash lifted out of
+   * someone *else's* received message, with an unrelated `key.fromMe: true` tacked on, must not be able to
+   * delete media that was never ours to remove; requiring the matched pair makes that far harder to do by
+   * accident than two independent parameters would. */
+  async deleteMedia({ key, message }) {
+    if (!key.fromMe) throw new Error("can only delete media from a message we sent ourselves");
+    const m = mediaOf(message);
+    if (!m) throw new Error("message carries no deletable media");
+    if (!m.ref.directPath || !m.ref.fileEncSha256)
+      throw new Error(
+        "media has no directPath/fileEncSha256 to delete by (a channel post strips both)"
+      );
+    await deleteMedia(
+      await this.#getMediaConn(),
+      m.type,
+      m.ref.directPath,
+      m.ref.fileEncSha256
+    );
+  }
   async #peerDataOperation(request) {
     const { sender } = await this.#live();
     return sender.sendPeerMessage({
@@ -20037,7 +20435,7 @@ var Client = class {
   starMessage = (key, starred = true) => this.#push(star(key, starred));
   deleteChat = (jid, last) => this.#push(deleteChat(jid, last));
   clearChat = (jid, last) => this.#push(clearChat(jid, last));
-  deleteMessageForMe = (key, timestamp, deleteMedia = false) => this.#push(deleteMessageForMe(key, timestamp, deleteMedia));
+  deleteMessageForMe = (key, timestamp, deleteMedia2 = false) => this.#push(deleteMessageForMe(key, timestamp, deleteMedia2));
   /** Save a contact in the phone's address book, or remove it with `null`. */
   saveContact = (jid, c) => this.#push(contact(jid, c));
   /**
@@ -20116,6 +20514,12 @@ var Client = class {
   async fetchStatus(...jids) {
     return fetchStatus(this.#q, await this.#sid(), jids);
   }
+  /** Resolve a `wa.me/message/<code>` "click to chat" link to the business account and pre-filled text it opens. */
+  resolveBusinessMessageLink = (link) => resolveBusinessMessageLink(this.#q, link);
+  /** Resolve a `wa.me/qr/<code>` contact-share link to the account it points at. */
+  resolveContactQRLink = (link) => resolveContactQRLink(this.#q, link);
+  /** Our own `wa.me/qr/<code>` contact-share link; `revoke: true` issues a fresh one. */
+  getContactQRLink = (revoke2 = false) => getContactQRLink(this.#q, revoke2);
   /** The usernames some contacts have set. */
   async contactUsernames(...jids) {
     return contactUsernames(this.#q, await this.#sid(), jids);
@@ -20225,6 +20629,8 @@ var Client = class {
   }
   /** Who may see our statuses (the "Status privacy" screen). */
   setStatusPrivacy = (audience, jids = []) => this.#push(statusPrivacy(audience, jids));
+  /** Read the current "Status privacy" lists back from the server. */
+  fetchStatusPrivacy = () => fetchStatusPrivacy(this.#q);
   /** Group permission "Add other members": everyone or only admins. */
   setGroupMemberAddMode = (jid, mode) => this.groups.setMemberAddMode(jid, mode);
   /** Group permission "Send message history" (members may send past messages to new members). */
@@ -20650,17 +21056,17 @@ var Client = class {
     const own = this.#creds.me;
     if (!own?.lid) throw new Error("no own LID yet");
     const inner = Array.isArray(c.offer.content) ? c.offer.content[0] : void 0;
-    const kids11 = Array.isArray(inner?.content) ? inner.content : [];
+    const kids12 = Array.isArray(inner?.content) ? inner.content : [];
     const ours = (n) => [own.lid, own.id].includes(n.attrs["jid"] ?? "");
-    let enc2 = kids11.find((k) => k.tag === "enc");
+    let enc2 = kids12.find((k) => k.tag === "enc");
     if (!enc2) {
-      const dest = kids11.find((k) => k.tag === "destination");
+      const dest = kids12.find((k) => k.tag === "destination");
       const to = (Array.isArray(dest?.content) ? dest.content : []).find(ours);
       enc2 = (Array.isArray(to?.content) ? to.content : []).find((k) => k.tag === "enc");
     }
     if (!enc2 || !(enc2.content instanceof Uint8Array))
       throw new Error("the offer carries no call key for this device");
-    const relay = kids11.find((k) => k.tag === "relay");
+    const relay = kids12.find((k) => k.tag === "relay");
     if (!relay) throw new Error("the offer carries no relay");
     const target = c.offerFrom ?? c.creator;
     receiver.sendNode(buildPreaccept(callId, target, c.creator, receiver.nextId(), c.video));
@@ -21757,6 +22163,12 @@ var Client = class {
       if (p) this.#events.emit("presence", p);
       return;
     }
+    if (node.tag === "ib") {
+      const preview = parseOfflinePreview(node);
+      if (preview) this.#events.emit("offline.preview", preview);
+      const done = parseOfflineCompleted(node);
+      if (done) this.#events.emit("offline.completed", done);
+    }
     const dirty = node.tag === "ib" ? child4("dirty") : void 0;
     if (dirty) {
       if (dirty.attrs["type"] === "account_sync") void this.#appState?.sync();
@@ -22065,6 +22477,34 @@ var Client = class {
         if (type === "newsletter") {
           const n = parseNewsletterLiveUpdate(node);
           if (n) this.#events.emit("newsletter.live-update", n);
+        }
+        if (type === "account_sync") {
+          const from = node.attrs["from"];
+          const isOwn = (() => {
+            if (!from) return true;
+            try {
+              const u = jidDecode(from).user;
+              return !!creds.me && jidDecode(creds.me.id).user === u || !!creds.me?.lid && jidDecode(creds.me.lid).user === u;
+            } catch {
+              return false;
+            }
+          })();
+          const childTags = new Set(
+            (Array.isArray(node.content) ? node.content : []).map((c) => c.tag)
+          );
+          if (isOwn) {
+            if (childTags.has("picture"))
+              this.#events.emit("self.picture", {
+                ...node.attrs["t"] && { timestamp: Number(node.attrs["t"]) }
+              });
+            const blocklistChild = (Array.isArray(node.content) ? node.content : []).find(
+              (c) => c.tag === "blocklist"
+            );
+            if (blocklistChild)
+              this.#events.emit("contact.blocklist", parseBlocklistNotification(blocklistChild));
+            if (childTags.has("privacy"))
+              this.fetchPrivacySettings().then((settings) => this.#events.emit("self.privacy", settings)).catch((e) => this.logger.event("privacy.refetch-failed", e));
+          }
         }
       },
       onIdentityChange: (jid) => this.#events.emit("identity.changed", { jid }),
