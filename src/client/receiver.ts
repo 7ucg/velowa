@@ -211,6 +211,21 @@ export function buildAck(node: BinaryNode, meId?: string): BinaryNode {
 	return { tag: 'ack', attrs }
 }
 
+/** An `<iq type="error">` answer, with the server's own `<error code="...">` pulled out structurally
+ * instead of leaving every caller to regex the stringified node out of a plain `Error`'s message. */
+export class IqError extends Error {
+	/** The `<error>` child's `code` attribute, e.g. `'404'` (item-not-found), `'401'`/`'403'` (forbidden). */
+	readonly code: string | undefined
+	constructor(readonly node: BinaryNode) {
+		const err = Array.isArray(node.content)
+			? node.content.find((c) => c.tag === 'error')
+			: undefined
+		super(`iq error: ${JSON.stringify(node.content)}`)
+		this.name = 'IqError'
+		this.code = err?.attrs['code']
+	}
+}
+
 /**
  * Handles everything the server pushes after login that needs an answer: acks, receipts,
  * pre-key upkeep, and decryption of incoming messages (1:1 and group). Stanzas are processed
@@ -238,8 +253,7 @@ export class Receiver {
 			const p = this.#pending.get(node.attrs['id'] ?? '')
 			if (p) {
 				this.#pending.delete(node.attrs['id']!)
-				if (node.attrs['type'] === 'error')
-					p.reject(new Error(`iq error: ${JSON.stringify(node.content)}`))
+				if (node.attrs['type'] === 'error') p.reject(new IqError(node))
 				else p.resolve(node)
 				return true
 			}
@@ -441,7 +455,7 @@ export class Receiver {
 				content: [{ tag: 'digest', attrs: {} }],
 			})
 		} catch (e) {
-			if (/"code":"404"/.test((e as Error).message)) {
+			if (e instanceof IqError && e.code === '404') {
 				this.d.logger.event('prekeys.digest-missing', {})
 				await this.uploadPreKeys(UPLOAD_PREKEY_COUNT)
 			} else {

@@ -108,13 +108,24 @@ export function stripMediaKeys(message: Record<string, unknown>): void {
 	}
 }
 
-/** Decrypt downloaded media; throws if the MAC (or the optional plaintext hash) does not match. */
+/** Decrypt downloaded media; throws if the MAC (or the optional plaintext hash) does not match. An empty
+ * `mediaKey` means the blob was never encrypted to begin with (channel media, most thumbnails): the bytes
+ * are returned as they are, only checked against `fileSha256` if one was given. */
 export function decryptMedia(
 	encrypted: Uint8Array,
 	mediaKey: Uint8Array,
 	type: BlobType,
 	expect: { fileSha256?: Uint8Array; fileEncSha256?: Uint8Array } = {},
 ): Buffer {
+	if (mediaKey.length === 0) {
+		const plain = Buffer.from(encrypted)
+		if (
+			expect.fileSha256 &&
+			!timingSafeEqualSafe(createHash('sha256').update(plain).digest(), expect.fileSha256)
+		)
+			throw new Error('media hash mismatch')
+		return plain
+	}
 	if (encrypted.length <= MAC_LENGTH) throw new Error('media payload too short')
 	if (
 		expect.fileEncSha256 &&
@@ -543,4 +554,115 @@ export function mediaOf(
 		}
 	}
 	return undefined
+}
+
+/** A message's own thumbnail (a link preview's picture, or a media message's small preview), independent
+ * of its main attachment - e.g. `extendedTextMessage.contextInfo.externalAdReply`'s or an image/video
+ * message's `thumbnailDirectPath`. Unencrypted when `thumbnailEncSha256`/a usable `mediaKey` is absent
+ * (most link previews), same as whatsmeow's own `DownloadThumbnail`. */
+export function thumbnailOf(message: Record<string, unknown>): MediaRef | undefined {
+	const b = (x: unknown): Uint8Array | undefined =>
+		typeof x === 'string'
+			? new Uint8Array(Buffer.from(x, 'base64'))
+			: x instanceof Uint8Array
+				? x
+				: undefined
+	for (const body of Object.values(message)) {
+		const m = body as Record<string, unknown> | undefined
+		const directPath = m?.['thumbnailDirectPath']
+		if (typeof directPath !== 'string') continue
+		const encSha256 = b(m!['thumbnailEncSha256'])
+		const mediaKey = encSha256 ? b(m!['mediaKey']) : undefined
+		return {
+			directPath,
+			mediaKey: mediaKey ?? new Uint8Array(0),
+			...(b(m!['thumbnailSha256']) && { fileSha256: b(m!['thumbnailSha256'])! }),
+			...(encSha256 && { fileEncSha256: encSha256 }),
+		}
+	}
+	return undefined
+}
+
+export interface StickerPackItem {
+	directPath?: string
+	url?: string
+	mediaKey?: Uint8Array
+	fileEncSha256?: Uint8Array
+	fileSha256?: Uint8Array
+	fileSize?: number
+	mimetype?: string
+	width?: number
+	height?: number
+	emojis: string[]
+	accessibilityText?: string
+	handle?: string
+}
+
+export interface StickerPackInfo {
+	packId: string
+	name: string
+	publisher: string
+	description: string
+	stickers: StickerPackItem[]
+	animated: boolean
+	trayImageId?: string
+}
+
+/** Look up a sticker pack's metadata and stickers by id (the id carried on a received
+ * `stickerPackMessage.stickerPackId`), the same public, unauthenticated endpoint whatsmeow's
+ * `FetchStickerPack` uses - no connection needed. */
+export async function fetchStickerPack(
+	packId: string,
+	fetchImpl: Fetch = fetch,
+): Promise<StickerPackInfo> {
+	const url = `https://static.whatsapp.net/sticker?lottie=1&cat=sticker_pack_data&id=${encodeURIComponent(packId)}&lg=en`
+	const res = await fetchImpl(url, { headers: { Origin: ORIGIN } })
+	if (!res.ok) throw new Error(`sticker pack lookup failed: HTTP ${res.status}`)
+	const packs = (await res.json()) as {
+		'sticker-pack-id'?: string
+		name?: string
+		publisher?: string
+		description?: string
+		animated?: number
+		'tray-image-id'?: string
+		stickers?: {
+			'direct-path'?: string
+			url?: string
+			'media-key'?: string
+			'enc-file-hash'?: string
+			'file-hash'?: string
+			'file-size'?: number
+			mimetype?: string
+			width?: number
+			height?: number
+			emojis?: string[]
+			'accessibility-text'?: string
+			handle?: string
+		}[]
+	}[]
+	const pack = packs[0]
+	if (!pack) throw new Error(`no sticker pack found for id ${packId}`)
+	const b64 = (x: string | undefined) => (x ? new Uint8Array(Buffer.from(x, 'base64')) : undefined)
+	return {
+		packId: pack['sticker-pack-id'] ?? packId,
+		name: pack.name ?? '',
+		publisher: pack.publisher ?? '',
+		description: pack.description ?? '',
+		animated: !!pack.animated,
+		...(pack['tray-image-id'] && { trayImageId: pack['tray-image-id'] }),
+		stickers: (pack.stickers ?? []).map((s) => ({
+			...(s['direct-path'] && { directPath: s['direct-path'] }),
+			...(s.url && { url: s.url }),
+			...(b64(s['media-key']) && { mediaKey: b64(s['media-key']) }),
+			...(b64(s['enc-file-hash']) && { fileEncSha256: b64(s['enc-file-hash']) }),
+			...(b64(s['file-hash']) && { fileSha256: b64(s['file-hash']) }),
+			...(s['file-size'] !== undefined && { fileSize: s['file-size'] }),
+			...(s.mimetype && { mimetype: s.mimetype }),
+			...(s.width !== undefined && { width: s.width }),
+			...(s.height !== undefined && { height: s.height }),
+			emojis: s.emojis ?? [],
+			...(s['accessibility-text'] && { accessibilityText: s['accessibility-text'] }),
+			...(s.handle && { handle: s.handle }),
+		})),
+	}
 }

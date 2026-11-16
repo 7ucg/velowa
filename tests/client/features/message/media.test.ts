@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { decodeMsg, kids, world } from '../../../helpers/world.testkit.js'
 import {
@@ -7,10 +8,12 @@ import {
 	deleteMedia,
 	downloadMedia,
 	encryptMedia,
+	fetchStickerPack,
 	mediaKeys,
 	mediaMessage,
 	mediaOf,
 	parseMediaConn,
+	thumbnailOf,
 	uploadMedia,
 	uploadToken,
 } from '../../../../src/client/features/message/media.js'
@@ -45,6 +48,17 @@ describe('media crypto', () => {
 		const k = Buffer.alloc(32, 7)
 		expect(mediaKeys(k, 'image').cipherKey.equals(mediaKeys(k, 'sticker').cipherKey)).toBe(true)
 		expect(mediaKeys(k, 'image').cipherKey.equals(mediaKeys(k, 'video').cipherKey)).toBe(false)
+	})
+
+	it('passes unencrypted bytes through as-is when mediaKey is empty, still checking fileSha256', () => {
+		expect(decryptMedia(plain, new Uint8Array(0), 'image').equals(plain)).toBe(true)
+		const sha = createHash('sha256').update(plain).digest()
+		expect(decryptMedia(plain, new Uint8Array(0), 'image', { fileSha256: sha }).equals(plain)).toBe(
+			true,
+		)
+		expect(() =>
+			decryptMedia(plain, new Uint8Array(0), 'image', { fileSha256: Buffer.alloc(32) }),
+		).toThrow(/hash/)
 	})
 })
 
@@ -317,6 +331,83 @@ describe('media messages', () => {
 			},
 		})!
 		expect(Buffer.from(ref.ref.mediaKey).equals(enc.mediaKey)).toBe(true)
+	})
+})
+
+describe('thumbnailOf', () => {
+	it('reads an encrypted thumbnail (mediaKey only used when there is an encSha256)', () => {
+		const ref = thumbnailOf({
+			extendedTextMessage: {
+				text: 'hi',
+				thumbnailDirectPath: '/t/1',
+				thumbnailEncSha256: Buffer.from('enc').toString('base64'),
+				thumbnailSha256: Buffer.from('plain').toString('base64'),
+				mediaKey: Buffer.from('key').toString('base64'),
+			},
+		})!
+		expect(ref.directPath).toBe('/t/1')
+		expect(Buffer.from(ref.mediaKey).toString()).toBe('key')
+		expect(Buffer.from(ref.fileEncSha256!).toString()).toBe('enc')
+	})
+
+	it('treats a thumbnail with no encSha256 as unencrypted, ignoring any mediaKey field', () => {
+		const ref = thumbnailOf({
+			extendedTextMessage: { text: 'hi', thumbnailDirectPath: '/t/2' },
+		})!
+		expect(ref.directPath).toBe('/t/2')
+		expect(ref.mediaKey.length).toBe(0)
+		expect(ref.fileEncSha256).toBeUndefined()
+	})
+
+	it('is undefined for a message with no thumbnail', () => {
+		expect(thumbnailOf({ conversation: 'hi' })).toBeUndefined()
+	})
+})
+
+describe('fetchStickerPack', () => {
+	it('parses the sticker-pack-data response, decoding base64 byte fields', async () => {
+		const body = JSON.stringify([
+			{
+				'sticker-pack-id': 'pack1',
+				name: 'Pack',
+				publisher: 'Me',
+				description: 'desc',
+				animated: 1,
+				'tray-image-id': 'tray1',
+				stickers: [
+					{
+						'direct-path': '/s/1',
+						'media-key': Buffer.from('key').toString('base64'),
+						'enc-file-hash': Buffer.from('enc').toString('base64'),
+						'file-hash': Buffer.from('plain').toString('base64'),
+						'file-size': 1234,
+						mimetype: 'image/webp',
+						width: 512,
+						height: 512,
+						emojis: ['😀'],
+					},
+				],
+			},
+		])
+		const fakeFetch = (async () => new Response(body, { status: 200 })) as unknown as typeof fetch
+		const pack = await fetchStickerPack('pack1', fakeFetch)
+		expect(pack).toMatchObject({ packId: 'pack1', name: 'Pack', publisher: 'Me', animated: true })
+		expect(pack.stickers).toHaveLength(1)
+		const s = pack.stickers[0]!
+		expect(s.directPath).toBe('/s/1')
+		expect(Buffer.from(s.mediaKey!).toString()).toBe('key')
+		expect(Buffer.from(s.fileEncSha256!).toString()).toBe('enc')
+		expect(s.emojis).toEqual(['😀'])
+	})
+
+	it('throws when the pack id is unknown (empty array answer)', async () => {
+		const fakeFetch = (async () => new Response('[]', { status: 200 })) as unknown as typeof fetch
+		await expect(fetchStickerPack('nope', fakeFetch)).rejects.toThrow(/no sticker pack/)
+	})
+
+	it('throws on an HTTP error', async () => {
+		const fakeFetch = (async () => new Response('', { status: 500 })) as unknown as typeof fetch
+		await expect(fetchStickerPack('x', fakeFetch)).rejects.toThrow(/HTTP 500/)
 	})
 })
 

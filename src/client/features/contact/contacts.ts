@@ -1,5 +1,6 @@
 // velowa (https://github.com/7ucg/velowa) (c) 2026 Baron. Copying any part of this file, however small, requires credit: see LICENSE.
 import type { BinaryNode } from '../../../codec/index.js'
+import { IqError } from '../../receiver.js'
 import type { RequestFn } from '../group/groups.js'
 
 const kids = (n: BinaryNode | undefined, tag?: string): BinaryNode[] =>
@@ -229,7 +230,7 @@ export async function profilePictureUrl(
 		return kids(res, 'picture')[0]?.attrs['url']
 	} catch (e) {
 		// 404 item-not-found (no picture) and 401/403 (hidden by the contact's privacy) are normal answers.
-		if (/"code":"(404|401|403)"/.test(String((e as Error).message))) return undefined
+		if (e instanceof IqError && ['404', '401', '403'].includes(e.code ?? '')) return undefined
 		throw e
 	}
 }
@@ -354,7 +355,7 @@ export async function fetchStatusPrivacy(request: RequestFn): Promise<StatusPriv
 			content: [{ tag: 'privacy', attrs: {} }],
 		})
 	} catch (e) {
-		if (/"code":"404"/.test(String((e as Error).message))) return DEFAULT
+		if (e instanceof IqError && e.code === '404') return DEFAULT
 		throw e
 	}
 	const lists = kids(kids(res, 'privacy')[0], 'list').map((list) => ({

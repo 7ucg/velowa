@@ -173,6 +173,7 @@ import { protoType } from './proto.js'
 import type {
 	ChatState,
 	MessageKey,
+	Quoted,
 	ReceiptType,
 	TextOptions,
 } from './features/message/messages.js'
@@ -731,12 +732,39 @@ export class Client {
 			return media.downloadMedia(again.ref, again.type, undefined, extraHosts)
 		}
 	}
+	/** Download a message's own thumbnail (a link preview's picture, or a media message's small preview) -
+	 * independent of, and usually much smaller than, its main attachment. Most link-preview thumbnails are
+	 * unencrypted. */
+	async downloadThumbnail(message: Record<string, unknown>): Promise<Buffer> {
+		const ref = media.thumbnailOf(message)
+		if (!ref) throw new Error('message carries no thumbnail')
+		return media.downloadMedia(ref, 'image', undefined, this.#options.additionalMediaHosts ?? [])
+	}
+	/** Look up a sticker pack's metadata and stickers by id (`stickerPackMessage.stickerPackId`). */
+	fetchStickerPack = (packId: string) => media.fetchStickerPack(packId)
+	/** Download one sticker from a pack returned by `fetchStickerPack`. */
+	async downloadStickerPackItem(item: media.StickerPackItem): Promise<Buffer> {
+		return media.downloadMedia(
+			{
+				...(item.directPath && { directPath: item.directPath }),
+				...(item.url && { url: item.url }),
+				mediaKey: item.mediaKey ?? new Uint8Array(0),
+				...(item.fileSha256 && { fileSha256: item.fileSha256 }),
+				...(item.fileEncSha256 && { fileEncSha256: item.fileEncSha256 }),
+			},
+			'sticker',
+			undefined,
+			this.#options.additionalMediaHosts ?? [],
+		)
+	}
 	/** Delete an uploaded media blob from the server (e.g. right after a send you want to undo). Only removes
-	 * the upload itself; a message that already points at it still fails to load afterwards. `key` must be
-	 * this message's own key with `fromMe: true` - only a sender can meaningfully undo their own upload, and
-	 * without this check any `directPath`/hash taken from someone *else's* received message would delete
-	 * media that was never ours to remove. */
-	async deleteMedia(key: MessageKey, message: Record<string, unknown>): Promise<void> {
+	 * the upload itself; a message that already points at it still fails to load afterwards. Pass the one
+	 * `Quoted` (`{ key, message }`) a *sent* message's event already gives you as one piece (e.g. the id
+	 * `sendImage` returned, paired with the content you sent) - a bare `directPath`/hash lifted out of
+	 * someone *else's* received message, with an unrelated `key.fromMe: true` tacked on, must not be able to
+	 * delete media that was never ours to remove; requiring the matched pair makes that far harder to do by
+	 * accident than two independent parameters would. */
+	async deleteMedia({ key, message }: Quoted): Promise<void> {
 		if (!key.fromMe) throw new Error('can only delete media from a message we sent ourselves')
 		const m = media.mediaOf(message)
 		if (!m) throw new Error('message carries no deletable media')

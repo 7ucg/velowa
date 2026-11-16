@@ -1,6 +1,24 @@
 # Changelog
 
 ## Unreleased
+- Added: `client.downloadThumbnail(message)` and `client.fetchStickerPack(packId)` /
+  `downloadStickerPackItem(item)` - a message's own small preview (e.g. a link preview's picture),
+  independent of its main attachment, and looking up a sticker pack's metadata/stickers by id
+  (`stickerPackMessage.stickerPackId`) from WhatsApp's public, unauthenticated catalog endpoint.
+  Matches whatsmeow's `DownloadThumbnail`/`FetchStickerPack`.
+- Fixed: `decryptMedia` always tried to AES-decrypt and strip a MAC trailer, even for unencrypted
+  media (an empty `mediaKey`) - the one shape a thumbnail without `thumbnailEncSha256` (most link
+  previews) or a channel post actually has. Now passes those bytes through as they are, only
+  checking `fileSha256` if one was given.
+- Changed: `Receiver`'s `<iq type="error">` rejection now throws a new `IqError` (with the server's
+  own `<error code="...">` pulled out as `.code`) instead of a plain `Error` whose message callers
+  had to regex a stringified node out of. `profilePictureUrl`, `fetchStatusPrivacy` and the prekey
+  digest check now read `.code` structurally instead of pattern-matching the message text.
+- Fixed (security): `client.deleteMedia` took a `MessageKey` and a message object as two independent
+  parameters, checking only `key.fromMe` - nothing tied the key to the message, so a caller could
+  pair an unrelated key with someone *else's* received message and delete media that was never
+  theirs. Now takes the one `Quoted` (`{ key, message }`) a sent message's own event already gives
+  as a matched pair, the same shape `quoted`/`asQuoted` already use elsewhere.
 - Fixed (security): `wacore-appstate`'s `known_op` defaulted a mutation with no `operation` field at
   all to SET ("proto2 enum default"), instead of rejecting it the way WA Web's own validation
   (`MISSING_MUTATION_OPERATION`, fatal) does. A genuine SET from the server always sets the field

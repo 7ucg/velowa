@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { BinaryNode } from '../../../../src/codec/index.js'
 import * as c from '../../../../src/client/features/contact/contacts.js'
+import { IqError } from '../../../../src/client/receiver.js'
+
+const iqError = (code: string): BinaryNode => ({
+	tag: 'iq',
+	attrs: { type: 'error' },
+	content: [{ tag: 'error', attrs: { code } }],
+})
 
 function fake(reply: BinaryNode) {
 	const sent: BinaryNode[] = []
@@ -118,13 +125,13 @@ describe('contacts', () => {
 	it('reports a missing or hidden profile picture as undefined, not as an error', async () => {
 		for (const code of ['404', '401', '403']) {
 			const r = async () => {
-				throw new Error(`iq error: [{"tag":"error","attrs":{"code":"${code}"}}]`)
+				throw new IqError(iqError(code))
 			}
 			expect(await c.profilePictureUrl(r, 'a@s.whatsapp.net')).toBeUndefined()
 		}
 		await expect(
 			c.profilePictureUrl(async () => {
-				throw new Error('iq error: [{"tag":"error","attrs":{"code":"500"}}]')
+				throw new IqError(iqError('500'))
 			}, 'a@s.whatsapp.net'),
 		).rejects.toThrow(/500/)
 	})
@@ -235,13 +242,13 @@ describe('contacts', () => {
 			{ type: 'contacts', isDefault: true, list: [] },
 		])
 		const notFound = {
-			request: async (): Promise<BinaryNode> => Promise.reject(new Error('{"code":"404"}')),
+			request: async (): Promise<BinaryNode> => Promise.reject(new IqError(iqError('404'))),
 		}
 		expect(await c.fetchStatusPrivacy(notFound.request)).toEqual([
 			{ type: 'contacts', isDefault: true, list: [] },
 		])
 		const serverError = {
-			request: async (): Promise<BinaryNode> => Promise.reject(new Error('{"code":"500"}')),
+			request: async (): Promise<BinaryNode> => Promise.reject(new IqError(iqError('500'))),
 		}
 		await expect(c.fetchStatusPrivacy(serverError.request)).rejects.toThrow('500')
 	})
