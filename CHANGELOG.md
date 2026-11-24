@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+- Fixed (security): `wacore-noise`'s Noise handshake state and `wacore-libsignal`'s ratchet `RootKey`/
+  `ChainKey` held raw key material in plain `[u8; 32]` fields with no zeroization on drop - a key could
+  linger in freed memory after use (readable via a core dump, swap, or a cold-boot style attack) long
+  after the session that used it ended. Now zeroized on drop (and the Noise state's old salt/key are
+  zeroized before being overwritten on every rekey, not just at the end of its lifetime); the
+  intermediate HKDF output buffer in Noise's key derivation is wrapped so it zeroizes on scope exit too.
+  `ChainKey` had to drop its `Copy` derive to add `Drop` (Rust disallows both together) - the three call
+  sites that relied on the implicit copy now clone or borrow instead.
+- Fixed: `OwnedNodeRef::slice_bytes` asserted that a slice's pointer falls within the node's backing
+  buffer, which an empty slice does not reliably satisfy (its pointer can be a dangling sentinel,
+  not necessarily inside the buffer) - a legitimate empty attribute/content value could panic. Now
+  returns an empty `Bytes` for an empty slice before the pointer check runs.
+
 ## 1.4.0 - 2026-11-16
 - Added: `client.business.getOrderDetails(orderId, tokenBase64)` - the line items, price and catalog of
   an order message (the id and token both come off the `orderMessage` itself); was entirely missing.

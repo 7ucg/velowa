@@ -38,6 +38,7 @@ thiserror = { workspace = true }
 wacore-derive = { workspace = true }
 waproto = { workspace = true }
 x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
+zeroize = { workspace = true }
 
 # rand 0.10 -> getrandom 0.4 has no default backend on wasm32-unknown-unknown.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]

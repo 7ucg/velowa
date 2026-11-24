@@ -8,8 +8,9 @@ use std::sync::LazyLock;
 
 use hmac::{Hmac, HmacReset, KeyInit, Mac};
 use sha2::Sha256;
+use zeroize::Zeroize;
 
-use crate::protocol::{PrivateKey, PublicKey, Result, crypto, stores::session_structure};
+use crate::protocol::{crypto, stores::session_structure, PrivateKey, PublicKey, Result};
 
 /// Lazy message key generator that defers key derivation and avoids re-serialization.
 ///
@@ -204,10 +205,22 @@ impl MessageKeys {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ChainKey {
     key: [u8; 32],
     index: u32,
+}
+
+impl Zeroize for ChainKey {
+    fn zeroize(&mut self) {
+        self.key.zeroize();
+    }
+}
+
+impl Drop for ChainKey {
+    fn drop(&mut self) {
+        self.key.zeroize();
+    }
 }
 
 impl ChainKey {
@@ -281,6 +294,18 @@ impl ChainKey {
 #[derive(Clone, Debug)]
 pub struct RootKey {
     key: [u8; 32],
+}
+
+impl Zeroize for RootKey {
+    fn zeroize(&mut self) {
+        self.key.zeroize();
+    }
+}
+
+impl Drop for RootKey {
+    fn drop(&mut self) {
+        self.key.zeroize();
+    }
 }
 
 impl RootKey {

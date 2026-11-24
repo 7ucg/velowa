@@ -264,9 +264,7 @@ macro_rules! impl_from_integer_for_nodevalue {
     };
 }
 
-impl_from_integer_for_nodevalue!(
-    u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize
-);
+impl_from_integer_for_nodevalue!(u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize);
 
 impl From<bool> for NodeValue {
     #[inline]
@@ -959,6 +957,9 @@ impl OwnedNodeRef {
     /// Return a zero-copy `Bytes` sub-view for a slice that borrows from this
     /// node's backing buffer. Panics if `slice` does not point within the buffer.
     pub fn slice_bytes(&self, slice: &[u8]) -> Bytes {
+        if slice.is_empty() {
+            return Bytes::new();
+        }
         let cart = &self.inner.backing_cart().0;
         let base = cart.as_ptr() as usize;
         let end = base + cart.len();
@@ -1233,6 +1234,18 @@ mod owned_node_ref_tests {
 
         assert_eq!(view.as_ref(), b"payload");
         assert_eq!(view.as_ptr(), content.as_ptr(), "slice_bytes copied");
+    }
+
+    #[test]
+    fn slice_bytes_empty_slice_returns_empty_bytes() {
+        let owned = OwnedNodeRef::new(encoded(&sample())).unwrap();
+
+        // An empty slice's pointer need not fall within the backing buffer at all (it can be a
+        // dangling sentinel), so this must short-circuit before the in-bounds check rather than
+        // assert on it.
+        let empty = owned.slice_bytes(&[]);
+
+        assert!(empty.is_empty());
     }
 
     #[test]

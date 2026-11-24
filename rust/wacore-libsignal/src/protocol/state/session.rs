@@ -219,7 +219,7 @@ pub struct DecryptSnapshot {
     sender_chain: Option<session_structure::Chain>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum ReceiverChainState {
     Open(ChainKey),
     Closed { next_index: u32 },

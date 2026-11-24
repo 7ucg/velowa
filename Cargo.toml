@@ -71,6 +71,7 @@ sha1 = { version = "0.11.0", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
 subtle = { version = "2.6", default-features = false }
 thiserror = "2.0.19"
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
 zlib-rs = { version = "0.6.6", default-features = false, features = ["std", "rust-allocator"] }
 
 [workspace.lints.clippy]

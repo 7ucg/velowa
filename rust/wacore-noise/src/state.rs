@@ -2,8 +2,9 @@ use crate::error::{NoiseError, Result};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 use wacore_libsignal::crypto::{
-    GcmInPlaceBuffer, TransportAead, aes_256_gcm_decrypt, aes_256_gcm_encrypt, transport_aead,
+    aes_256_gcm_decrypt, aes_256_gcm_encrypt, transport_aead, GcmInPlaceBuffer, TransportAead,
 };
+use zeroize::{Zeroize, Zeroizing};
 
 /// Buffer kinds accepted by [`NoiseCipher::decrypt_in_place_with_counter`].
 /// Both `Vec<u8>` and `bytes::BytesMut` satisfy this via [`GcmInPlaceBuffer`].
@@ -100,6 +101,19 @@ pub struct NoiseState {
     salt: [u8; 32],
     key: [u8; 32],
     counter: u32,
+}
+
+impl Zeroize for NoiseState {
+    fn zeroize(&mut self) {
+        self.salt.zeroize();
+        self.key.zeroize();
+    }
+}
+
+impl Drop for NoiseState {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 impl NoiseState {
@@ -207,6 +221,8 @@ impl NoiseState {
     pub fn mix_key(&mut self, input_key_material: &[u8]) -> Result<()> {
         self.counter = 0;
         let (new_salt, new_key) = self.extract_and_expand(Some(input_key_material))?;
+        self.salt.zeroize();
+        self.key.zeroize();
         self.salt = new_salt;
         self.key = new_key;
         Ok(())
@@ -214,8 +230,8 @@ impl NoiseState {
 
     fn extract_and_expand(&self, ikm: Option<&[u8]>) -> Result<([u8; 32], [u8; 32])> {
         let hk = Hkdf::<Sha256>::new(Some(&self.salt), ikm.unwrap_or(&[]));
-        let mut okm = [0u8; 64];
-        hk.expand(&[], &mut okm)
+        let mut okm = Zeroizing::new([0u8; 64]);
+        hk.expand(&[], okm.as_mut())
             .map_err(|_| NoiseError::HkdfExpandFailed)?;
 
         let mut write = [0u8; 32];
@@ -229,9 +245,11 @@ impl NoiseState {
 
     /// Extracts the final write and read keys from the Noise state.
     pub fn split(self) -> Result<NoiseKeys> {
-        let (write_bytes, read_bytes) = self.extract_and_expand(None)?;
+        let (mut write_bytes, mut read_bytes) = self.extract_and_expand(None)?;
         let write = NoiseCipher::new(&write_bytes)?;
         let read = NoiseCipher::new(&read_bytes)?;
+        write_bytes.zeroize();
+        read_bytes.zeroize();
 
         Ok(NoiseKeys { write, read })
     }
@@ -406,5 +424,19 @@ mod tests {
 
         let result = noise.encrypt(b"test");
         assert!(matches!(result, Err(NoiseError::CounterExhausted)));
+    }
+
+    #[test]
+    fn test_noise_state_zeroize() {
+        let prologue = b"test";
+        let mut noise = NoiseState::new(b"Noise_XX_25519_AESGCM_SHA256\0\0\0\0", prologue)
+            .expect("initialization should succeed");
+        noise.mix_key(b"test-secret-key-material-32bytes").unwrap();
+        assert_ne!(noise.salt, [0u8; 32]);
+        assert_ne!(noise.key, [0u8; 32]);
+
+        noise.zeroize();
+        assert_eq!(noise.salt, [0u8; 32]);
+        assert_eq!(noise.key, [0u8; 32]);
     }
 }

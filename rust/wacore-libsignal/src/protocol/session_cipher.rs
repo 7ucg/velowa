@@ -1407,7 +1407,7 @@ fn decrypt_message_with_state<R: Rng + CryptoRng>(
 
     // Deferring the common in-order advance keeps cancellation rollback free.
     let receiver_chain = state.receiver_chain_state(&their_ephemeral)?;
-    if let Some(ReceiverChainState::Open(chain_key)) = receiver_chain
+    if let Some(ReceiverChainState::Open(ref chain_key)) = receiver_chain
         && chain_key.index() == counter
     {
         let (message_key_gen, next_chain) = chain_key.step_with_message_keys()?;
@@ -1700,7 +1700,7 @@ fn get_or_create_message_key(
         ));
     }
 
-    let mut chain_key = *chain_key;
+    let mut chain_key = chain_key.clone();
 
     // Each skipped index is buffered as the seed it was derived from, never as
     // the key that seed expands to: `MessageKeyGenerator::into_pb` keeps the
