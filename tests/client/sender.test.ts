@@ -475,6 +475,20 @@ describe('Sender: LID addressing', () => {
 		const { sender } = await world({ emptyUsyncFor: [unknownLid] })
 		await expect(sender.sendText(unknownLid, 'hi')).rejects.toThrow(/no devices found/)
 	})
+
+	it("names the recipient's phone number (peer_recipient_pn) on a LID-addressed DM, when known", async () => {
+		const bobLid = '222222222222@lid'
+		const { sender, stanzas, lids } = await world()
+		lids.set('4915611111111@s.whatsapp.net', bobLid)
+		await sender.sendText(bobLid, 'hi')
+		expect(stanzas[0]!.attrs['peer_recipient_pn']).toBe('4915611111111@s.whatsapp.net')
+	})
+
+	it('omits peer_recipient_pn for a phone-number-addressed DM', async () => {
+		const { sender, stanzas } = await world()
+		await sender.sendText('4915611111111@s.whatsapp.net', 'hi')
+		expect(stanzas[0]!.attrs['peer_recipient_pn']).toBeUndefined()
+	})
 })
 
 describe('Sender: cstoken fallback', () => {

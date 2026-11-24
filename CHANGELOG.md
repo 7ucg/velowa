@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Added: a LID-addressed DM now names the recipient's phone number (`peer_recipient_pn`) on the stanza
+  when we know it - the same courtesy `noteLidFromAttrs` already relies on from the other direction, so
+  the recipient's own devices can learn the pairing without a separate lookup. Never sent before.
 - Added: `client.updateProfileStatus(text, { emoji?, ephemeralDurationSec? })` - the emoji/expiry newer
   clients show above the About text, via the account-gated `xwa2_update_text_status` mex mutation. The
   legacy `xmlns="status"` IQ (the one that actually updates the About text contacts see) always goes

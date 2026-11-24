@@ -778,12 +778,17 @@ export class Sender {
 			if (cs) content.push({ tag: 'cstoken', attrs: {}, content: cs })
 		}
 		content.push(...(opts.extraNodes ?? []))
+		// A LID-addressed DM names the recipient's phone number too, when we know it - the same courtesy
+		// `peer_recipient_pn`/`peer_recipient_lid` already pays us on the receiving end (`noteLidFromAttrs`),
+		// letting their other devices learn the pairing without a separate lookup.
+		const peerRecipientPn = to.endsWith('@lid') ? this.d.lids.pnUser(jidDecode(to).user) : undefined
 		return {
 			tag: 'message',
 			attrs: {
 				id,
 				to,
 				type: messageType(message),
+				...(peerRecipientPn && { peer_recipient_pn: `${peerRecipientPn}@${S_WHATSAPP_NET}` }),
 				...(opts.devices && !selfChat && { device_fanout: 'false' }),
 				...opts.stanzaAttrs,
 			},
