@@ -3612,7 +3612,15 @@ export class Client {
 					this.#tcTokens.storeFrom(node, from.replace(/:\d+@/, '@'))
 				}
 				if (type === 'w:gp2')
-					for (const n of parseGroupNotification(node)) this.#events.emit('group.update', n)
+					for (const n of parseGroupNotification(node)) {
+						// A participant just added/promoted/etc. with both forms given is the normal way a
+						// LID<->phone-number pairing is learned for someone in a shared group - the server
+						// attaches both to the same <participant> child, as authoritative as the stanza-attrs
+						// pairs `noteLidFromAttrs` already trusts unconditionally.
+						for (const [jid, phoneNumber] of Object.entries(n.participantPhoneNumbers ?? {}))
+							lids.set(jid, phoneNumber)
+						this.#events.emit('group.update', n)
+					}
 				if (type === 'server_sync') {
 					const names = (Array.isArray(node.content) ? node.content : [])
 						.filter((c) => c.tag === 'collection')

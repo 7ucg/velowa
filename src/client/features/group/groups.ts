@@ -547,6 +547,10 @@ export interface GroupNotification {
 	/** `add` / `remove` / `promote` / `demote` / `subject` / `description` / `announcement` / `locked` / `ephemeral` / ... */
 	action: string
 	participants?: string[]
+	/** A participant's phone number, keyed by its `@lid` jid - the server attaches both to the same
+	 * `<participant>` child on an add/remove/promote/demote, the normal way a LID<->phone-number
+	 * pairing is learned for someone just added to a shared group. */
+	participantPhoneNumbers?: Record<string, string>
 	subject?: string
 	description?: string
 	/** `subject` only: the renamer, when it differs from `actor` (LID-addressed group) - and their PN/username alias. */
@@ -583,13 +587,19 @@ export function parseGroupNotification(node: BinaryNode): GroupNotification[] {
 		...(node.attrs['t'] && { timestamp: Number(node.attrs['t']) }),
 	}
 	for (const c of kids(node)) {
-		const participants = kids(c, 'participant')
-			.map((p) => p.attrs['jid'] ?? '')
-			.filter(Boolean)
+		const participantNodes = kids(c, 'participant')
+		const participants = participantNodes.map((p) => p.attrs['jid'] ?? '').filter(Boolean)
+		const participantPhoneNumbers: Record<string, string> = {}
+		for (const p of participantNodes) {
+			const jid = p.attrs['jid']
+			const phoneNumber = p.attrs['phone_number']
+			if (jid && phoneNumber) participantPhoneNumbers[jid] = phoneNumber
+		}
 		const n: GroupNotification = {
 			...base,
 			action: c.tag,
 			...(participants.length && { participants }),
+			...(Object.keys(participantPhoneNumbers).length && { participantPhoneNumbers }),
 		}
 		if (c.tag === 'subject') {
 			if (c.attrs['subject']) n.subject = c.attrs['subject']

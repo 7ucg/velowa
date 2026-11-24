@@ -266,6 +266,33 @@ describe('parseGroupNotification', () => {
 		})
 		expect(events[6]).toMatchObject({ action: 'limit_sharing_enabled', trigger: 3 })
 	})
+
+	it("carries each participant's phone number alongside its jid, when the server sends one", async () => {
+		const { parseGroupNotification } =
+			await import('../../../../src/client/features/group/groups.js')
+		const events = parseGroupNotification({
+			tag: 'notification',
+			attrs: { from: 'g@g.us', type: 'w:gp2' },
+			content: [
+				{
+					tag: 'add',
+					attrs: {},
+					content: [
+						{
+							tag: 'participant',
+							attrs: { jid: 'a@lid', phone_number: '4915611111111@s.whatsapp.net' },
+						},
+						{ tag: 'participant', attrs: { jid: 'b@lid' } },
+					],
+				},
+			],
+		})
+		expect(events[0]).toMatchObject({
+			action: 'add',
+			participants: ['a@lid', 'b@lid'],
+			participantPhoneNumbers: { 'a@lid': '4915611111111@s.whatsapp.net' },
+		})
+	})
 })
 
 describe('group permissions and member tag', () => {

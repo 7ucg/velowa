@@ -88,6 +88,8 @@ export interface HistoryChat {
 	id: string
 	name?: string
 	unreadCount?: number
+	/** Unread messages that are themselves a reply to one of our own messages - a subset of `unreadCount`. */
+	unreadReplyToMyMessageCount?: number
 	conversationTimestamp?: number
 	archived?: boolean
 	pinned?: boolean
@@ -186,6 +188,9 @@ export function parseHistory(compressed: Uint8Array): HistoryChunk {
 			id: c['id'],
 			...(c['name'] && { name: c['name'] }),
 			...(c['unreadCount'] !== undefined && { unreadCount: Number(c['unreadCount']) }),
+			...(num(c['unreadReplyToMyMessageCount']) !== undefined && {
+				unreadReplyToMyMessageCount: num(c['unreadReplyToMyMessageCount'])!,
+			}),
 			...(num(c['conversationTimestamp']) !== undefined && {
 				conversationTimestamp: num(c['conversationTimestamp'])!,
 			}),

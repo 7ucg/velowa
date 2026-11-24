@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- Added: `GroupNotification.participantPhoneNumbers` and `HistoryChat.unreadReplyToMyMessageCount` - a
+  group add/remove/promote/demote's `<participant>` child carries both the jid and the phone number of
+  the same account, the normal way a LID<->phone-number pairing is learned for someone in a shared
+  group; `client.on('group.update', ...)` now feeds any such pair into the LID map the same way
+  `noteLidFromAttrs` already trusts stanza-attribute pairs. `unreadReplyToMyMessageCount` is a new
+  field in a freshly re-synced WA Web proto export, a subset of `unreadCount` for unread messages that
+  reply to one of our own.
 - Fixed: `downloadMedia` kept trying the next candidate host after a ciphertext hash or MAC mismatch,
   downloading the whole file again per remaining host even though every host serves the same bytes and
   a mismatch there is never a per-host problem. `decryptMedia`'s three mismatch checks now throw a
