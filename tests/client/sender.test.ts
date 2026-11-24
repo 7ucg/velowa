@@ -694,3 +694,32 @@ describe('helpers', () => {
 		expect(deviceOf()).toBe('api')
 	})
 })
+
+describe('Sender: event cards', () => {
+	const eventCard = {
+		viewOnceMessage: {
+			message: { eventMessage: { name: 'Party', isCanceled: false, isScheduleCall: false } },
+		},
+	}
+
+	it('marks a 1:1 event send type="event" with a <meta event_type="creation"/> child', async () => {
+		const { sender, stanzas } = await world()
+		await sender.sendMessage('4915611111111@s.whatsapp.net', eventCard)
+		expect(stanzas[0]!.attrs['type']).toBe('event')
+		expect(kids(stanzas[0]!, 'meta')[0]!.attrs).toEqual({ event_type: 'creation' })
+	})
+
+	it('does the same for a group event send', async () => {
+		const { sender, stanzas } = await world()
+		await sender.sendMessage('120363000000000000@g.us', eventCard)
+		expect(stanzas[0]!.attrs['type']).toBe('event')
+		expect(kids(stanzas[0]!, 'meta')[0]!.attrs).toEqual({ event_type: 'creation' })
+	})
+
+	it('leaves an ordinary text send as type="text" with no event meta', async () => {
+		const { sender, stanzas } = await world()
+		await sender.sendText('4915611111111@s.whatsapp.net', 'hi')
+		expect(stanzas[0]!.attrs['type']).toBe('text')
+		expect(kids(stanzas[0]!, 'meta')).toHaveLength(0)
+	})
+})

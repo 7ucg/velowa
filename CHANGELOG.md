@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Fixed (serious): `client.sendEvent()` sent an event card's creation as a plain `type="text"` message
+  with no `<meta event_type="creation"/>` child - the server accepts it, but the WhatsApp app does not
+  render it as an event at all. `messageType()` now recognizes an `eventMessage` (through its
+  `viewOnceMessage` wrapper) and the stanza gets its `type="event"` plus the required `<meta>` child, for
+  both 1:1 and group sends. Every event card velowa has ever sent was affected.
 - Added: `GroupNotification.participantUsernames` - a participant's own username, keyed by jid, when the
   server includes it on the same `<participant>` child as the jid/phone number (distinct from
   `actorUsername`, which is only the one who made the change).

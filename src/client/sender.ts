@@ -769,6 +769,10 @@ export class Sender {
 			message,
 		)
 		if (reporting) content.push(reporting)
+		// An event card's own creation needs this child or the WhatsApp app never renders it; editing
+		// one needs a different meta (event_type="edit") that client.editEvent already supplies itself.
+		if (messageType(message) === 'event' && !opts.stanzaAttrs?.['edit'])
+			content.push({ tag: 'meta', attrs: { event_type: 'creation' } })
 		// WA Web marks 1:1 sends to phone-number JIDs with <bot biz_bot="1"/>.
 		if (to.endsWith('@s.whatsapp.net')) content.push({ tag: 'bot', attrs: { biz_bot: '1' } })
 		const tc = this.#tcToken(to)
@@ -936,6 +940,10 @@ export class Sender {
 				tag: 'meta',
 				attrs: { status_setting: opts.statusPrivacy ?? 'contacts', session_scope: 'status' },
 			})
+		// An event card's own creation needs this child or the WhatsApp app never renders it; editing
+		// one needs a different meta (event_type="edit") that client.editEvent already supplies itself.
+		if (messageType(message) === 'event' && !opts.stanzaAttrs?.['edit'])
+			content.push({ tag: 'meta', attrs: { event_type: 'creation' } })
 		content.push(...(opts.extraNodes ?? []))
 		// Every group send (distribution or not) carries a phash over its recipient devices plus our own
 		// sending device, so the server can tell us our device list went stale; a status send never does
@@ -1009,6 +1017,11 @@ function messageType(message: Record<string, unknown>): string {
 	const q = (message['questionMessage'] as { message?: Record<string, unknown> } | undefined)
 		?.message
 	if (q) return messageType(q)
+	// Event cards (and buttons/lists/templates, which stay "text" - only the <biz> node and its
+	// own explicit opts.extraNodes make those interactive) are wrapped in viewOnceMessage.
+	const v = (message['viewOnceMessage'] as { message?: Record<string, unknown> } | undefined)
+		?.message
+	if (v?.['eventMessage']) return 'event'
 	if (message['reactionMessage']) return 'reaction'
 	if (
 		message['pollCreationMessage'] ||
