@@ -1,7 +1,7 @@
 syntax = "proto3";
 package proto;
 
-/// WhatsApp Version: 2.3000.1054794655
+/// WhatsApp Version: 2.3000.1056008220
 
 message ACP2Setting {
     optional bool enabled = 1;
@@ -270,6 +270,7 @@ message AIRichResponseTableMetadata {
 
 message AIRichResponseUnifiedResponse {
     optional bytes data = 1;
+    optional bytes gzipData = 2;
 }
 
 enum AISubscriptionRequestType {
@@ -543,6 +544,8 @@ message BotCapabilityMetadata {
         AI_RICH_RESPONSE_ITEM_LISTS_ENABLED = 88;
         RICH_RESPONSE_SIDE_BY_SIDE_BUFFER_BOTH = 89;
         AI_MUSE_JARVIS_ENVELOPE_GZIP_ENABLED = 90;
+        AI_RICH_RESPONSE_INLINE_MEDIA_LIGHTBOX_ENABLED = 91;
+        AI_MUSE_JARVIS_PAYLOAD_GZIP_ENABLED = 93;
     }
 }
 
@@ -2217,6 +2220,7 @@ message Conversation {
     optional bool isWorkGroup = 67;
     optional int32 nonE2EeType = 68;
     optional NonE2EEAttestation.AccountType contactAccountEncryptionAttestationType = 69;
+    optional uint32 unreadReplyToMyMessageCount = 70;
     enum EndOfHistoryTransferType {
         COMPLETE_BUT_MORE_MESSAGES_REMAIN_ON_PRIMARY = 0;
         COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY = 1;
@@ -2482,9 +2486,15 @@ message DeviceCapabilities {
     optional HostWriteMutationSupport hostWriteMutationSupport = 12;
     optional BizAiWebOnboarding bizAiWebOnboarding = 13;
     optional PhoneNumberSharing phoneNumberSharing = 14;
+    optional RecentConversationsOnDemand recentConversationsOnDemand = 15;
+    optional AiMuseJarvisGzip aiMuseJarvisGzip = 16;
     message AiFbidMigration {
         optional uint64 chatDbMigrationTimestamp = 1;
         optional uint32 supportVersion = 2;
+    }
+    
+    message AiMuseJarvisGzip {
+        optional uint32 supportVersion = 1;
     }
     
     message AiThread {
@@ -2543,6 +2553,10 @@ message DeviceCapabilities {
     
     message PhoneNumberSharing {
         optional bool phoneSharingSupported = 1;
+    }
+    
+    message RecentConversationsOnDemand {
+        optional bool supported = 1;
     }
     
     message ReverseHistorySync {
@@ -2900,6 +2914,13 @@ message EncryptMessageSuccess {
     optional string valueSecretRef = 3;
     optional uint64 offlineThreadingId = 4;
     optional uint64 timestampMs = 5;
+}
+
+message EncryptedJoinRequestPayload {
+    optional bytes encryptedAnswers = 1;
+    optional bytes encIv = 2;
+    optional bytes signalIdentityPublicKey = 3;
+    optional bytes kemCiphertext = 4;
 }
 
 message EncryptedPairingRequest {
@@ -3777,6 +3798,11 @@ message MembershipFormKeyFingerprintVerification {
     optional bytes keyFingerprint = 3;
 }
 
+message MembershipFormPublicKeys {
+    optional bytes mlKemPublicKey = 1;
+    optional bytes x25519PublicKey = 2;
+}
+
 message Mention {
     optional MENTION_MENTION_TYPE mentionType = 1;
     optional string mentionedJid = 2;
@@ -4530,6 +4556,7 @@ message Message {
     
     message InitialSecurityNotificationSettingSync {
         optional bool securityNotificationEnabled = 1;
+        optional int32 initialAppTheme = 2;
     }
     
     enum InsightDeliveryState {
@@ -5288,6 +5315,7 @@ message Message {
         message Option {
             optional string optionName = 1;
             optional string optionHash = 2;
+            optional int64 optionDatetime = 3;
         }
         
     }
@@ -5397,6 +5425,11 @@ message Message {
         optional GroupRootKeyRequest groupRootKeyRequest = 39;
         optional MembershipFormKeyFingerprintVerification membershipFormKeyFingerprintVerification = 40;
         optional GroupRootKeyShare groupRootKeyShare = 41;
+        optional MessageEditDisplayType messageEditDisplayType = 42;
+        enum MessageEditDisplayType {
+            DEFAULT = 0;
+            LINK_PREVIEW_ONLY = 1;
+        }
         enum Type {
             REVOKE = 0;
             EPHEMERAL_SETTING = 3;
@@ -5909,7 +5942,6 @@ message MessageContextInfo {
     optional bytes associatedPrimaryIdentityKey = 19;
     optional string teeContextAnchorMessageId = 20;
     optional ACP2Setting acp2Setting = 21;
-    optional bool lightE2Ee = 22;
     enum MessageAddonExpiryType {
         STATIC = 1;
         DEPENDENT_ON_PARENT = 2;
@@ -6363,6 +6395,7 @@ enum MutationProps {
     COMMUNITY_NESTING_STATE_ACTION = 99;
     SHARED_DEVICE_SECRET_ACTION = 100;
     HATCH_CVM_SECRET_ACTION = 101;
+    BUSINESS_FOLDER_CHAT_PREFERENCE_ACTION = 102;
     SHARE_OWN_PN = 10001;
     BUSINESS_BROADCAST_ACTION = 10002;
     AI_THREAD_DELETE_ACTION = 10003;
@@ -6759,6 +6792,7 @@ message PrepareAddPeerDeviceSuccess {
     optional PrepareAddDeviceSuccess enrolment = 1;
     optional uint64 serverDataId = 2;
     optional bytes companionDeviceBinding = 3;
+    optional uint64 historyStartTime = 4;
 }
 
 message PrimaryEphemeralIdentity {
@@ -6972,6 +7006,7 @@ message SenderKeyStateStructure {
 
 message ServerErrorReceipt {
     optional string stanzaId = 1;
+    optional bool keepMediaKey = 2;
 }
 
 message SessionStructure {
@@ -7312,6 +7347,7 @@ message SyncActionValue {
     optional CommunityNestingStateAction communityNestingStateAction = 99;
     optional SharedDeviceSecretAction sharedDeviceSecretAction = 100;
     optional HatchCVMSecretAction hatchCvmSecretAction = 101;
+    optional BusinessFolderChatPreferenceAction businessFolderChatPreferenceAction = 102;
     message AgentAction {
         optional string name = 1;
         optional int32 deviceId = 2;
@@ -7435,6 +7471,16 @@ message SyncActionValue {
         optional bool activated = 1;
     }
     
+    message BusinessFolderChatPreferenceAction {
+        optional BusinessFolderChatPreference preference = 1;
+        enum BusinessFolderChatPreference {
+            BUSINESS_FOLDER_CHAT_PREFERENCE_UNKNOWN = 0;
+            BUSINESS_FOLDER_CHAT_PREFERENCE_AUTOMATIC = 1;
+            BUSINESS_FOLDER_CHAT_PREFERENCE_INBOX = 2;
+            BUSINESS_FOLDER_CHAT_PREFERENCE_BUSINESS = 3;
+        }
+    }
+    
     message CallLogAction {
         optional CallLogRecord callLogRecord = 1;
     }
@@ -7472,6 +7518,7 @@ message SyncActionValue {
         optional string pnJid = 5;
         optional string username = 6;
         optional string birthday = 7;
+        optional int32 nonE2EeType = 8;
     }
     
     message ContactManagerMetadataAction {
@@ -7625,6 +7672,7 @@ message SyncActionValue {
         optional string firstName = 2;
         optional string username = 3;
         optional string birthday = 4;
+        optional int32 nonE2EeType = 5;
     }
     
     message LocaleSetting {
@@ -8665,6 +8713,7 @@ message WebMessageInfo {
         SPLIT_PAYMENT_MARKED_AS_PAID = 289;
         POLL_OPTIONS_REMOVED = 290;
         POLL_ADDED_OPTION_REMOVED = 291;
+        POLL_OPTION_ADDED = 292;
         GROUP_CUSTOM_REACTIONS = 293;
     }
 }

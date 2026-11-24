@@ -1,5 +1,6 @@
 // velowa (https://github.com/7ucg/velowa) (c) 2026 Baron. Copying any part of this file, however small, requires credit: see LICENSE.
 import { createDecipheriv, hkdfSync } from 'node:crypto'
+import { gunzipSync } from 'node:zlib'
 
 const BOT_MESSAGE_INFO = 'Bot Message'
 const MAX_SECRETS_PER_CHAT = 20
@@ -174,9 +175,13 @@ export function extractMetaAiText(
 		.filter((t: unknown) => typeof t === 'string' && t)
 	if (parts.length) return parts.join('\n')
 	const data = rr.unifiedResponse?.data
-	if (typeof data === 'string') {
+	const gzipData = rr.unifiedResponse?.gzipData
+	for (const raw of [data, gzipData]) {
+		if (typeof raw !== 'string') continue
 		try {
-			const j = JSON.parse(Buffer.from(data, 'base64').toString('utf8')) as {
+			const bytes = Buffer.from(raw, 'base64')
+			const plain = raw === gzipData ? gunzipSync(bytes) : bytes
+			const j = JSON.parse(plain.toString('utf8')) as {
 				sections?: { view_model?: { primitive?: { text?: string } } }[]
 			}
 			const texts = (j.sections ?? [])
@@ -184,7 +189,7 @@ export function extractMetaAiText(
 				.filter((t): t is string => !!t)
 			if (texts.length) return texts.join('\n')
 		} catch {
-			/* not JSON */
+			/* not JSON, or not actually gzipped - try the next form */
 		}
 	}
 	return undefined

@@ -1,5 +1,6 @@
+import { gzipSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
-import { MessageSecrets } from '../../src/client/meta-ai.js'
+import { extractMetaAiText, MessageSecrets } from '../../src/client/meta-ai.js'
 
 describe('MessageSecrets', () => {
 	it('evicts the oldest secret bytes once the total bound is exceeded, not just per-chat', () => {
@@ -34,5 +35,46 @@ describe('MessageSecrets', () => {
 		// calls set() again for it - but even if something did, the original author must not be lost.
 		secrets.set('id-0', new Uint8Array([9]), 'attacker-chat', 'attacker@s.whatsapp.net')
 		expect(secrets.originOf('id-0')?.author).toBe('real-author@s.whatsapp.net')
+	})
+})
+
+describe('extractMetaAiText', () => {
+	const unifiedResponse = (payload: Record<string, unknown>, gzip: boolean) => {
+		const json = JSON.stringify(payload)
+		const bytes = gzip ? gzipSync(Buffer.from(json)) : Buffer.from(json)
+		return { [gzip ? 'gzipData' : 'data']: bytes.toString('base64') }
+	}
+	const sections = (text: string) => ({ sections: [{ view_model: { primitive: { text } } }] })
+
+	it('reads plain text, an extended-text/conversation body, and submessages', () => {
+		expect(extractMetaAiText({ conversation: 'hi' })).toBe('hi')
+		expect(extractMetaAiText({ extendedTextMessage: { text: 'hi' } })).toBe('hi')
+		expect(
+			extractMetaAiText({
+				richResponseMessage: { submessages: [{ messageText: 'a' }, { messageText: 'b' }] },
+			}),
+		).toBe('a\nb')
+	})
+
+	it("reads a rich response's unifiedResponse.data (plain, not gzipped)", () => {
+		expect(
+			extractMetaAiText({
+				richResponseMessage: { unifiedResponse: unifiedResponse(sections('hello'), false) },
+			}),
+		).toBe('hello')
+	})
+
+	it("reads a rich response's unifiedResponse.gzipData, falling back to it when data is absent", () => {
+		expect(
+			extractMetaAiText({
+				richResponseMessage: { unifiedResponse: unifiedResponse(sections('zipped'), true) },
+			}),
+		).toBe('zipped')
+	})
+
+	it('returns undefined for an empty or unrecognized message', () => {
+		expect(extractMetaAiText(undefined)).toBeUndefined()
+		expect(extractMetaAiText({})).toBeUndefined()
+		expect(extractMetaAiText({ richResponseMessage: {} })).toBeUndefined()
 	})
 })

@@ -1,6 +1,16 @@
 # Changelog
 
 ## Unreleased
+- Proto: refreshed `proto/WAProto.proto` to WhatsApp Web `2.3000.1056008220` from the official export.
+  `MessageContextInfo.lightE2Ee` was removed again (unused in velowa, like the `LIDMigrationMapping`
+  removal earlier - checked this time before anything broke). The new `PrepareAddDevice`/`Epoch*`/
+  `VirtualDeviceId`/`MembershipFormPublicKeys`/`EncryptedJoinRequestPayload` cluster is the same
+  device-linking/epoch-rotation infrastructure already confirmed unused in both reference
+  implementations' real code on an earlier pass - still not ported on purpose.
+- Fixed: `extractMetaAiText` only read a rich response's `unifiedResponse.data` - the new
+  `unifiedResponse.gzipData` (gzip-compressed, behind the same WhatsApp Web version's new
+  `AI_MUSE_JARVIS_PAYLOAD_GZIP_ENABLED`/`..._ENVELOPE_GZIP_ENABLED` capability flags) fell through to
+  "no text found" entirely. Now tries `data` then `gzipData` (gunzipped first) before giving up.
 - Added: `GroupNotification.participantPhoneNumbers` and `HistoryChat.unreadReplyToMyMessageCount` - a
   group add/remove/promote/demote's `<participant>` child carries both the jid and the phone number of
   the same account, the normal way a LID<->phone-number pairing is learned for someone in a shared
