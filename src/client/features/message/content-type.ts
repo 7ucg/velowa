@@ -12,22 +12,50 @@ export function getContentType(
 	return keys[0]
 }
 
-/** Look through the wrappers (ephemeral, view-once, edited, document with caption) to the real content. */
+// `FutureProofMessage { message: Message }` wrappers that carry an inner message: the usual
+// ephemeral/view-once/edit wrappers, plus every `FutureProofMessage`-shaped field WA Web itself
+// defines (spoilers, polls, status mentions, stickers, bot/newsletter messages, ...) - a message
+// using any of them needs the same one-level unwrap to reach its real content. `deviceSentMessage`
+// is deliberately not here: unwrapping it safely needs the sender's identity, not just the shape
+// (see `serialize()` in `src/bot/message.ts`), so each caller that cares handles it itself first.
+const FP_WRAPPERS = [
+	'ephemeralMessage',
+	'viewOnceMessage',
+	'viewOnceMessageV2',
+	'viewOnceMessageV2Extension',
+	'documentWithCaptionMessage',
+	'groupMentionedMessage',
+	'botInvokeMessage',
+	'associatedChildMessage',
+	'pollCreationOptionImageMessage',
+	'eventCoverImage',
+	'groupStatusMessage',
+	'groupStatusMessageV2',
+	'groupStatusMentionMessage',
+	'statusAddYours',
+	'statusMentionMessage',
+	'questionMessage',
+	'questionReplyMessage',
+	'spoilerMessage',
+	'lottieStickerMessage',
+	'audioStickerMessage',
+	'limitSharingMessage',
+	'newsletterAdminProfileMessage',
+	'newsletterAdminProfileStatusMessage',
+	'pollCreationMessageV4',
+	'botForwardedMessage',
+	'editedMessage',
+]
+
+/** Look through the wrappers (ephemeral, view-once, edited, document with caption, ...) to the real content. */
 export function normalizeMessageContent(
 	content: Record<string, unknown> | undefined | null,
 ): Record<string, unknown> | undefined {
 	let c = content ?? undefined
 	for (let depth = 0; c && depth < 5; depth++) {
-		const wrapper = [
-			'ephemeralMessage',
-			'viewOnceMessage',
-			'viewOnceMessageV2',
-			'viewOnceMessageV2Extension',
-			'documentWithCaptionMessage',
-			'editedMessage',
-		]
-			.map((k) => c![k] as { message?: Record<string, unknown> } | undefined)
-			.find((w) => w?.message)
+		const wrapper = FP_WRAPPERS.map(
+			(k) => c![k] as { message?: Record<string, unknown> } | undefined,
+		).find((w) => w?.message)
 		if (!wrapper) break
 		c = wrapper.message
 	}

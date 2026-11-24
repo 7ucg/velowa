@@ -1,6 +1,16 @@
 # Changelog
 
 ## Unreleased
+- Fixed: `normalizeMessageContent` only unwrapped `ephemeralMessage`/`viewOnceMessage*`/
+  `documentWithCaptionMessage`/`editedMessage` - the ~20 other `FutureProofMessage`-shaped fields WA
+  Web itself defines (`spoilerMessage`, `groupMentionedMessage`, `lottieStickerMessage`/
+  `audioStickerMessage`, `statusMentionMessage`, `questionMessage`/`questionReplyMessage`,
+  `botInvokeMessage`/`botForwardedMessage`, `newsletterAdminProfileMessage`/
+  `newsletterAdminProfileStatusMessage`, `pollCreationOptionImageMessage`/`pollCreationMessageV4`,
+  `eventCoverImage`, `groupStatusMessage`/`groupStatusMessageV2`/`groupStatusMentionMessage`,
+  `statusAddYours`, `associatedChildMessage`, `limitSharingMessage`) were left wrapped - `getContentType`
+  and `messageText` (and the bot message layer, which both build on) saw the wrapper's own field name
+  instead of the real content, so e.g. a spoiler or a group-mention message's text never resolved.
 - Fixed (security): `wacore-noise`'s Noise handshake state and `wacore-libsignal`'s ratchet `RootKey`/
   `ChainKey` held raw key material in plain `[u8; 32]` fields with no zeroization on drop - a key could
   linger in freed memory after use (readable via a core dump, swap, or a cold-boot style attack) long
