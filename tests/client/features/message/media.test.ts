@@ -12,6 +12,7 @@ import {
 	mediaKeys,
 	mediaMessage,
 	mediaOf,
+	MediaVerificationError,
 	parseMediaConn,
 	thumbnailOf,
 	uploadMedia,
@@ -247,6 +248,30 @@ describe('download retry', () => {
 		)
 		expect(out.equals(plain)).toBe(true)
 		expect(calls).toBe(2)
+	})
+
+	it('stops on a hash/MAC mismatch instead of trying the next host - every host serves the same bytes', async () => {
+		const enc = encryptMedia(plain, 'document')
+		const tampered = new Uint8Array(enc.encrypted)
+		tampered[0] = tampered[0]! ^ 0xff
+		let calls = 0
+		const fakeFetch = (async () => {
+			calls++
+			return new Response(tampered)
+		}) as unknown as typeof fetch
+		await expect(
+			downloadMedia(
+				{
+					directPath: '/v/t62/x',
+					url: 'https://media.whatsapp.net/alt',
+					mediaKey: enc.mediaKey,
+					fileEncSha256: enc.fileEncSha256,
+				},
+				'document',
+				fakeFetch,
+			),
+		).rejects.toThrow(MediaVerificationError)
+		expect(calls).toBe(1)
 	})
 })
 

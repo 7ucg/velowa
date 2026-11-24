@@ -108,6 +108,12 @@ export function stripMediaKeys(message: Record<string, unknown>): void {
 	}
 }
 
+/** A hash or MAC check failed: every media host serves the same ciphertext, so this is never a
+ * transient, per-host problem - retrying a different host (or the same one again) will fail the
+ * same way. Matches WA Web's own `MmsDownloadFilehashMismatchError` handling, which stops at the
+ * first mismatch instead of exhausting every host first. */
+export class MediaVerificationError extends Error {}
+
 /** Decrypt downloaded media; throws if the MAC (or the optional plaintext hash) does not match.
  * `expect.unencrypted` must be set by the *caller* (channel media, most thumbnails) - never inferred from
  * `mediaKey` being empty, which an attacker-shaped message could claim just as easily to downgrade a
@@ -125,7 +131,7 @@ export function decryptMedia(
 			throw new Error('unencrypted media needs fileSha256 or fileEncSha256 to verify against')
 		const plain = Buffer.from(encrypted)
 		if (!timingSafeEqualSafe(createHash('sha256').update(plain).digest(), hash))
-			throw new Error('media hash mismatch')
+			throw new MediaVerificationError('media hash mismatch')
 		return plain
 	}
 	if (mediaKey.length !== 32) throw new Error('mediaKey must be 32 bytes')
@@ -134,7 +140,7 @@ export function decryptMedia(
 		expect.fileEncSha256 &&
 		!timingSafeEqualSafe(createHash('sha256').update(encrypted).digest(), expect.fileEncSha256)
 	) {
-		throw new Error('encrypted media hash mismatch')
+		throw new MediaVerificationError('encrypted media hash mismatch')
 	}
 	const { iv, cipherKey, macKey } = mediaKeys(mediaKey, type)
 	const body = Buffer.from(encrypted.subarray(0, encrypted.length - MAC_LENGTH))
@@ -144,14 +150,14 @@ export function decryptMedia(
 		.update(body)
 		.digest()
 		.subarray(0, MAC_LENGTH)
-	if (!timingSafeEqualSafe(expectedMac, mac)) throw new Error('media MAC mismatch')
+	if (!timingSafeEqualSafe(expectedMac, mac)) throw new MediaVerificationError('media MAC mismatch')
 	const d = createDecipheriv('aes-256-cbc', cipherKey, iv)
 	const plain = Buffer.concat([d.update(body), d.final()])
 	if (
 		expect.fileSha256 &&
 		!timingSafeEqualSafe(createHash('sha256').update(plain).digest(), expect.fileSha256)
 	) {
-		throw new Error('media hash mismatch')
+		throw new MediaVerificationError('media hash mismatch')
 	}
 	return plain
 }
@@ -429,6 +435,9 @@ export async function downloadMedia(
 					...(ref.unencrypted && { unencrypted: true }),
 				})
 			} catch (e) {
+				// Every host serves the same bytes, so a hash/MAC mismatch will fail identically on all
+				// of them - stop immediately instead of downloading the whole file again per remaining host.
+				if (e instanceof MediaVerificationError) throw e
 				lastError = e
 				const retryable = e instanceof RetryableHttpError || e instanceof TypeError
 				if (!retryable || attempt === MAX_ATTEMPTS_PER_URL) break

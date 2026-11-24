@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Fixed: `downloadMedia` kept trying the next candidate host after a ciphertext hash or MAC mismatch,
+  downloading the whole file again per remaining host even though every host serves the same bytes and
+  a mismatch there is never a per-host problem. `decryptMedia`'s three mismatch checks now throw a
+  distinct `MediaVerificationError`, which stops the download immediately instead of being treated like
+  any other failure worth trying elsewhere.
 - Fixed: `normalizeMessageContent` only unwrapped `ephemeralMessage`/`viewOnceMessage*`/
   `documentWithCaptionMessage`/`editedMessage` - the ~20 other `FutureProofMessage`-shaped fields WA
   Web itself defines (`spoilerMessage`, `groupMentionedMessage`, `lottieStickerMessage`/
