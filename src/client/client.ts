@@ -3607,6 +3607,22 @@ export class Client {
 			onNotification: (node) => {
 				const type = node.attrs['type'] ?? ''
 				this.#events.emit('notification', { type, node })
+				// A claimed LID<->phone-number pairing agrees with what we already trust (or we trust
+				// neither direction yet) - never used to let a claim overwrite an existing, different
+				// mapping. Both the group-participant and contacts-notification sources below are less
+				// authoritative than the stanza-attrs pairs `noteLidFromAttrs` trusts unconditionally (those
+				// describe the stanza's own sender/participant, not an arbitrary third party it mentions).
+				const lidPairAgrees = (pnJid: string, lidJid: string): boolean => {
+					try {
+						const pn = jidDecode(pnJid).user
+						const lid = jidDecode(lidJid).user
+						const curLid = lids.lidUser(pn)
+						const curPn = lids.pnUser(lid)
+						return (!curLid || curLid === lid) && (!curPn || curPn === pn)
+					} catch {
+						return false
+					}
+				}
 				if (type === 'privacy_token') {
 					const from = node.attrs['sender_lid'] ?? node.attrs['from'] ?? ''
 					this.#tcTokens.storeFrom(node, from.replace(/:\d+@/, '@'))
@@ -3615,10 +3631,16 @@ export class Client {
 					for (const n of parseGroupNotification(node)) {
 						// A participant just added/promoted/etc. with both forms given is the normal way a
 						// LID<->phone-number pairing is learned for someone in a shared group - the server
-						// attaches both to the same <participant> child, as authoritative as the stanza-attrs
-						// pairs `noteLidFromAttrs` already trusts unconditionally.
+						// attaches both to the same <participant> child. Restricted to an actual lid/phone-number
+						// pair (never two of the same kind) and to one that does not conflict with what we
+						// already trust, the same policy the contacts-notification path below uses.
 						for (const [jid, phoneNumber] of Object.entries(n.participantPhoneNumbers ?? {}))
-							lids.set(jid, phoneNumber)
+							if (
+								jid.endsWith('@lid') &&
+								phoneNumber.endsWith('@s.whatsapp.net') &&
+								lidPairAgrees(phoneNumber, jid)
+							)
+								lids.set(jid, phoneNumber)
 						this.#events.emit('group.update', n)
 					}
 				if (type === 'server_sync') {
@@ -3650,18 +3672,7 @@ export class Client {
 						// unseen LIDs for it and defers a conflict to a live usync instead of overwriting), so a
 						// claim that disagrees with what we already have is dropped rather than applied blind.
 						if (c.action === 'number-changed' && c.oldLid && c.newLid) {
-							const agrees = (pnJid: string, lidJid: string): boolean => {
-								try {
-									const pn = jidDecode(pnJid).user
-									const lid = jidDecode(lidJid).user
-									const curLid = lids.lidUser(pn)
-									const curPn = lids.pnUser(lid)
-									return (!curLid || curLid === lid) && (!curPn || curPn === pn)
-								} catch {
-									return false
-								}
-							}
-							if (agrees(c.oldJid, c.oldLid) && agrees(c.newJid, c.newLid)) {
+							if (lidPairAgrees(c.oldJid, c.oldLid) && lidPairAgrees(c.newJid, c.newLid)) {
 								lids.set(c.oldJid, c.oldLid)
 								lids.set(c.newJid, c.newLid)
 							}
