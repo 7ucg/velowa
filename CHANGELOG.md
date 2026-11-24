@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Added: `client.editEvent(key, creator, options)` - edits an event card's details. The delivery stanza
+  for this needs `type="event"`, `edit="1"` and a `<meta event_type="edit"/>` child; omitting any of
+  them is accepted by the server but silently ignored by the WhatsApp app, so this builds that shape
+  automatically instead of leaving it to the caller. Was entirely missing (no editEvent existed).
 - Added: a LID-addressed DM now names the recipient's phone number (`peer_recipient_pn`) on the stanza
   when we know it - the same courtesy `noteLidFromAttrs` already relies on from the other direction, so
   the recipient's own devices can learn the pairing without a separate lookup. Never sent before.

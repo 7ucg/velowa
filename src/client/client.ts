@@ -121,7 +121,7 @@ import {
 	type MediaRetryResult,
 } from './features/message/media-retry.js'
 import { TcTokens } from './features/contact/tctoken.js'
-import { commentMessage } from './features/message/comment.js'
+import { commentMessage, secretEncryptedMessage } from './features/message/comment.js'
 import {
 	eventMessage,
 	eventResponse,
@@ -885,6 +885,38 @@ export class Client {
 	async sendEvent(to: string, o: EventOptions): Promise<string> {
 		const { sender } = await this.#live()
 		return sender.sendMessage(to, eventMessage(o))
+	}
+
+	/**
+	 * Edit an event card's details. `key` is the card's key and `creator` who sent it (the card must have been
+	 * received here, because its secret is needed). The delivery stanza for this needs `type="event"`, `edit="1"`
+	 * and a `<meta event_type="edit"/>` child - omitting any of them is accepted by the server but the WhatsApp
+	 * app silently ignores the edit, so this builds that shape rather than leaving it to the caller.
+	 */
+	async editEvent(key: MessageKey, creator: string, o: EventOptions): Promise<string> {
+		const { sender, receiver } = await this.#live()
+		const secret = receiver.secretOf(key.id)
+		if (!secret)
+			throw new Error('the secret of this event is unknown (the card was not received here)')
+		const me = this.#creds.me?.id
+		if (!me) throw new Error('not paired')
+		const strip = (j: string) => j.replace(/:\d+@/, '@')
+		const { messageContextInfo: _secret, ...inner } = eventMessage(o)
+		void _secret
+		return sender.sendMessage(
+			key.remoteJid,
+			secretEncryptedMessage('EVENT_EDIT', key, inner, {
+				parentSenderJid: strip(creator),
+				modifierJid: strip(
+					creator.endsWith('@lid') && this.#creds.me?.lid ? this.#creds.me.lid : me,
+				),
+				secret,
+			}),
+			{
+				stanzaAttrs: { type: 'event', edit: '1' },
+				extraNodes: [{ tag: 'meta', attrs: { event_type: 'edit' } }],
+			},
+		)
 	}
 
 	/**
