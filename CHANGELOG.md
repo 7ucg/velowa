@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Added: `client.updateProfileStatus(text, { emoji?, ephemeralDurationSec? })` - the emoji/expiry newer
+  clients show above the About text, via the account-gated `xwa2_update_text_status` mex mutation. The
+  legacy `xmlns="status"` IQ (the one that actually updates the About text contacts see) always goes
+  out regardless, so an account without that newer mutation still gets its text updated instead of
+  silently keeping the old one.
 - Proto: refreshed `proto/WAProto.proto` to WhatsApp Web `2.3000.1056008220` from the official export.
   `MessageContextInfo.lightE2Ee` was removed again (unused in velowa, like the `LIDMigrationMapping`
   removal earlier - checked this time before anything broke). The new `PrepareAddDevice`/`Epoch*`/

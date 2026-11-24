@@ -1381,8 +1381,9 @@ export class Client {
 	}
 	profilePictureUrl = (jid: string, type: 'preview' | 'image' = 'preview') =>
 		contacts.profilePictureUrl(this.#q, jid, type)
-	/** Set our own "About" text. */
-	updateProfileStatus = (text: string) => contacts.updateStatus(this.#q, text)
+	/** Set our own "About" text, and optionally an emoji/an expiry newer clients show above it. */
+	updateProfileStatus = (text: string, o?: contacts.StatusOptions) =>
+		contacts.updateStatus(this.#q, text, o, this.mex)
 	fetchBlocklist = () => contacts.fetchBlocklist(this.#q)
 	/** Block a contact; `entryPoint` / `reason` are what the app reports with it (see `contacts.BlockOptions`). */
 	async blockUser(jid: string, o: contacts.BlockOptions = {}): Promise<void> {

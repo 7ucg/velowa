@@ -185,6 +185,30 @@ describe('contacts', () => {
 		expect(Buffer.from(kids(pv.sent[2]!)[0]!.content as Uint8Array).toString()).toBe('Beschäftigt')
 	})
 
+	it('always sends the legacy status IQ, and the mex mutation only when an emoji/expiry is given', async () => {
+		const f = fake({ tag: 'iq', attrs: {} })
+		const mexCalls: unknown[][] = []
+		const mex = (async (...a: unknown[]) => (mexCalls.push(a), {})) as never
+
+		await c.updateStatus(f.request, 'hi', {}, mex)
+		expect(f.sent).toHaveLength(1)
+		expect(mexCalls).toHaveLength(0)
+
+		await c.updateStatus(f.request, 'hi', { emoji: '🎉', ephemeralDurationSec: 86400 }, mex)
+		expect(f.sent).toHaveLength(2)
+		expect(mexCalls).toEqual([
+			[
+				'9152604461510864',
+				{ input: { text: 'hi', emoji: { content: '🎉' }, ephemeral_duration_sec: 86400 } },
+			],
+		])
+	})
+
+	it('throws rather than silently drop an emoji/expiry with no mex function given', async () => {
+		const f = fake({ tag: 'iq', attrs: {} })
+		await expect(c.updateStatus(f.request, 'hi', { emoji: '🎉' })).rejects.toThrow(/mex function/)
+	})
+
 	it('reads the usernames of contacts and leaves out those without one', async () => {
 		const f = fake(
 			usyncReply([

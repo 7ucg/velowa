@@ -2,6 +2,7 @@
 import type { BinaryNode } from '../../../codec/index.js'
 import { IqError } from '../../receiver.js'
 import type { RequestFn } from '../group/groups.js'
+import type { MexFn } from '../mex.js'
 
 const kids = (n: BinaryNode | undefined, tag?: string): BinaryNode[] =>
 	n && Array.isArray(n.content) ? n.content.filter((c) => tag === undefined || c.tag === tag) : []
@@ -235,8 +236,35 @@ export async function profilePictureUrl(
 	}
 }
 
-/** Set our "About" text. */
-export async function updateStatus(request: RequestFn, text: string): Promise<void> {
+const UPDATE_TEXT_STATUS_QUERY = '9152604461510864'
+
+export interface StatusOptions {
+	/** An emoji shown above the About text (newer clients only). */
+	emoji?: string
+	/** Seconds until this status reverts to the previous one, or 0/undefined for a permanent one. */
+	ephemeralDurationSec?: number
+}
+
+/** Set our "About" text, and optionally an emoji/an expiry newer clients show above it. The emoji/expiry
+ * go through a `w:mex` mutation that is account-gated - on an account without it the mutation itself
+ * answers with an error, but the legacy IQ below is what actually updates the About text contacts see,
+ * so that one always goes out regardless. */
+export async function updateStatus(
+	request: RequestFn,
+	text: string,
+	o: StatusOptions = {},
+	mex?: MexFn,
+): Promise<void> {
+	if (o.emoji || o.ephemeralDurationSec) {
+		if (!mex) throw new Error('updateStatus: an emoji or an expiry needs the mex function')
+		await mex(UPDATE_TEXT_STATUS_QUERY, {
+			input: {
+				text,
+				...(o.emoji && { emoji: { content: o.emoji } }),
+				ephemeral_duration_sec: o.ephemeralDurationSec ?? 0,
+			},
+		})
+	}
 	await request({
 		tag: 'iq',
 		attrs: { to: 's.whatsapp.net', type: 'set', xmlns: 'status' },
