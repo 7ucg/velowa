@@ -551,6 +551,9 @@ export interface GroupNotification {
 	 * `<participant>` child on an add/remove/promote/demote, the normal way a LID<->phone-number
 	 * pairing is learned for someone just added to a shared group. */
 	participantPhoneNumbers?: Record<string, string>
+	/** A participant's username, keyed by its jid - the server attaches it to the same `<participant>`
+	 * child, alongside `actorUsername` (the one who made the change, not who it was made to). */
+	participantUsernames?: Record<string, string>
 	subject?: string
 	description?: string
 	/** `subject` only: the renamer, when it differs from `actor` (LID-addressed group) - and their PN/username alias. */
@@ -590,16 +593,19 @@ export function parseGroupNotification(node: BinaryNode): GroupNotification[] {
 		const participantNodes = kids(c, 'participant')
 		const participants = participantNodes.map((p) => p.attrs['jid'] ?? '').filter(Boolean)
 		const participantPhoneNumbers: Record<string, string> = {}
+		const participantUsernames: Record<string, string> = {}
 		for (const p of participantNodes) {
 			const jid = p.attrs['jid']
 			const phoneNumber = p.attrs['phone_number']
 			if (jid && phoneNumber) participantPhoneNumbers[jid] = phoneNumber
+			if (jid && p.attrs['username']) participantUsernames[jid] = p.attrs['username']
 		}
 		const n: GroupNotification = {
 			...base,
 			action: c.tag,
 			...(participants.length && { participants }),
 			...(Object.keys(participantPhoneNumbers).length && { participantPhoneNumbers }),
+			...(Object.keys(participantUsernames).length && { participantUsernames }),
 		}
 		if (c.tag === 'subject') {
 			if (c.attrs['subject']) n.subject = c.attrs['subject']

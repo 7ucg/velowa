@@ -293,6 +293,30 @@ describe('parseGroupNotification', () => {
 			participantPhoneNumbers: { 'a@lid': '4915611111111@s.whatsapp.net' },
 		})
 	})
+
+	it("carries each participant's username alongside its jid, when the server sends one", async () => {
+		const { parseGroupNotification } =
+			await import('../../../../src/client/features/group/groups.js')
+		const events = parseGroupNotification({
+			tag: 'notification',
+			attrs: { from: 'g@g.us', type: 'w:gp2' },
+			content: [
+				{
+					tag: 'promote',
+					attrs: {},
+					content: [
+						{ tag: 'participant', attrs: { jid: 'a@lid', username: 'alice' } },
+						{ tag: 'participant', attrs: { jid: 'b@lid' } },
+					],
+				},
+			],
+		})
+		expect(events[0]).toMatchObject({
+			action: 'promote',
+			participants: ['a@lid', 'b@lid'],
+			participantUsernames: { 'a@lid': 'alice' },
+		})
+	})
 })
 
 describe('group permissions and member tag', () => {

@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Added: `GroupNotification.participantUsernames` - a participant's own username, keyed by jid, when the
+  server includes it on the same `<participant>` child as the jid/phone number (distinct from
+  `actorUsername`, which is only the one who made the change).
 - Added: `client.editEvent(key, creator, options)` - edits an event card's details. The delivery stanza
   for this needs `type="event"`, `edit="1"` and a `<meta event_type="edit"/>` child; omitting any of
   them is accepted by the server but silently ignored by the WhatsApp app, so this builds that shape
