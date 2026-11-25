@@ -59,6 +59,7 @@ import type { AntiBanConfig } from './antiban.js'
 import { Sender, generateMessageId } from './sender.js'
 import type { AdminSplitSendOptions, SendOptions } from './sender.js'
 import { AppStateSync, interpret } from './features/chat/appstate-sync.js'
+import type { ChatThemeId } from './features/chat/chat-theme.js'
 import * as act from './features/chat/chat-actions.js'
 import type { RangeMessage } from './features/chat/chat-actions.js'
 import type { AppStateEvent, ChatUpdate, ContactUpdate } from './features/chat/appstate-sync.js'
@@ -874,6 +875,118 @@ export class Client {
 			await this.#stickerBytes(data, { stickerMetadata, stickerConvert }),
 			rest,
 			'lottieStickerMessage',
+		)
+	}
+
+	/**
+	 * Send a `CHAT_THEME_SETTING` protocol message to a chat (group or 1:1). The stanza goes out as `media` with
+	 * the `chat_theme` mediatype WhatsApp expects for a theme change.
+	 */
+	async #sendChatTheme(
+		jid: string,
+		chatThemeSetting: Record<string, unknown>,
+		opts: { messageId?: string } = {},
+	): Promise<string> {
+		const { sender } = await this.#live()
+		return sender.sendMessage(
+			jid,
+			{ protocolMessage: { type: 'CHAT_THEME_SETTING', chatThemeSetting } },
+			{
+				...(opts.messageId && { messageId: opts.messageId }),
+				encAttrs: { mediatype: 'chat_theme' },
+				stanzaAttrs: { type: 'media' },
+			},
+		)
+	}
+
+	/**
+	 * Set a custom image as a chat's wallpaper (group or 1:1), via a `CHAT_THEME_SETTING` protocol message.
+	 * `image` is any image source; it is encrypted and uploaded like a normal image. `dimLevel` (0..1, default 0)
+	 * darkens it behind the messages. Returns the sent message id.
+	 *
+	 * Note: the upload reuses the standard image media encryption. If a WhatsApp build turns out to key chat
+	 * wallpapers under a different label, that is the one thing to adjust - confirm against a live send.
+	 */
+	async setChatWallpaper(
+		jid: string,
+		image: MediaSource,
+		opts: { dimLevel?: number; settingTimestampMs?: number; messageId?: string } = {},
+	): Promise<string> {
+		const enc = media.encryptMedia(await toBytes(image), 'image')
+		const up = await media.uploadMedia(await this.#getMediaConn(), 'image', enc, fetch)
+		return this.#sendChatTheme(
+			jid,
+			{
+				settingTimestampMs: opts.settingTimestampMs ?? Date.now(),
+				customImage: {
+					directPath: up.directPath,
+					mediaKey: enc.mediaKey,
+					fileEncSha256: enc.fileEncSha256,
+					fileSha256: enc.fileSha256,
+					dimLevel: opts.dimLevel ?? 0,
+				},
+			},
+			opts,
+		)
+	}
+
+	/**
+	 * Set a solid-colour background for a chat (group or 1:1). Colours are ARGB integers (e.g. `0xFFFF0000` for
+	 * opaque red); `darkArgb` defaults to `lightArgb`. Optional doodle overlay with its own colours.
+	 */
+	async setChatThemeColor(
+		jid: string,
+		opts: {
+			lightArgb: number
+			darkArgb?: number
+			doodle?: boolean
+			doodleLightArgb?: number
+			doodleDarkArgb?: number
+			settingTimestampMs?: number
+			messageId?: string
+		},
+	): Promise<string> {
+		return this.#sendChatTheme(
+			jid,
+			{
+				settingTimestampMs: opts.settingTimestampMs ?? Date.now(),
+				solidColor: {
+					backgroundLightArgb: opts.lightArgb,
+					backgroundDarkArgb: opts.darkArgb ?? opts.lightArgb,
+					isDoodleEnabled: opts.doodle ?? false,
+					...(opts.doodleLightArgb !== undefined && { doodleLightArgb: opts.doodleLightArgb }),
+					...(opts.doodleDarkArgb !== undefined && { doodleDarkArgb: opts.doodleDarkArgb }),
+				},
+			},
+			opts,
+		)
+	}
+
+	/**
+	 * Apply one of WhatsApp's preset chat themes to a chat (group or 1:1) by its id (see `CHAT_THEME_IDS`),
+	 * e.g. `'Emerald@Minimal'`.
+	 */
+	async setChatTheme(
+		jid: string,
+		colorSchemeId: ChatThemeId | (string & {}),
+		opts: { settingTimestampMs?: number; messageId?: string } = {},
+	): Promise<string> {
+		return this.#sendChatTheme(
+			jid,
+			{ settingTimestampMs: opts.settingTimestampMs ?? Date.now(), colorSchemeId },
+			opts,
+		)
+	}
+
+	/** Clear a chat's custom theme / wallpaper, returning it to the default. */
+	async clearChatTheme(
+		jid: string,
+		opts: { settingTimestampMs?: number; messageId?: string } = {},
+	): Promise<string> {
+		return this.#sendChatTheme(
+			jid,
+			{ settingTimestampMs: opts.settingTimestampMs ?? Date.now(), clearTheme: true },
+			opts,
 		)
 	}
 

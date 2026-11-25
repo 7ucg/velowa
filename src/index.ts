@@ -144,6 +144,8 @@ export {
 	toStickerWebp,
 } from './client/features/message/sticker-convert.js'
 export type { StickerConvertOptions } from './client/features/message/sticker-convert.js'
+export { CHAT_THEME_IDS } from './client/features/chat/chat-theme.js'
+export type { ChatThemeId } from './client/features/chat/chat-theme.js'
 export type {
 	BotDirectory,
 	BotEntry,

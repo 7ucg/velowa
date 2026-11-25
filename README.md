@@ -547,6 +547,25 @@ const reactedTo = stickerReactionParentKey(m.raw.message) // key of the reacted 
 > API side too. This is automatic and best-effort — a hosted device that cannot be keyed is skipped, never
 > breaking the send. Groups and calls leave hosted devices out, as before.
 
+### Chat theme and wallpaper
+
+Set a chat's theme or wallpaper (works for a group or a 1:1 chat) with a `CHAT_THEME_SETTING` message:
+
+```ts
+import { CHAT_THEME_IDS } from 'velowa'
+
+await client.setChatWallpaper(jid, { path: './bg.jpg' }, { dimLevel: 0.3 }) // a custom image (any format)
+await client.setChatThemeColor(jid, { lightArgb: 0xffff0000 }) // a solid colour (ARGB; darkArgb defaults to it)
+await client.setChatTheme(jid, 'Emerald@Minimal') // a preset theme - the ids are in CHAT_THEME_IDS
+await client.clearChatTheme(jid) // back to the default theme
+```
+
+`setChatWallpaper` encrypts and uploads the image like any other media (needs no extra setup). Colours are ARGB
+integers, e.g. `0xFFFF0000` for opaque red; `setChatThemeColor` also takes `doodle`, `doodleLightArgb`,
+`doodleDarkArgb`. The preset ids in `CHAT_THEME_IDS` are `Default-Blue@Minimal`, `Emerald@Minimal`,
+`Pink@Minimal`, `Red@Minimal`, `Royal-Blue@Minimal`, `Tyrian-Purple@Minimal`, `WhatsApp-Green@Minimal` and their
+`@Tonal` variants.
+
 ### Buttons, lists and rich answers
 
 ```ts

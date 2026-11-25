@@ -27,6 +27,10 @@ export interface StickerConvertOptions {
 	quality?: number
 	/** Largest WebP to accept, in bytes (default 2 MiB); conversion fails rather than emit more. */
 	maxBytes?: number
+	/** Largest input to accept, in bytes (default 64 MiB); rejected before `ffmpeg` is even started. */
+	maxInputBytes?: number
+	/** Wall-clock limit for the `ffmpeg` run, in ms (default 60_000); it is SIGKILLed past this. */
+	timeoutMs?: number
 }
 
 /**
@@ -41,6 +45,10 @@ export function toStickerWebp(
 	const size = opts.size ?? 512
 	const quality = opts.quality ?? 75
 	const maxBytes = opts.maxBytes ?? 2 * 1024 * 1024
+	const maxInputBytes = opts.maxInputBytes ?? 64 * 1024 * 1024
+	const timeoutMs = opts.timeoutMs ?? 60_000
+	if (bytes.length > maxInputBytes)
+		return Promise.reject(new Error(`sticker source exceeds ${maxInputBytes} bytes`))
 	const args = [
 		'-v',
 		'error',
@@ -64,32 +72,51 @@ export function toStickerWebp(
 		'pipe:1',
 	]
 	return new Promise((resolve, reject) => {
-		const p = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] })
+		// `timeout` makes Node send `killSignal` (SIGKILL) if ffmpeg runs too long - a hard wall-clock cap.
+		const p = spawn('ffmpeg', args, {
+			stdio: ['pipe', 'pipe', 'pipe'],
+			timeout: timeoutMs,
+			killSignal: 'SIGKILL',
+		})
 		const out: Buffer[] = []
 		const err: Buffer[] = []
-		let size2 = 0
-		let killed = false
+		let outSize = 0
+		let errSize = 0
+		let done = false
+		const fail = (e: Error): void => {
+			if (done) return
+			done = true
+			p.stdout.destroy()
+			p.stdin.destroy()
+			p.kill('SIGKILL')
+			reject(e)
+		}
 		p.stdout.on('data', (d: Buffer) => {
-			size2 += d.length
-			if (size2 > maxBytes) {
-				killed = true
-				p.kill()
-				reject(new Error(`sticker conversion exceeded ${maxBytes} bytes`))
-				return
-			}
+			outSize += d.length
+			if (outSize > maxBytes)
+				return fail(new Error(`sticker conversion exceeded ${maxBytes} bytes`))
 			out.push(d)
 		})
-		p.stderr.on('data', (d: Buffer) => err.push(d))
+		p.stderr.on('data', (d: Buffer) => {
+			// Keep only the first 64 KiB of diagnostics so a chatty/hostile ffmpeg cannot grow memory.
+			if (errSize < 64 * 1024) {
+				err.push(d)
+				errSize += d.length
+			}
+		})
 		p.on('error', (e) =>
-			reject(
+			fail(
 				new Error(
 					`ffmpeg could not be started (needed to convert a non-WebP sticker): ${e.message}`,
 				),
 			),
 		)
-		p.on('close', (code) => {
-			if (killed) return
+		p.on('close', (code, signal) => {
+			if (done) return
+			done = true
 			if (code === 0) resolve(new Uint8Array(Buffer.concat(out)))
+			else if (signal === 'SIGKILL')
+				reject(new Error(`ffmpeg sticker conversion timed out after ${timeoutMs} ms`))
 			else
 				reject(
 					new Error(
@@ -107,5 +134,11 @@ export async function ensureStickerWebp(
 	bytes: Uint8Array,
 	opts: StickerConvertOptions = {},
 ): Promise<Uint8Array> {
-	return isWebp(bytes) ? bytes : toStickerWebp(bytes, opts)
+	if (isWebp(bytes)) {
+		// The cap applies to a pass-through WebP too, so an oversized one never slips past unconverted.
+		const maxBytes = opts.maxBytes ?? 2 * 1024 * 1024
+		if (bytes.length > maxBytes) throw new Error(`sticker WebP exceeds ${maxBytes} bytes`)
+		return bytes
+	}
+	return toStickerWebp(bytes, opts)
 }
