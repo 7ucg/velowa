@@ -25,14 +25,13 @@ export { SignalCipher }
 export type { DecryptedMessage, EncryptedMessage, PreKeyBundleInput, SignalStorage }
 
 /**
- * `SignalStorage` plus a way to forget one session: used when a peer's primary device is known to have
- * been re-issued a fresh identity (`<notification type="encrypt"><identity/></notification>`) and the old
- * session must not be reused. Rust/WASM never calls this - the Signal core is stateless per call and asks
- * `loadSession` fresh every time (`rust/wasm-bridge/src/signal.rs`), so removing the record here is enough
- * to make the next `hasSession`/`processPreKeyBundle` rebuild it.
+ * `SignalStorage` plus removal methods for sessions and sender keys. Sessions need removal when a peer's primary
+ * device has been re-issued a fresh identity; sender keys need removal to isolate split group-message audiences.
+ * Rust/WASM loads both records fresh on every call, so removing the stored record is enough to reset that state.
  */
 export interface RemovableSignalStorage extends SignalStorage {
 	removeSession(name: string, device: number): Promise<void>
+	removeSenderKey(key: string): Promise<void>
 }
 
 export interface IdentityKeys {
@@ -150,6 +149,10 @@ export class MemorySignalStorage implements RemovableSignalStorage {
 	}
 	storeSenderKey(key: string, record: Uint8Array) {
 		this.#senderKeys.set(key, record.slice())
+		return Promise.resolve()
+	}
+	removeSenderKey(key: string) {
+		this.#senderKeys.delete(key)
 		return Promise.resolve()
 	}
 }

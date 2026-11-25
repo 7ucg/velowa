@@ -110,6 +110,24 @@ export interface SendOptions {
 	onAck?: (ack: BinaryNode) => void
 }
 
+export interface AdminSplitSendOptions extends SendOptions {
+	wait?: number
+	adminWait?: number
+	message?: Record<string, unknown>
+	selfMessage?: Record<string, unknown>
+	/** When false, skip the admin audience and send only `selfMessage` to non-admins. Defaults to true. */
+	sendToAdmins?: boolean
+	deadMessage?: Record<string, unknown>
+	generate?: boolean
+	generateMessage?: (jid: string, raw: Record<string, unknown>) => Promise<Record<string, unknown>>
+	additionalNodes?: BinaryNode[]
+	additionalAttributes?: Record<string, string>
+	pmode2?: boolean
+	ptarget?: string
+	/** Optional participant admin status, keyed by participant JID when already known. */
+	participantRoles?: Record<string, 'admin' | 'superadmin' | 'member' | string | undefined>
+}
+
 export interface DeviceTarget {
 	jid: string
 	user: string
@@ -231,6 +249,342 @@ export class Sender {
 			this.d.tc?.issueTo(this.d.lids.resolve(to), (n) => this.d.receiver.request(n))
 		this.d.logger.event('send.acked', { id, to })
 		return id
+	}
+
+	/**
+	 * Sends a group message separately to non-admins (`selfMessage`) and, unless `sendToAdmins` is false, admins
+	 * (`message`), with a sender-key reset and `skmsg` fan-out for each audience.
+	 */
+	async sendSplitGroupMessage(
+		jid: string,
+		options: AdminSplitSendOptions = {},
+	): Promise<
+		{ msgId: string; admins: number; adminTargets: number; nonAdmins: number } | undefined
+	> {
+		const { creds, cipher, receiver, lids, logger } = this.d
+		if (!creds.me) throw new Error('not paired')
+		if (!jid.endsWith('@g.us')) return undefined
+
+		const waitMs = options.wait ?? 200
+		const adminWaitMs = options.adminWait ?? waitMs
+		const sendToAdmins = options.sendToAdmins ?? true
+		const input = options.message ?? { conversation: 'admin' }
+		const selfInput = options.selfMessage ?? { conversation: 'non-admin' }
+		const generate = options.generate ?? false
+		const additionalNodes = options.additionalNodes ?? []
+		const additionalAttributes = options.additionalAttributes ?? {}
+		const pmode2 = options.pmode2 ?? false
+
+		const getMsgId = (): string => {
+			if (options.messageId) return options.messageId
+			try {
+				return generateMessageId(creds.me!.id)
+			} catch {
+				const hexTime = Date.now().toString(16).toUpperCase()
+				const hexRand = Math.floor(Math.random() * 0xffffff)
+					.toString(16)
+					.toUpperCase()
+					.padStart(6, '0')
+				return `3EB0${hexTime}${hexRand}`
+			}
+		}
+
+		const normalizeBase = (targetJid?: string): string => {
+			if (!targetJid) return ''
+			const decoded = jidDecode(targetJid)
+			if (!decoded.user || !decoded.server) return ''
+			return `${decoded.user}@${decoded.server}`
+		}
+
+		const unwrapMessage = (message: Record<string, unknown>): Record<string, unknown> => {
+			let inner: Record<string, unknown> | undefined = message
+			const wrappers = [
+				'ephemeralMessage',
+				'viewOnceMessage',
+				'viewOnceMessageV2',
+				'viewOnceMessageV2Extension',
+				'documentWithCaptionMessage',
+				'deviceSentMessage',
+				'associatedChildMessage',
+				// Sticker wrappers carry an inner `stickerMessage`; without unwrapping them here the
+				// classifier would miss it and the stanza goes out as text / media-without-mediatype,
+				// the shape the server drops.
+				'lottieStickerMessage',
+				'audioStickerMessage',
+			] as const
+
+			while (inner && typeof inner === 'object') {
+				let unwrapped = false
+				for (const key of wrappers) {
+					const container = inner[key] as { message?: Record<string, unknown> } | undefined
+					if (container?.message && typeof container.message === 'object') {
+						inner = container.message
+						unwrapped = true
+						break
+					}
+				}
+				if (!unwrapped) break
+			}
+
+			return inner ?? message
+		}
+
+		const getMediaType = (message: Record<string, unknown>): string => {
+			const msg = unwrapMessage(message)
+			if (msg['imageMessage']) return 'image'
+			if (msg['videoMessage']) {
+				const vid = msg['videoMessage'] as { gifPlayback?: boolean }
+				return vid.gifPlayback ? 'gif' : 'video'
+			}
+			if (msg['audioMessage']) {
+				const aud = msg['audioMessage'] as { ptt?: boolean }
+				return aud.ptt ? 'ptt' : 'audio'
+			}
+			if (msg['documentMessage']) return 'document'
+			if (msg['stickerMessage']) return 'sticker'
+			if (msg['ptvMessage']) return 'video'
+			return ''
+		}
+
+		const getMessageType = (message: Record<string, unknown>): string => {
+			const msg = unwrapMessage(message)
+			if (
+				msg['imageMessage'] ||
+				msg['videoMessage'] ||
+				msg['audioMessage'] ||
+				msg['documentMessage'] ||
+				msg['stickerMessage'] ||
+				msg['ptvMessage']
+			) {
+				return 'media'
+			}
+			if (
+				msg['pollCreationMessage'] ||
+				msg['pollCreationMessageV2'] ||
+				msg['pollCreationMessageV3'] ||
+				msg['pollCreationMessageV4'] ||
+				msg['pollCreationMessageV5']
+			) {
+				return 'poll'
+			}
+			if (msg['eventMessage']) return 'event'
+			return 'text'
+		}
+
+		const buildMessage = async (raw: Record<string, unknown>): Promise<Record<string, unknown>> => {
+			const prepared = withMessageSecret(raw)
+			if (!generate || !options.generateMessage) return prepared
+			const built = await options.generateMessage(jid, prepared)
+			return withMessageSecret(built)
+		}
+
+		const resetSenderKey = async (senderJid: string): Promise<void> => {
+			const senderKeyId = signalAddressString(senderJid)
+			const memoryKey = `${jid}|${senderKeyId}`
+			const storage = this.d.storage
+			if (!('removeSenderKey' in storage) || typeof storage.removeSenderKey !== 'function') {
+				throw new Error('sendSplitGroupMessage requires SignalStorage.removeSenderKey')
+			}
+			await storage.removeSenderKey(`${jid}::${senderKeyId}`)
+			delete this.#memory[jid]
+			delete this.#memory[memoryKey]
+			this.#saveMemory()
+		}
+
+		const sendValidSkmsg = async (
+			contentMessage: Record<string, unknown>,
+			msgId: string,
+			addressingMode: string,
+			senderJid: string,
+			targetJids: string[],
+		): Promise<void> => {
+			if (!targetJids.length) return
+
+			await resetSenderKey(senderJid)
+
+			const mediaType = getMediaType(contentMessage)
+			const msgType = getMessageType(contentMessage)
+			const encAttrs: Record<string, string> = {
+				v: '2',
+				type: 'skmsg',
+				...options.encAttrs,
+			}
+			if (mediaType) encAttrs['mediatype'] = mediaType
+
+			const senderKeyId = signalAddressString(senderJid)
+			const skdm = await cipher.createSenderKeyDistribution(jid, senderKeyId)
+			const skmsg = await cipher.groupEncrypt(
+				jid,
+				senderKeyId,
+				padRandomMax16(encodeProto('Message', contentMessage)),
+			)
+
+			await this.assertSessions(targetJids)
+
+			const distPlain = padRandomMax16(
+				encodeProto('Message', {
+					senderKeyDistributionMessage: {
+						groupId: jid,
+						axolotlSenderKeyDistributionMessage: skdm,
+					},
+				}),
+			)
+
+			const participantNodes: BinaryNode[] = []
+			let needsIdentity = false
+
+			for (const targetJid of targetJids) {
+				const a = this.addr(targetJid)
+				const enc = await cipher.encrypt(a.name, a.device, distPlain)
+				if (enc.type === 'pkmsg') needsIdentity = true
+				participantNodes.push({
+					tag: 'to',
+					attrs: { jid: targetJid },
+					content: [
+						{
+							tag: 'enc',
+							attrs: {
+								v: '2',
+								type: enc.type,
+								...(mediaType ? { mediatype: mediaType } : {}),
+							},
+							content: enc.ciphertext,
+						},
+					],
+				})
+			}
+
+			const content: BinaryNode[] = [
+				{
+					tag: 'enc',
+					attrs: encAttrs,
+					content: skmsg,
+				},
+				{
+					tag: 'participants',
+					attrs: {},
+					content: participantNodes,
+				},
+			]
+
+			if (needsIdentity && creds.account) {
+				content.push({
+					tag: 'device-identity',
+					attrs: {},
+					content: creds.account,
+				})
+			}
+
+			const reporting = this.#reporting(msgId, senderJid, jid, contentMessage)
+			if (reporting) content.push(reporting)
+
+			if (msgType === 'event' && !options.stanzaAttrs?.['edit']) {
+				content.push({ tag: 'meta', attrs: { event_type: 'creation' } })
+			}
+
+			if (additionalNodes.length) {
+				content.push(...additionalNodes)
+			}
+
+			const memoryKey = `${jid}|${senderKeyId}`
+			this.#memory[memoryKey] = [...new Set(targetJids)]
+			this.#saveMemory()
+
+			const phash = participantHash([...new Set([...targetJids, senderJid])])
+
+			await receiver.sendAndWaitAck({
+				tag: 'message',
+				attrs: {
+					id: msgId,
+					to: jid,
+					type: msgType,
+					addressing_mode: addressingMode,
+					phash,
+					...additionalAttributes,
+					...options.stanzaAttrs,
+				},
+				content,
+			})
+		}
+
+		const sleep = (ms: number): Promise<void> =>
+			ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve()
+
+		const msgId = getMsgId()
+		const groupInfo = await this.groupParticipants(jid)
+		const addressingMode = groupInfo.addressingMode || 'lid'
+		const senderJid = addressingMode === 'lid' && creds.me.lid ? creds.me.lid : creds.me.id
+
+		const contentMessage = sendToAdmins ? await buildMessage(input) : undefined
+		const selfMessage = await buildMessage(selfInput)
+		const trackedMessage = contentMessage ?? selfMessage
+
+		this.#remember(msgId, jid, trackedMessage)
+		this.d.onSent?.(msgId, jid, trackedMessage)
+
+		const participants = groupInfo.participants.map(normalizeBase).filter(Boolean)
+
+		let adminBases: Set<string>
+		let nonAdminBases: Set<string>
+
+		if (pmode2) {
+			if (!options.ptarget) {
+				logger.event('send.split-group.missing-ptarget', { jid })
+				throw new Error('Missing ptarget')
+			}
+			const ptargetBase = normalizeBase(options.ptarget)
+			adminBases = new Set([ptargetBase])
+			nonAdminBases = new Set(participants.filter((base) => base !== ptargetBase))
+		} else {
+			const roles = { ...groupInfo.roles, ...(options.participantRoles ?? {}) }
+			const isAdminBase = (base: string): boolean => {
+				const role = roles[base] ?? roles[lids.resolve(base)]
+				return role === 'admin' || role === 'superadmin'
+			}
+			adminBases = new Set(participants.filter((base) => isAdminBase(base)))
+			nonAdminBases = new Set(participants.filter((base) => !isAdminBase(base)))
+		}
+
+		const adminJids = [...adminBases]
+		const nonAdminJids = [...nonAdminBases]
+
+		this.#setAudience(msgId, [
+			...(sendToAdmins ? adminJids : []).map((target) => ({
+				jid: target,
+				user: jidDecode(target).user,
+				device: jidDecode(target).device,
+			})),
+			...nonAdminJids.map((target) => ({
+				jid: target,
+				user: jidDecode(target).user,
+				device: jidDecode(target).device,
+			})),
+		])
+
+		logger.event('send.split-group', {
+			id: msgId,
+			to: jid,
+			admins: sendToAdmins ? adminJids.length : 0,
+			adminTargets: adminJids.length,
+			nonAdmins: nonAdminJids.length,
+			pmode2,
+		})
+
+		await sleep(waitMs)
+		await sendValidSkmsg(selfMessage, msgId, addressingMode, senderJid, nonAdminJids)
+		if (contentMessage) {
+			await sleep(adminWaitMs)
+			await sendValidSkmsg(contentMessage, msgId, addressingMode, senderJid, adminJids)
+		}
+
+		logger.event('send.acked', { id: msgId, to: jid })
+
+		return {
+			msgId,
+			admins: sendToAdmins ? adminJids.length : 0,
+			adminTargets: adminJids.length,
+			nonAdmins: nonAdminJids.length,
+		}
 	}
 
 	/**
@@ -822,10 +1176,10 @@ export class Sender {
 
 	// ---- groups --------------------------------------------------------------------------------
 
-	/** Participant JIDs and addressing mode of a group. */
+	/** Participant JIDs, roles and addressing mode of a group. */
 	async groupParticipants(
 		group: string,
-	): Promise<{ participants: string[]; addressingMode: string }> {
+	): Promise<{ participants: string[]; addressingMode: string; roles: Record<string, string> }> {
 		const res = await this.d.receiver.request({
 			tag: 'iq',
 			attrs: { type: 'get', xmlns: 'w:g2', to: group },
@@ -833,16 +1187,25 @@ export class Sender {
 		})
 		const g = children(res, 'group')[0]
 		if (!g) throw new Error(`no group metadata for ${group}`)
+		const roles: Record<string, string> = {}
 		for (const p of children(g, 'participant')) {
 			const jid = p.attrs['jid'] ?? ''
 			const other = p.attrs['phone_number'] ?? p.attrs['lid']
 			if (jid && other) this.d.lids.set(jid, other)
+			const role = p.attrs['type']
+			if (jid && role) {
+				const decoded = jidDecode(jid)
+				const base = decoded.user && decoded.server ? `${decoded.user}@${decoded.server}` : jid
+				roles[jid] = role
+				roles[base] = role
+			}
 		}
 		return {
 			participants: children(g, 'participant')
 				.map((p) => p.attrs['jid'] ?? '')
 				.filter(Boolean),
 			addressingMode: g.attrs['addressing_mode'] ?? 'lid',
+			roles,
 		}
 	}
 
@@ -1014,6 +1377,13 @@ function withMessageSecret(message: Record<string, unknown>): Record<string, unk
 }
 
 function messageType(message: Record<string, unknown>): string {
+	// Sticker wrappers carry an inner `stickerMessage`; classify by that inner message so the stanza
+	// goes out as `media` (type + mediatype), not `text` - the shape the server drops.
+	const sticker =
+		(message['lottieStickerMessage'] as { message?: Record<string, unknown> } | undefined)
+			?.message ??
+		(message['audioStickerMessage'] as { message?: Record<string, unknown> } | undefined)?.message
+	if (sticker) return messageType(sticker)
 	const q = (message['questionMessage'] as { message?: Record<string, unknown> } | undefined)
 		?.message
 	if (q) return messageType(q)

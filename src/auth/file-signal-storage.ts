@@ -107,4 +107,8 @@ export class FileSignalStorage implements RemovableSignalStorage {
 		this.#write('sender-keys', key, record)
 		return Promise.resolve()
 	}
+	removeSenderKey(key: string) {
+		rmSync(this.#path('sender-keys', key), { force: true })
+		return Promise.resolve()
+	}
 }

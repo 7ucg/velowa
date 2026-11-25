@@ -57,7 +57,7 @@ import type { DecodedMessage } from './receiver.js'
 import { AntiBan } from './antiban.js'
 import type { AntiBanConfig } from './antiban.js'
 import { Sender, generateMessageId } from './sender.js'
-import type { SendOptions } from './sender.js'
+import type { AdminSplitSendOptions, SendOptions } from './sender.js'
 import { AppStateSync, interpret } from './features/chat/appstate-sync.js'
 import * as act from './features/chat/chat-actions.js'
 import type { RangeMessage } from './features/chat/chat-actions.js'
@@ -559,6 +559,18 @@ export class Client {
 	): Promise<string> {
 		const { sender } = await this.#live()
 		return sender.sendMessage(to, message, opts)
+	}
+
+	/**
+	 * Send different raw WAProto message content to admins and non-admins in a group.
+	 * The participant roles are read from the group metadata.
+	 */
+	async sendSplitGroupMessage(
+		groupJid: string,
+		options: AdminSplitSendOptions = {},
+	): Promise<{ msgId: string; admins: number; adminTargets: number; nonAdmins: number } | undefined> {
+		const { sender } = await this.#live()
+		return sender.sendSplitGroupMessage(groupJid, options)
 	}
 
 	/**

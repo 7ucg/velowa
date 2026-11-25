@@ -144,6 +144,7 @@ export async function world(
 			regId: number
 			deviceIdentity?: (identity: { publicKey: Uint8Array; privateKey: Uint8Array }) => Uint8Array
 		}
+		groupAdmin?: string
 		/**
 		 * Signs a `<key-index-list>` for bob with bob0's own identity (so it is a valid trust anchor once
 		 * `assertSessions` verifies bob0's device-identity - also pass `bob0DeviceIdentity` for that) and
@@ -274,10 +275,16 @@ export async function world(
 				const parts = [bob0, bob1].map(
 					(r) => ({ tag: 'participant', attrs: { jid: r.jid.replace(/:\d+/, '') } }) as BinaryNode,
 				)
+				const participants = [parts[0]!]
+				if (opts.groupAdmin)
+					participants.push({
+						tag: 'participant',
+						attrs: { jid: opts.groupAdmin, type: 'admin' },
+					})
 				return reply(id, {
 					tag: 'iq',
 					attrs: { type: 'result' },
-					content: [{ tag: 'group', attrs: { addressing_mode: 'pn' }, content: [parts[0]!] }],
+					content: [{ tag: 'group', attrs: { addressing_mode: 'pn' }, content: participants }],
 				})
 			}
 		},

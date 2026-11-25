@@ -342,6 +342,48 @@ The older specific methods stay and take the same arguments in a more explicit f
 `sendVideo`, `sendAudio`, `sendDocument`, `sendSticker`, `sendMedia`, `sendPoll`, `sendLocation`, `sendContact`,
 `react`, `edit`, `revoke`, `forwardMessage`, `sendMessage` for a raw WhatsApp message object).
 
+### Send different group messages to admins and members
+
+With `sendSplitGroupMessage()`, the same group JID can receive one message for admins and a different one for
+non-admins. The roles are read automatically from the group metadata:
+
+```ts
+const result = await client.sendSplitGroupMessage('1234567890-123456789@g.us', {
+    selfMessage: { conversation: 'Message for non-admins' },
+    message: { conversation: 'Message for admins' },
+    wait: 200,
+    adminWait: 200,
+})
+
+console.log(result)
+// { msgId: '3EB0...', admins: 2, nonAdmins: 15 }
+```
+
+### Important options (`AdminSplitSendOptions`)
+
+- **`message`**: The (`WAProto`) plain-object message sent to **admins** (`admin` / `superadmin`)
+  (default: `{ conversation: 'admin' }`).
+- **`selfMessage`**: The message sent to **non-admins**
+  (default: `{ conversation: 'non-admin' }`).
+- **`sendToAdmins`**: Set to `false` to skip admins and send only `selfMessage` to non-admins (default: `true`).
+- **`wait` / `adminWait`**: Delay in milliseconds before the corresponding send (default: `200` ms).
+- **`pmode2` & `ptarget`**: When `pmode2: true`, only the participant specified by `ptarget` receives
+  `message`; all other participants receive `selfMessage`.
+- **`participantRoles`**: Optional mapping (`Record<string, string>`) for known or overridden participant roles.
+- **`messageId`, `additionalNodes`, `additionalAttributes`, `encAttrs`, `stanzaAttrs`**: Optional overrides
+  equivalent to `SendOptions`.
+
+### Example with `pmode2` and `ptarget`
+
+```ts
+await client.sendSplitGroupMessage('1234567890-123456789@g.us', {
+    pmode2: true,
+    ptarget: '4915112345678@s.whatsapp.net',
+    selfMessage: { conversation: 'For everyone else' },
+    message: { conversation: 'Only for ptarget' },
+})
+```
+
 ## Writing a bot: your style
 
 velowa does not prescribe how a bot is organised. Two complete, runnable examples show the two common ways;

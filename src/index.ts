@@ -64,7 +64,7 @@ export type {
 } from './client/features/message/interactive.js'
 export { pollOptionHash, vcardFor } from './client/features/message/extras.js'
 export { deviceOf } from './client/sender.js'
-export type { MessageIdDevice } from './client/sender.js'
+export type { AdminSplitSendOptions, MessageIdDevice } from './client/sender.js'
 export { getFakeMsg } from './client/features/contact/fake-chat.js'
 export type { FakeMsg, FakeChatDetected } from './client/features/contact/fake-chat.js'
 export type { MessageKey, Quoted, TextOptions } from './client/features/message/messages.js'

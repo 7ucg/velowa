@@ -158,6 +158,82 @@ describe('Sender: groups', () => {
 		void creds
 	})
 
+	it('can skip admins and send only to non-admins', async () => {
+		const group = '120363000000000001@g.us'
+		const adminJid = '4915622222222@s.whatsapp.net'
+		const { sender, stanzas, bob0, extra } = await world({
+			extraRemote: { jid: adminJid, regId: 4 },
+			groupAdmin: adminJid,
+		})
+		await sender.sendText(group, 'shared before split')
+		const initial = stanzas[0]!
+		const adminDistribution = kids(kids(initial, 'participants')[0]!, 'to').find(
+			(p) => p.attrs['jid'] === adminJid,
+		)!
+		const adminEnc = kids(adminDistribution, 'enc')[0]!
+		const adminPlaintext = await extra!.cipher.decrypt(
+			'4915600000000',
+			23,
+			'pkmsg',
+			adminEnc.content as Uint8Array,
+		)
+		const adminSkdm = decodeMsg(adminPlaintext.plaintext)['senderKeyDistributionMessage']
+		await extra!.cipher.processSenderKeyDistribution(
+			group,
+			'4915600000000.23',
+			new Uint8Array(adminSkdm.axolotlSenderKeyDistributionMessage),
+		)
+		const result = await sender.sendSplitGroupMessage(group, {
+			message: { conversation: 'must not reach admins' },
+			selfMessage: { conversation: 'members only' },
+			sendToAdmins: false,
+			wait: 0,
+			adminWait: 0,
+		})
+
+		expect(result).toMatchObject({ admins: 0, adminTargets: 1, nonAdmins: 1 })
+		expect(stanzas).toHaveLength(2)
+		const splitStanza = stanzas[1]!
+		const splitParticipants = kids(kids(splitStanza, 'participants')[0]!, 'to')
+		expect(splitParticipants.map((p) => p.attrs['jid'])).toEqual([bob0.jid])
+		const participant = splitParticipants.find((p) => p.attrs['jid'] === bob0.jid)!
+		const distribution = kids(participant, 'enc')[0]!
+		const decrypted = await bob0.cipher.decrypt(
+			'4915600000000',
+			23,
+			'pkmsg',
+			distribution.content as Uint8Array,
+		)
+		await bob0.cipher.processSenderKeyDistribution(
+			group,
+			'4915600000000.23',
+			new Uint8Array(
+				decodeMsg(decrypted.plaintext)['senderKeyDistributionMessage']
+					.axolotlSenderKeyDistributionMessage,
+			),
+		)
+		const skmsg = kids(splitStanza, 'enc')[0]!
+		const plaintext = await bob0.cipher.groupDecrypt(
+			group,
+			'4915600000000.23',
+			skmsg.content as Uint8Array,
+		)
+		expect(decodeMsg(plaintext)['conversation']).toBe('members only')
+		await expect(
+			extra!.cipher.groupDecrypt(group, '4915600000000.23', skmsg.content as Uint8Array),
+		).rejects.toThrow()
+
+		const allAdmins = await world()
+		const adminResult = await allAdmins.sender.sendSplitGroupMessage(group, {
+			selfMessage: { conversation: 'nobody should receive this' },
+			sendToAdmins: false,
+			participantRoles: { '4915611111111@s.whatsapp.net': 'admin' },
+			wait: 0,
+		})
+		expect(adminResult).toMatchObject({ admins: 0, adminTargets: 1, nonAdmins: 0 })
+		expect(allAdmins.stanzas).toHaveLength(0)
+	})
+
 	it('distributes the sender key again after the device was linked again (new device number)', async () => {
 		const { sender, stanzas, bob0, creds } = await world()
 		const group = '120363000000000001@g.us'
@@ -198,6 +274,27 @@ describe('Sender: channel polls and rich posts', () => {
 		expect(stanzas[1]!.attrs['type']).toBe('poll')
 		expect(kids(stanzas[1]!, 'meta')[0]!.attrs).toEqual({ polltype: 'creation' }) // the server answers 479 without it
 	})
+})
+
+describe('Sender: sticker-wrapper classification', () => {
+	// A message wrapped in audioStickerMessage / lottieStickerMessage carries an inner stickerMessage.
+	// The classifier must unwrap it so the stanza goes out as `media`, not `text` (which the server drops).
+	for (const wrapper of ['audioStickerMessage', 'lottieStickerMessage'] as const) {
+		it(`sends a ${wrapper} as type=media on the 1:1 path`, async () => {
+			const { sender, stanzas } = await world()
+			await sender.sendMessage('4915611111111@s.whatsapp.net', {
+				[wrapper]: { message: { stickerMessage: { url: 'https://x', fileLength: 1 } } },
+			})
+			expect(stanzas[0]!.attrs['type']).toBe('media')
+		})
+		it(`sends a ${wrapper} as type=media on the group path`, async () => {
+			const { sender, stanzas } = await world()
+			await sender.sendMessage('120363000000000001@g.us', {
+				[wrapper]: { message: { stickerMessage: { url: 'https://x', fileLength: 1 } } },
+			})
+			expect(stanzas[0]!.attrs['type']).toBe('media')
+		})
+	}
 })
 
 describe('Sender: retry receipts', () => {
