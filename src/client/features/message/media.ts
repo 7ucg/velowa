@@ -49,12 +49,17 @@ export const MEDIA_HOST = 'mmg.whatsapp.net'
 const ORIGIN = 'https://web.whatsapp.com'
 const MAC_LENGTH = 10
 
-/** iv, AES key and HMAC key from a 32-byte media key: HKDF-SHA256 -> 112 bytes. */
-export function mediaKeys(mediaKey: Uint8Array, type: BlobType) {
+/** iv, AES key and HMAC key from a 32-byte media key and the raw HKDF label word (e.g. "Image"). */
+export function mediaKeysForLabel(mediaKey: Uint8Array, label: string) {
 	const okm = Buffer.from(
-		hkdfSync('sha256', mediaKey, Buffer.alloc(0), `WhatsApp ${HKDF_LABEL[type]} Keys`, 112),
+		hkdfSync('sha256', mediaKey, Buffer.alloc(0), `WhatsApp ${label} Keys`, 112),
 	)
 	return { iv: okm.subarray(0, 16), cipherKey: okm.subarray(16, 48), macKey: okm.subarray(48, 80) }
+}
+
+/** iv, AES key and HMAC key from a 32-byte media key: HKDF-SHA256 -> 112 bytes. */
+export function mediaKeys(mediaKey: Uint8Array, type: BlobType) {
+	return mediaKeysForLabel(mediaKey, HKDF_LABEL[type])
 }
 
 export interface EncryptedMedia {
@@ -66,12 +71,13 @@ export interface EncryptedMedia {
 	fileLength: number
 }
 
-export function encryptMedia(
+/** Encrypt media with an explicit HKDF label word (for media types velowa has no `BlobType` for, e.g. a chat wallpaper). */
+export function encryptMediaWithLabel(
 	plain: Uint8Array,
-	type: BlobType,
+	label: string,
 	mediaKey: Buffer = randomBytes(32),
 ): EncryptedMedia {
-	const { iv, cipherKey, macKey } = mediaKeys(mediaKey, type)
+	const { iv, cipherKey, macKey } = mediaKeysForLabel(mediaKey, label)
 	const cipher = createCipheriv('aes-256-cbc', cipherKey, iv)
 	const body = Buffer.concat([cipher.update(plain), cipher.final()])
 	const mac = createHmac('sha256', macKey).update(iv).update(body).digest().subarray(0, MAC_LENGTH)
@@ -83,6 +89,14 @@ export function encryptMedia(
 		fileEncSha256: createHash('sha256').update(encrypted).digest(),
 		fileLength: plain.length,
 	}
+}
+
+export function encryptMedia(
+	plain: Uint8Array,
+	type: BlobType,
+	mediaKey: Buffer = randomBytes(32),
+): EncryptedMedia {
+	return encryptMediaWithLabel(plain, HKDF_LABEL[type], mediaKey)
 }
 
 /** Channel media is uploaded unencrypted; the upload token is the hash of the file itself. */
