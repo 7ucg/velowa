@@ -568,7 +568,9 @@ export class Client {
 	async sendSplitGroupMessage(
 		groupJid: string,
 		options: AdminSplitSendOptions = {},
-	): Promise<{ msgId: string; admins: number; adminTargets: number; nonAdmins: number } | undefined> {
+	): Promise<
+		{ msgId: string; admins: number; adminTargets: number; nonAdmins: number } | undefined
+	> {
 		const { sender } = await this.#live()
 		return sender.sendSplitGroupMessage(groupJid, options)
 	}
@@ -633,6 +635,8 @@ export class Client {
 		type: MediaType,
 		data: MediaSource,
 		opts: MediaOptions & TextOptions = {},
+		/** Wrap the built media message in a FutureProofMessage field (audio / lottie sticker, sticker reaction). */
+		fpWrapper?: 'audioStickerMessage' | 'lottieStickerMessage' | 'associatedChildMessage',
 	): Promise<string> {
 		const { sender, meId } = await this.#live()
 		const bytes = await toBytes(data)
@@ -701,7 +705,17 @@ export class Client {
 				[field]: { ...body, contextInfo: { ...(body['contextInfo'] as object), ...extraContext } },
 			}
 		}
-		const wire = opts.viewOnce ? extras.viewOnce(message) : message
+		const base = opts.viewOnce ? extras.viewOnce(message) : message
+		let wire: Record<string, unknown> = base
+		if (fpWrapper) {
+			// Hoist the envelope's messageContextInfo (secret + any association) to the top level; only the
+			// inner content goes inside the wrapper - WA's own audio-sticker / sticker-annotation shape.
+			const { messageContextInfo, ...inner } = base as Record<string, unknown>
+			wire = {
+				...(messageContextInfo ? { messageContextInfo } : {}),
+				[fpWrapper]: { message: inner },
+			}
+		}
 		const gs = opts.groupStatus ? extras.groupStatus(wire) : undefined
 		const q = opts.isQuestion ? extras.question(wire) : undefined
 		// Channel media carries its kind on the plaintext node, not on the stanza.
@@ -744,6 +758,78 @@ export class Client {
 			'sticker',
 			stickerMetadata ? addStickerMetadata(bytes, stickerMetadata) : bytes,
 			rest,
+		)
+	}
+
+	/**
+	 * Send an audio sticker: an (animated) sticker with a sound. On the wire it is a `stickerMessage` that
+	 * carries the uploaded sound as its nested `audioMessage`, wrapped in `audioStickerMessage` - exactly the
+	 * shape WhatsApp sends. `data.sticker` is the WebP; `data.audio` the sound (e.g. Opus/OGG).
+	 */
+	async sendAudioSticker(
+		to: string,
+		data: { sticker: MediaSource; audio: MediaSource },
+		opts: MediaOptions &
+			TextOptions & { stickerMetadata?: StickerMetadata; emojis?: string; seconds?: number } = {},
+	): Promise<string> {
+		const { stickerMetadata, emojis, seconds, fields, ...rest } = opts
+		// Upload the sound first and build its audioMessage; it is nested inside the sticker, not sent on its own.
+		const audioEnc = media.encryptMedia(await toBytes(data.audio), 'audio')
+		const audioUp = await media.uploadMedia(await this.#getMediaConn(), 'audio', audioEnc, fetch)
+		const audioMessage = (
+			media.mediaMessage('audio', audioEnc, audioUp, { seconds }).message as Record<string, unknown>
+		)['audioMessage']
+		const stickerBytes = await toBytes(data.sticker)
+		return this.sendMedia(
+			to,
+			'sticker',
+			stickerMetadata ? addStickerMetadata(stickerBytes, stickerMetadata) : stickerBytes,
+			{
+				...rest,
+				fields: { audioMessage, isAnimated: true, ...(emojis ? { emojis } : {}), ...fields },
+			},
+			'audioStickerMessage',
+		)
+	}
+
+	/**
+	 * React to a message with a sticker ("sticker annotation"): the sticker is wrapped in
+	 * `associatedChildMessage` and tied to `parentKey` via `messageContextInfo.messageAssociation`.
+	 */
+	async stickerReact(
+		to: string,
+		parentKey: { remoteJid: string; fromMe: boolean; id: string },
+		sticker: MediaSource,
+		opts: MediaOptions & TextOptions & { stickerMetadata?: StickerMetadata } = {},
+	): Promise<string> {
+		const { stickerMetadata, ...rest } = opts
+		const bytes = await toBytes(sticker)
+		return this.sendMedia(
+			to,
+			'sticker',
+			stickerMetadata ? addStickerMetadata(bytes, stickerMetadata) : bytes,
+			{
+				...rest,
+				association: { associationType: 'STICKER_ANNOTATION', parentMessageKey: parentKey },
+			},
+			'associatedChildMessage',
+		)
+	}
+
+	/** Send a Lottie (animated) sticker: a sticker wrapped in `lottieStickerMessage`. */
+	async sendLottieSticker(
+		to: string,
+		data: MediaSource,
+		opts: MediaOptions & TextOptions & { stickerMetadata?: StickerMetadata } = {},
+	): Promise<string> {
+		const { stickerMetadata, ...rest } = opts
+		const bytes = await toBytes(data)
+		return this.sendMedia(
+			to,
+			'sticker',
+			stickerMetadata ? addStickerMetadata(bytes, stickerMetadata) : bytes,
+			rest,
+			'lottieStickerMessage',
 		)
 	}
 

@@ -9,6 +9,7 @@ import {
 	timingSafeEqual,
 } from 'node:crypto'
 import type { BinaryNode } from '../../../codec/index.js'
+import { normalizeMessageContent } from './content-type.js'
 
 /** Media kinds that have their own key-derivation label, upload path and message field. */
 export type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
@@ -572,6 +573,9 @@ export function mediaMessage(
 export function mediaOf(
 	message: Record<string, unknown>,
 ): { type: MediaType; ref: MediaRef } | undefined {
+	// Look through the FutureProofMessage wrappers (view-once, audio/lottie sticker, ...) so a received
+	// wrapped media message - an audio sticker above all - resolves to its inner downloadable payload.
+	const inner = normalizeMessageContent(message) ?? message
 	const map: [string, MediaType][] = [
 		['imageMessage', 'image'],
 		['videoMessage', 'video'],
@@ -580,7 +584,7 @@ export function mediaOf(
 		['stickerMessage', 'sticker'],
 	]
 	for (const [field, type] of map) {
-		const m = message[field] as Record<string, unknown> | undefined
+		const m = inner[field] as Record<string, unknown> | undefined
 		if (m?.['mediaKey']) {
 			const b = (x: unknown) =>
 				typeof x === 'string'

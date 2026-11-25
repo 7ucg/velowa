@@ -403,6 +403,28 @@ describe('media messages', () => {
 		expect(mediaOf({ conversation: 'x' })).toBeUndefined()
 	})
 
+	it('resolves media inside FutureProofMessage wrappers (audio sticker, view-once)', () => {
+		const enc = encryptMedia(plain, 'sticker')
+		const sticker = {
+			url: 'u',
+			directPath: '/p',
+			mediaKey: enc.mediaKey.toString('base64'),
+			fileSha256: enc.fileSha256.toString('base64'),
+		}
+		// A received audio sticker wraps the stickerMessage; mediaOf must look through to it.
+		const audio = mediaOf({ audioStickerMessage: { message: { stickerMessage: sticker } } })
+		expect(audio?.type).toBe('sticker')
+		expect(Buffer.from(audio!.ref.mediaKey).equals(enc.mediaKey)).toBe(true)
+		// A view-once image resolves through its wrapper too.
+		const img = encryptMedia(plain, 'image')
+		const vo = mediaOf({
+			viewOnceMessage: {
+				message: { imageMessage: { url: 'u', mediaKey: img.mediaKey.toString('base64') } },
+			},
+		})
+		expect(vo?.type).toBe('image')
+	})
+
 	it('goes through the sender with the mediatype on every enc node and decrypts at the remote', async () => {
 		const { sender, stanzas, bob0 } = await world()
 		const enc = encryptMedia(plain, 'image')

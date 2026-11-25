@@ -145,6 +145,8 @@ export async function world(
 			deviceIdentity?: (identity: { publicKey: Uint8Array; privateKey: Uint8Array }) => Uint8Array
 		}
 		groupAdmin?: string
+		/** Add a hosted (Cloud-API, id 99) device to the recipient's usync answer, for coexistence fan-out tests. */
+		hostedDevice?: boolean
 		/**
 		 * Signs a `<key-index-list>` for bob with bob0's own identity (so it is a valid trust anchor once
 		 * `assertSessions` verifies bob0's device-identity - also pass `bob0DeviceIdentity` for that) and
@@ -215,12 +217,14 @@ export async function world(
 					if (opts.emptyUsyncFor?.includes(jid))
 						return { tag: 'user', attrs: { jid }, content: [] } as BinaryNode
 					const mine = jid.startsWith('4915600000000')
-					const devs =
+					const devs: Record<string, string>[] =
 						extra && jid === extra.jid
 							? [{ id: '0' }]
 							: mine
 								? [{ id: '0' }, { id: '23', 'key-index': '2' }]
 								: [{ id: '0' }, { id: '1', 'key-index': '1' }]
+					// Optional hosted (Cloud-API) device for Business Coexistence fan-out tests.
+					if (opts.hostedDevice && !mine && !(extra && jid === extra.jid)) devs.push({ id: '99' })
 					const keyIndexList = jid === bob0.jid ? keyIndexListForBob : undefined
 					return {
 						tag: 'user',

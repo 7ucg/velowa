@@ -275,8 +275,7 @@ export class Sender {
 		const additionalAttributes = options.additionalAttributes ?? {}
 		const pmode2 = options.pmode2 ?? false
 
-		const getMsgId = (): string => {
-			if (options.messageId) return options.messageId
+		const freshId = (): string => {
 			try {
 				return generateMessageId(creds.me!.id)
 			} catch {
@@ -288,6 +287,7 @@ export class Sender {
 				return `3EB0${hexTime}${hexRand}`
 			}
 		}
+		const getMsgId = (): string => options.messageId ?? freshId()
 
 		const normalizeBase = (targetJid?: string): string => {
 			if (!targetJid) return ''
@@ -510,17 +510,25 @@ export class Sender {
 		const sleep = (ms: number): Promise<void> =>
 			ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve()
 
-		const msgId = getMsgId()
+		// Distinct ids per audience: a retry receipt is keyed by the stanza id, so the two audiences must
+		// NOT share one - otherwise a non-admin's retry would be served the admin-only plaintext from the
+		// shared retry cache. Each audience is remembered under its own id with its own content and audience.
+		const adminMsgId = sendToAdmins ? getMsgId() : freshId()
+		const nonAdminMsgId = sendToAdmins ? freshId() : getMsgId()
+		const msgId = sendToAdmins ? adminMsgId : nonAdminMsgId
 		const groupInfo = await this.groupParticipants(jid)
 		const addressingMode = groupInfo.addressingMode || 'lid'
 		const senderJid = addressingMode === 'lid' && creds.me.lid ? creds.me.lid : creds.me.id
 
 		const contentMessage = sendToAdmins ? await buildMessage(input) : undefined
 		const selfMessage = await buildMessage(selfInput)
-		const trackedMessage = contentMessage ?? selfMessage
 
-		this.#remember(msgId, jid, trackedMessage)
-		this.d.onSent?.(msgId, jid, trackedMessage)
+		this.#remember(nonAdminMsgId, jid, selfMessage)
+		this.d.onSent?.(nonAdminMsgId, jid, selfMessage)
+		if (contentMessage) {
+			this.#remember(adminMsgId, jid, contentMessage)
+			this.d.onSent?.(adminMsgId, jid, contentMessage)
+		}
 
 		const participants = groupInfo.participants.map(normalizeBase).filter(Boolean)
 
@@ -547,22 +555,21 @@ export class Sender {
 
 		const adminJids = [...adminBases]
 		const nonAdminJids = [...nonAdminBases]
+		const toTargets = (targets: string[]): DeviceTarget[] =>
+			targets.map((target) => ({
+				jid: target,
+				user: jidDecode(target).user,
+				device: jidDecode(target).device,
+			}))
 
-		this.#setAudience(msgId, [
-			...(sendToAdmins ? adminJids : []).map((target) => ({
-				jid: target,
-				user: jidDecode(target).user,
-				device: jidDecode(target).device,
-			})),
-			...nonAdminJids.map((target) => ({
-				jid: target,
-				user: jidDecode(target).user,
-				device: jidDecode(target).device,
-			})),
-		])
+		// Each audience may only ask back for its own message.
+		this.#setAudience(nonAdminMsgId, toTargets(nonAdminJids))
+		if (contentMessage) this.#setAudience(adminMsgId, toTargets(adminJids))
 
 		logger.event('send.split-group', {
 			id: msgId,
+			adminId: adminMsgId,
+			nonAdminId: nonAdminMsgId,
 			to: jid,
 			admins: sendToAdmins ? adminJids.length : 0,
 			adminTargets: adminJids.length,
@@ -571,10 +578,10 @@ export class Sender {
 		})
 
 		await sleep(waitMs)
-		await sendValidSkmsg(selfMessage, msgId, addressingMode, senderJid, nonAdminJids)
+		await sendValidSkmsg(selfMessage, nonAdminMsgId, addressingMode, senderJid, nonAdminJids)
 		if (contentMessage) {
 			await sleep(adminWaitMs)
-			await sendValidSkmsg(contentMessage, msgId, addressingMode, senderJid, adminJids)
+			await sendValidSkmsg(contentMessage, adminMsgId, addressingMode, senderJid, adminJids)
 		}
 
 		logger.event('send.acked', { id: msgId, to: jid })
@@ -839,7 +846,10 @@ export class Sender {
 	// ---- devices -------------------------------------------------------------------------------
 
 	/** All devices (excluding this one) of the given users, via usync. */
-	async getDevices(userJids: string[]): Promise<DeviceTarget[]> {
+	async getDevices(
+		userJids: string[],
+		opts?: { includeHosted?: boolean },
+	): Promise<DeviceTarget[]> {
 		const { creds, receiver } = this.d
 		const me = jidDecode(creds.me!.id)
 		const meLidUser = creds.me?.lid ? jidDecode(creds.me.lid).user : undefined
@@ -913,6 +923,20 @@ export class Sender {
 			}
 			for (const dev of deviceList) {
 				const device = Number(dev.attrs['id'])
+				// Cloud-API "hosted" devices (id 99): WhatsApp Business Coexistence puts them in the 1:1 DM
+				// fan-out (WA Web: WAWebSendUserMsgJob / WAWebDBDeviceListFanout). They have their own Signal
+				// identity on the hosted domain, so address them there - never the plain PN/LID one. Only when
+				// the caller opts in (the 1:1 path); the fan-out stays best-effort, skipping them if no session
+				// can be established. Groups and calls keep leaving them out.
+				if (device === 99) {
+					if (opts?.includeHosted)
+						out.push({
+							jid: `${u}:99@${server === 'lid' ? 'hosted.lid' : 'hosted'}`,
+							user: u,
+							device: 99,
+						})
+					continue
+				}
 				// Non-zero devices must carry a key-index, otherwise the server rejects the fan-out.
 				if (device !== 0 && !dev.attrs['key-index']) continue
 				if (device !== 0 && keyIndexListInvalid) continue
@@ -922,8 +946,6 @@ export class Sender {
 					!isKeyIndexValid(Number(dev.attrs['key-index']), decodedKeyIndex)
 				)
 					continue
-				// Cloud-API "hosted" devices (id 99) have no Signal keys to fan out to.
-				if (device === 99) continue
 				const isThisDevice = (u === me.user || u === meLidUser) && device === me.device
 				if (isThisDevice) continue
 				out.push({
@@ -1045,7 +1067,7 @@ export class Sender {
 				.filter((d) =>
 					opts.devices === 'primary' || opts.devices === 'no-linked' ? d.device === 0 : true,
 				)
-		const devices = await this.getDevices([...new Set([ownBare, to])])
+		const devices = await this.getDevices([...new Set([ownBare, to])], { includeHosted: true })
 		let mine = mineOf(devices)
 		let others = othersOf(devices, mine)
 		if (!others.length && !selfChat) {
@@ -1062,7 +1084,7 @@ export class Sender {
 				const altJid = toJid.device
 					? `${altUser}:${toJid.device}@${altServer}`
 					: `${altUser}@${altServer}`
-				const retryDevices = await this.getDevices([ownBare, altJid])
+				const retryDevices = await this.getDevices([ownBare, altJid], { includeHosted: true })
 				mine = mineOf(retryDevices)
 				others = othersOf(retryDevices, mine)
 			}
@@ -1088,17 +1110,31 @@ export class Sender {
 			const plain = padRandomMax16(encodeProto('Message', msg))
 			for (const t of targets) {
 				const a = this.addr(t.jid)
-				const enc = await this.d.cipher.encrypt(a.name, a.device, plain)
+				// Hosted (Cloud-API) devices join the fan-out best-effort: if no Signal session could be
+				// established for one, skip it instead of failing the whole send (a normal device still throws).
+				const isHostedDevice = t.jid.endsWith('@hosted') || t.jid.endsWith('@hosted.lid')
+				let enc: Awaited<ReturnType<SignalCipher['encrypt']>>
+				try {
+					enc = await this.d.cipher.encrypt(a.name, a.device, plain)
+				} catch (e) {
+					if (isHostedDevice) {
+						this.d.logger.event('send.hosted-skipped', { jid: t.jid, error: e })
+						continue
+					}
+					throw e
+				}
 				if (enc.type === 'pkmsg') needsIdentity = true
 				// In a conversation with an `@lid` user the server wants our own devices as LIDs too (Baileys:
 				// "Using LID identity for @lid conversation"); mixing both forms is answered with error 400.
-				// The session is the same either way, only the address in the stanza changes.
+				// The session is the same either way, only the address in the stanza changes. A hosted device
+				// keeps its hosted domain (hosted.lid for a LID conversation), never the plain lid one.
 				const ownLid = creds.me?.lid ? jidDecode(creds.me.lid).user : undefined
+				const lidDomain = isHostedDevice ? 'hosted.lid' : 'lid'
 				const jid =
 					to.endsWith('@lid') && ownLid && (t.user === meUser || t.user === ownLid)
 						? t.device === 0
-							? `${ownLid}@lid`
-							: `${ownLid}:${t.device}@lid`
+							? `${ownLid}@${lidDomain}`
+							: `${ownLid}:${t.device}@${lidDomain}`
 						: t.jid
 				participants.push({
 					tag: 'to',

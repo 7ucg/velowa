@@ -298,7 +298,7 @@ client.on('message', async (raw) => {
 
 JID helpers: `jidNormalizedUser`, `areJidsSameUser`, `isJidGroup`, `isJidUser`, `isLidUser`, `isJidNewsletter`,
 `isJidStatusBroadcast`, `jidEncode`, `jidDecode`. Content helpers: `getContentType`, `normalizeMessageContent`,
-`messageText`.
+`messageText`, `isAudioSticker`, `isLottieSticker`, `audioStickerSound`, `stickerReactionParentKey`.
 
 > **LIDs.** WhatsApp is moving accounts to anonymous ids (`…@lid`). A sender or group member can show up as a LID or a
 > phone-number JID. `isGroupAdmin` and `areJidsSameUser` compare the user part, and group participants carry both
@@ -487,7 +487,8 @@ await client.sendSticker(jid, webpBytes, { stickerMetadata: { packName: 'My Pack
 const data = await client.downloadMedia(m.raw.message) // Buffer, decrypted
 ```
 
-Every media-sending method (`sendImage`, `sendVideo`, `sendAudio`, `sendDocument`, `sendSticker`, `sendMedia`,
+Every media-sending method (`sendImage`, `sendVideo`, `sendAudio`, `sendDocument`, `sendSticker`,
+`sendAudioSticker`, `sendLottieSticker`, `stickerReact`, `sendMedia`,
 `sendImagePoll`, `sendMusic`, `sendQuestionImage`, `sendStickerPack`, `postChannelStatusMedia`) takes a
 `MediaSource`: bytes (`Buffer`/`Uint8Array`), `{ path }` (a local file), `{ url }` (an `http(s)` URL, fetched safely
 the same way as `client.send`'s media) or `{ stream }` - not just `client.send`'s content-object form. See
@@ -495,6 +496,50 @@ the same way as `client.send`'s media) or `{ stream }` - not just `client.send`'
 
 Media is encrypted and uploaded for you; channels get unencrypted uploads automatically. Options (`viewOnce`, `seconds`,
 `width`, `height`, `groupStatus`, …) are on `MediaOptions`.
+
+### Audio stickers, lottie stickers and sticker reactions
+
+An **audio sticker** is an animated sticker with a sound. Pass the sticker (a WebP) and the sound (e.g. Opus/OGG)
+separately; velowa uploads both, nests the sound inside the sticker and wraps it exactly the way WhatsApp does:
+
+```ts
+await client.sendAudioSticker(jid, { sticker: webpBytes, audio: { path: './boing.ogg' } }, {
+    emojis: '🔊', // emoji shown on the sticker
+    seconds: 2, // length of the sound
+})
+```
+
+A **lottie (animated) sticker** is sent like a normal sticker, only tagged as one:
+
+```ts
+await client.sendLottieSticker(jid, webpBytes)
+```
+
+**React to a message with a sticker** ("sticker annotation") — like an emoji reaction (`client.react`), but the
+reaction is a sticker tied to the message you react to:
+
+```ts
+const m = serialize(client, raw) // a received message
+await client.stickerReact(m.chat, m.key, webpBytes) // m.key is the { remoteJid, fromMe, id } reacted to
+```
+
+On the receiving side, tell them apart and reach their parts:
+
+```ts
+import { isAudioSticker, audioStickerSound, stickerReactionParentKey } from 'velowa'
+
+if (isAudioSticker(m.raw.message)) {
+    const image = await client.downloadMedia(m.raw.message) // the WebP sticker
+    const sound = audioStickerSound(m.raw.message)
+    if (sound) await client.downloadMedia(sound) // the sound track
+}
+const reactedTo = stickerReactionParentKey(m.raw.message) // key of the reacted message, or undefined
+```
+
+> **Hosted devices (WhatsApp Business Coexistence).** 1:1 DMs now also fan out to a recipient's hosted
+> (Cloud-API, `…:99@hosted`) device when they have one, so a coexistence business receives your message on its
+> API side too. This is automatic and best-effort — a hosted device that cannot be keyed is skipped, never
+> breaking the send. Groups and calls leave hosted devices out, as before.
 
 ### Buttons, lists and rich answers
 

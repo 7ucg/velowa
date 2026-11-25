@@ -62,6 +62,55 @@ export function normalizeMessageContent(
 	return c
 }
 
+/** Whether `content` is wrapped in the named FutureProofMessage wrapper (at any unwrap depth above it). */
+function hasFpWrapper(content: Record<string, unknown> | undefined | null, key: string): boolean {
+	let c = content ?? undefined
+	for (let depth = 0; c && depth < 5; depth++) {
+		if ((c[key] as { message?: unknown } | undefined)?.message) return true
+		const next = FP_WRAPPERS.map(
+			(k) => (c![k] as { message?: Record<string, unknown> } | undefined)?.message,
+		).find(Boolean)
+		if (!next) break
+		c = next
+	}
+	return false
+}
+
+/** True if a received message is an audio sticker (`audioStickerMessage` wrapping a `stickerMessage`). */
+export const isAudioSticker = (content: Record<string, unknown> | undefined | null): boolean =>
+	hasFpWrapper(content, 'audioStickerMessage')
+
+/** True if a received message is a Lottie (animated) sticker (`lottieStickerMessage`). */
+export const isLottieSticker = (content: Record<string, unknown> | undefined | null): boolean =>
+	hasFpWrapper(content, 'lottieStickerMessage')
+
+/**
+ * The sound of a received audio sticker, ready to hand to `downloadMedia` (`{ audioMessage }`), or undefined
+ * if the message is not an audio sticker or carries no sound.
+ */
+export function audioStickerSound(
+	content: Record<string, unknown> | undefined | null,
+): { audioMessage: Record<string, unknown> } | undefined {
+	const sticker = normalizeMessageContent(content)?.['stickerMessage'] as
+		{ audioMessage?: Record<string, unknown> } | undefined
+	return sticker?.audioMessage ? { audioMessage: sticker.audioMessage } : undefined
+}
+
+/**
+ * The message a sticker reaction ("sticker annotation") was sent against, from
+ * `messageContextInfo.messageAssociation`, or undefined if this is not a sticker reaction.
+ */
+export function stickerReactionParentKey(
+	content: Record<string, unknown> | undefined | null,
+): { remoteJid?: string; fromMe?: boolean; id?: string } | undefined {
+	const assoc = (
+		content?.['messageContextInfo'] as { messageAssociation?: Record<string, unknown> } | undefined
+	)?.messageAssociation
+	if (!assoc || assoc['associationType'] !== 'STICKER_ANNOTATION') return undefined
+	return assoc['parentMessageKey'] as
+		{ remoteJid?: string; fromMe?: boolean; id?: string } | undefined
+}
+
 /** The id of the button or row someone tapped on a native-flow message (`interactiveResponseMessage`). */
 function nativeFlowReplyId(reply: Record<string, unknown> | undefined): string | undefined {
 	const flow = reply?.['nativeFlowResponseMessage'] as { paramsJson?: string } | undefined

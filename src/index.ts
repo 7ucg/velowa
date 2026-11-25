@@ -114,9 +114,13 @@ export {
 	jidNormalizedUser,
 } from './jid.js'
 export {
+	audioStickerSound,
 	getContentType,
+	isAudioSticker,
+	isLottieSticker,
 	messageText,
 	normalizeMessageContent,
+	stickerReactionParentKey,
 } from './client/features/message/content-type.js'
 export type {
 	MediaSource,

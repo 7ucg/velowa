@@ -234,6 +234,35 @@ describe('Sender: groups', () => {
 		expect(allAdmins.stanzas).toHaveLength(0)
 	})
 
+	it('uses a distinct id per audience so a non-admin can never retry the admin-only message', async () => {
+		const group = '120363000000000001@g.us'
+		const adminJid = '4915622222222@s.whatsapp.net'
+		const { sender, stanzas, bob0 } = await world({
+			extraRemote: { jid: adminJid, regId: 4 },
+			groupAdmin: adminJid,
+		})
+		const result = await sender.sendSplitGroupMessage(group, {
+			message: { conversation: 'admins only' },
+			selfMessage: { conversation: 'members' },
+			wait: 0,
+			adminWait: 0,
+		})
+		expect(result).toMatchObject({ adminTargets: 1, nonAdmins: 1 })
+		// Two sends, each with its own stanza id.
+		const ids = stanzas.map((s) => s.attrs['id']!)
+		expect(new Set(ids).size).toBe(2)
+		const adminMsgId = result!.msgId // the returned id is the admin (primary) one
+		expect(ids).toContain(adminMsgId)
+		// bob0 is a non-admin: a retry it sends against the ADMIN id is refused - it was never in that
+		// audience, so the admin-only plaintext is never re-served to it.
+		const retryOnAdmin: BinaryNode = {
+			tag: 'receipt',
+			attrs: { from: group, participant: bob0.jid, id: adminMsgId, type: 'retry' },
+			content: [{ tag: 'retry', attrs: { count: '1', id: adminMsgId, v: '1' } }],
+		}
+		expect(await sender.handleRetryReceipt(retryOnAdmin)).toBe(false)
+	})
+
 	it('distributes the sender key again after the device was linked again (new device number)', async () => {
 		const { sender, stanzas, bob0, creds } = await world()
 		const group = '120363000000000001@g.us'
@@ -273,6 +302,28 @@ describe('Sender: channel polls and rich posts', () => {
 		)
 		expect(stanzas[1]!.attrs['type']).toBe('poll')
 		expect(kids(stanzas[1]!, 'meta')[0]!.attrs).toEqual({ polltype: 'creation' }) // the server answers 479 without it
+	})
+})
+
+describe('Sender: hosted-device fan-out (Business Coexistence)', () => {
+	it('includes a hosted (id 99) device only when asked, addressed on the hosted domain', async () => {
+		const { sender } = await world({ hostedDevice: true })
+		const peer = '4915611111111@s.whatsapp.net'
+
+		const without = await sender.getDevices([peer])
+		expect(without.some((d) => d.device === 99)).toBe(false)
+
+		const withHosted = await sender.getDevices([peer], { includeHosted: true })
+		const hosted = withHosted.find((d) => d.device === 99)
+		expect(hosted).toBeDefined()
+		expect(hosted!.jid).toBe('4915611111111:99@hosted')
+	})
+
+	it('addresses a hosted device of a LID user on the hosted.lid domain', async () => {
+		const { sender } = await world({ hostedDevice: true })
+		const devices = await sender.getDevices(['4915611111111@lid'], { includeHosted: true })
+		const hosted = devices.find((d) => d.device === 99)
+		expect(hosted?.jid).toBe('4915611111111:99@hosted.lid')
 	})
 })
 
