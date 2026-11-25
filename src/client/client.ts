@@ -904,9 +904,9 @@ export class Client {
 	 * `image` is any image source; it is encrypted and uploaded like a normal image. `dimLevel` (0..1, default 0)
 	 * darkens it behind the messages. Returns the sent message id.
 	 *
-	 * The wallpaper image is encrypted with the WhatsApp media-key HKDF label `hkdfLabel` (default `'Image'`) and
-	 * uploaded on the image path. WhatsApp's exact label for chat wallpapers is not publicly documented, so if the
-	 * image does not render, pass a different `hkdfLabel` (e.g. `'Chat Wallpaper'`) until it does.
+	 * The wallpaper image is encrypted with WhatsApp's `WhatsApp Chat Wallpaper Keys` HKDF derivation and uploaded
+	 * on the `chat-wallpaper-image` media path, exactly as the app does. `hkdfLabel` (default `'Chat Wallpaper'`)
+	 * overrides the label word if a future build ever changes it.
 	 */
 	async setChatWallpaper(
 		jid: string,
@@ -918,8 +918,18 @@ export class Client {
 			messageId?: string
 		} = {},
 	): Promise<string> {
-		const enc = media.encryptMediaWithLabel(await toBytes(image), opts.hkdfLabel ?? 'Image')
-		const up = await media.uploadMedia(await this.#getMediaConn(), 'image', enc, fetch)
+		const enc = media.encryptMediaWithLabel(
+			await toBytes(image),
+			opts.hkdfLabel ?? 'Chat Wallpaper',
+		)
+		const up = await media.uploadMedia(
+			await this.#getMediaConn(),
+			'image',
+			enc,
+			fetch,
+			false,
+			'/mms/chat-wallpaper-image',
+		)
 		return this.#sendChatTheme(
 			jid,
 			{
