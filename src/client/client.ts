@@ -135,6 +135,10 @@ import {
 } from './features/message/sticker-pack.js'
 import { addStickerMetadata, type StickerMetadata } from './features/message/sticker-metadata.js'
 import {
+	ensureStickerWebp,
+	type StickerConvertOptions,
+} from './features/message/sticker-convert.js'
+import {
 	fetchBotProfile,
 	listBots,
 	type BotDirectory,
@@ -745,18 +749,40 @@ export class Client {
 		this.sendMedia(to, 'audio', data, opts)
 	sendDocument = (to: string, data: MediaSource, opts: MediaOptions & TextOptions = {}) =>
 		this.sendMedia(to, 'document', data, opts)
-	/** `stickerMetadata` embeds pack attribution (WhatsApp's own EXIF convention) so the app shows "Added by X". */
+	/**
+	 * Sticker bytes ready to send: any image or short animation (PNG, JPEG, GIF, MP4, ...) is converted to a
+	 * 512x512 sticker WebP via `ffmpeg` (a source that is already WebP passes straight through); set
+	 * `stickerConvert: false` to send the bytes untouched. `stickerMetadata` is then stamped on as EXIF.
+	 */
+	async #stickerBytes(
+		data: MediaSource,
+		opts: { stickerMetadata?: StickerMetadata; stickerConvert?: StickerConvertOptions | false },
+	): Promise<Uint8Array> {
+		let bytes: Uint8Array = await toBytes(data)
+		if (opts.stickerConvert !== false)
+			bytes = await ensureStickerWebp(bytes, opts.stickerConvert ?? {})
+		return opts.stickerMetadata ? addStickerMetadata(bytes, opts.stickerMetadata) : bytes
+	}
+
+	/**
+	 * `data` may be any image or short animation (PNG, JPEG, GIF, MP4, ...): it is converted to a WhatsApp sticker
+	 * WebP for you (needs `ffmpeg`); pass a WebP to skip conversion, or `stickerConvert: false` to force it.
+	 * `stickerMetadata` embeds pack attribution (WhatsApp's own EXIF convention) so the app shows "Added by X".
+	 */
 	async sendSticker(
 		to: string,
 		data: MediaSource,
-		opts: MediaOptions & TextOptions & { stickerMetadata?: StickerMetadata } = {},
+		opts: MediaOptions &
+			TextOptions & {
+				stickerMetadata?: StickerMetadata
+				stickerConvert?: StickerConvertOptions | false
+			} = {},
 	): Promise<string> {
-		const { stickerMetadata, ...rest } = opts
-		const bytes = await toBytes(data)
+		const { stickerMetadata, stickerConvert, ...rest } = opts
 		return this.sendMedia(
 			to,
 			'sticker',
-			stickerMetadata ? addStickerMetadata(bytes, stickerMetadata) : bytes,
+			await this.#stickerBytes(data, { stickerMetadata, stickerConvert }),
 			rest,
 		)
 	}
@@ -770,20 +796,25 @@ export class Client {
 		to: string,
 		data: { sticker: MediaSource; audio: MediaSource },
 		opts: MediaOptions &
-			TextOptions & { stickerMetadata?: StickerMetadata; emojis?: string; seconds?: number } = {},
+			TextOptions & {
+				stickerMetadata?: StickerMetadata
+				stickerConvert?: StickerConvertOptions | false
+				emojis?: string
+				seconds?: number
+			} = {},
 	): Promise<string> {
-		const { stickerMetadata, emojis, seconds, fields, ...rest } = opts
+		const { stickerMetadata, stickerConvert, emojis, seconds, fields, ...rest } = opts
 		// Upload the sound first and build its audioMessage; it is nested inside the sticker, not sent on its own.
 		const audioEnc = media.encryptMedia(await toBytes(data.audio), 'audio')
 		const audioUp = await media.uploadMedia(await this.#getMediaConn(), 'audio', audioEnc, fetch)
 		const audioMessage = (
 			media.mediaMessage('audio', audioEnc, audioUp, { seconds }).message as Record<string, unknown>
 		)['audioMessage']
-		const stickerBytes = await toBytes(data.sticker)
+		const stickerBytes = await this.#stickerBytes(data.sticker, { stickerMetadata, stickerConvert })
 		return this.sendMedia(
 			to,
 			'sticker',
-			stickerMetadata ? addStickerMetadata(stickerBytes, stickerMetadata) : stickerBytes,
+			stickerBytes,
 			{
 				...rest,
 				fields: { audioMessage, isAnimated: true, ...(emojis ? { emojis } : {}), ...fields },
@@ -798,19 +829,29 @@ export class Client {
 	 */
 	async stickerReact(
 		to: string,
-		parentKey: { remoteJid: string; fromMe: boolean; id: string },
+		parentKey: MessageKey,
 		sticker: MediaSource,
-		opts: MediaOptions & TextOptions & { stickerMetadata?: StickerMetadata } = {},
+		opts: MediaOptions &
+			TextOptions & {
+				stickerMetadata?: StickerMetadata
+				stickerConvert?: StickerConvertOptions | false
+			} = {},
 	): Promise<string> {
-		const { stickerMetadata, ...rest } = opts
-		const bytes = await toBytes(sticker)
+		const { stickerMetadata, stickerConvert, ...rest } = opts
 		return this.sendMedia(
 			to,
 			'sticker',
-			stickerMetadata ? addStickerMetadata(bytes, stickerMetadata) : bytes,
+			await this.#stickerBytes(sticker, { stickerMetadata, stickerConvert }),
 			{
 				...rest,
-				association: { associationType: 'STICKER_ANNOTATION', parentMessageKey: parentKey },
+				association: {
+					associationType: 'STICKER_ANNOTATION',
+					parentMessageKey: {
+						remoteJid: parentKey.remoteJid,
+						fromMe: parentKey.fromMe ?? false,
+						id: parentKey.id,
+					},
+				},
 			},
 			'associatedChildMessage',
 		)
@@ -820,14 +861,17 @@ export class Client {
 	async sendLottieSticker(
 		to: string,
 		data: MediaSource,
-		opts: MediaOptions & TextOptions & { stickerMetadata?: StickerMetadata } = {},
+		opts: MediaOptions &
+			TextOptions & {
+				stickerMetadata?: StickerMetadata
+				stickerConvert?: StickerConvertOptions | false
+			} = {},
 	): Promise<string> {
-		const { stickerMetadata, ...rest } = opts
-		const bytes = await toBytes(data)
+		const { stickerMetadata, stickerConvert, ...rest } = opts
 		return this.sendMedia(
 			to,
 			'sticker',
-			stickerMetadata ? addStickerMetadata(bytes, stickerMetadata) : bytes,
+			await this.#stickerBytes(data, { stickerMetadata, stickerConvert }),
 			rest,
 			'lottieStickerMessage',
 		)

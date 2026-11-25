@@ -138,6 +138,12 @@ export {
 	getStickerMetadata,
 } from './client/features/message/sticker-metadata.js'
 export type { StickerMetadata } from './client/features/message/sticker-metadata.js'
+export {
+	ensureStickerWebp,
+	isWebp,
+	toStickerWebp,
+} from './client/features/message/sticker-convert.js'
+export type { StickerConvertOptions } from './client/features/message/sticker-convert.js'
 export type {
 	BotDirectory,
 	BotEntry,

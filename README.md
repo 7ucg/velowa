@@ -481,7 +481,8 @@ await client.sendImage(jid, { path: './cat.jpg' }, { caption: 'from disk' })
 await client.sendVideo(jid, { url: 'https://example.com/clip.mp4' }, { gifPlayback: true }) // fetched safely
 await client.sendAudio(jid, bytes, { ptt: true }) // voice note
 await client.sendDocument(jid, bytes, { mimetype: 'application/pdf', fileName: 'a.pdf' })
-await client.sendSticker(jid, webpBytes)
+await client.sendSticker(jid, { path: './cat.png' }) // any image/animation -> sticker WebP (needs ffmpeg)
+await client.sendSticker(jid, webpBytes) // a WebP is sent as is, no conversion
 await client.sendSticker(jid, webpBytes, { stickerMetadata: { packName: 'My Pack', publisher: 'Me' } }) // "Added by Me"
 
 const data = await client.downloadMedia(m.raw.message) // Buffer, decrypted
@@ -499,11 +500,16 @@ Media is encrypted and uploaded for you; channels get unencrypted uploads automa
 
 ### Audio stickers, lottie stickers and sticker reactions
 
-An **audio sticker** is an animated sticker with a sound. Pass the sticker (a WebP) and the sound (e.g. Opus/OGG)
+Every sticker method takes **any image or short animation** (PNG, JPEG, GIF, MP4, …) as its sticker, not only a
+ready-made WebP: velowa converts it to a 512×512 sticker WebP with `ffmpeg` (install it on the host). A source that
+is already WebP is sent untouched; pass `stickerConvert: false` to skip conversion, or `stickerConvert: { size, quality }`
+to tune it. The conversion helpers (`ensureStickerWebp`, `toStickerWebp`, `isWebp`) are exported too.
+
+An **audio sticker** is an animated sticker with a sound. Pass the sticker and the sound (e.g. Opus/OGG)
 separately; velowa uploads both, nests the sound inside the sticker and wraps it exactly the way WhatsApp does:
 
 ```ts
-await client.sendAudioSticker(jid, { sticker: webpBytes, audio: { path: './boing.ogg' } }, {
+await client.sendAudioSticker(jid, { sticker: { path: './cat.gif' }, audio: { path: './boing.ogg' } }, {
     emojis: '🔊', // emoji shown on the sticker
     seconds: 2, // length of the sound
 })
@@ -512,15 +518,15 @@ await client.sendAudioSticker(jid, { sticker: webpBytes, audio: { path: './boing
 A **lottie (animated) sticker** is sent like a normal sticker, only tagged as one:
 
 ```ts
-await client.sendLottieSticker(jid, webpBytes)
+await client.sendLottieSticker(jid, { path: './wave.gif' })
 ```
 
 **React to a message with a sticker** ("sticker annotation") — like an emoji reaction (`client.react`), but the
 reaction is a sticker tied to the message you react to:
 
 ```ts
-const m = serialize(client, raw) // a received message
-await client.stickerReact(m.chat, m.key, webpBytes) // m.key is the { remoteJid, fromMe, id } reacted to
+// m is a received message (e.g. from the 'message' event, via serialize)
+await client.stickerReact(m.chat, m.key, { path: './thumbsup.png' }) // m.key is the { remoteJid, fromMe, id } reacted to
 ```
 
 On the receiving side, tell them apart and reach their parts:
