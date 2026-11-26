@@ -31,6 +31,7 @@ import {
   WEB_SUB_PLATFORMS,
   addStickerMetadata,
   areJidsSameUser,
+  audioStickerSound,
   buildReport,
   callButton,
   connHeader,
@@ -44,24 +45,31 @@ import {
   encodeFrame,
   encodeNode,
   encodeWam,
+  ensureStickerWebp,
   fetchLinkPreview,
   findUrl,
+  getContentType,
   getFakeMsg,
   getStickerMetadata,
+  isAudioSticker,
   isJidBroadcast,
   isJidGroup,
   isJidNewsletter,
   isJidStatusBroadcast,
   isJidUser,
   isLidUser,
+  isLottieSticker,
+  isWebp,
   jidDecode,
   jidEncode,
   jidNormalizedUser,
   linkPreviewMessage,
+  messageText,
   newAppStateCollection,
   newIdentityKeyPair,
   newPreKeys,
   newSignedPreKey,
+  normalizeMessageContent,
   parseButtonReply,
   pollOptionHash,
   quickReply,
@@ -70,11 +78,13 @@ import {
   singleSelect,
   splitAnnexB,
   startXxHandshake,
+  stickerReactionParentKey,
+  toStickerWebp,
   tokenizeCode,
   urlButton,
   vcardFor,
   writeWav
-} from "./chunk-IISA5NDR.js";
+} from "./chunk-WBJDXCNU.js";
 import {
   compressSession,
   listSessions,
@@ -96,48 +106,6 @@ var MemoryAuthStore = class {
     }
   }
 };
-
-// src/client/features/message/content-type.ts
-function getContentType(content) {
-  if (!content) return void 0;
-  const keys = Object.keys(content).filter(
-    (k) => content[k] != null && k !== "senderKeyDistributionMessage" && k !== "messageContextInfo"
-  );
-  return keys[0];
-}
-function normalizeMessageContent(content) {
-  let c = content ?? void 0;
-  for (let depth = 0; c && depth < 5; depth++) {
-    const wrapper = [
-      "ephemeralMessage",
-      "viewOnceMessage",
-      "viewOnceMessageV2",
-      "viewOnceMessageV2Extension",
-      "documentWithCaptionMessage",
-      "editedMessage"
-    ].map((k) => c[k]).find((w) => w?.message);
-    if (!wrapper) break;
-    c = wrapper.message;
-  }
-  return c;
-}
-function nativeFlowReplyId(reply) {
-  const flow = reply?.["nativeFlowResponseMessage"];
-  if (!flow?.paramsJson) return void 0;
-  try {
-    const p = JSON.parse(flow.paramsJson);
-    const id = p.id ?? p.selected_id;
-    return typeof id === "string" && id ? id : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function messageText(content) {
-  const c = normalizeMessageContent(content);
-  if (!c) return void 0;
-  const get = (k) => c[k];
-  return (typeof c["conversation"] === "string" ? c["conversation"] : void 0) ?? get("extendedTextMessage")?.["text"] ?? get("imageMessage")?.["caption"] ?? get("videoMessage")?.["caption"] ?? get("documentMessage")?.["caption"] ?? get("buttonsResponseMessage")?.["selectedButtonId"] ?? get("listResponseMessage")?.["singleSelectReply"]?.selectedRowId ?? get("templateButtonReplyMessage")?.["selectedId"] ?? nativeFlowReplyId(get("interactiveResponseMessage"));
-}
 
 // src/bot/message.ts
 var MEDIA = [
@@ -270,6 +238,19 @@ var GroupCache = class {
 };
 var isGroupAdmin = (group, jid) => !!group && !!jid && group.admins.some((a) => areJidsSameUser(a, jid));
 
+// src/client/features/chat/chat-theme.ts
+var CHAT_THEME_IDS = [
+  "Default-Blue@Minimal",
+  "Default-Blue@Tonal@Minimal",
+  "Emerald@Minimal",
+  "Emerald@Tonal@Minimal",
+  "Pink@Minimal",
+  "Red@Minimal",
+  "Royal-Blue@Minimal",
+  "Tyrian-Purple@Minimal",
+  "WhatsApp-Green@Minimal"
+];
+
 // src/client/store.ts
 var MemoryStore = class {
   #messages = /* @__PURE__ */ new Map();
@@ -351,6 +332,7 @@ export {
   AntiBanError,
   AppStateCollection,
   Browsers,
+  CHAT_THEME_IDS,
   Client,
   DEFAULT_HISTORY_SYNC,
   DEVICE_PROFILES,
@@ -376,6 +358,7 @@ export {
   WEB_SUB_PLATFORMS,
   addStickerMetadata,
   areJidsSameUser,
+  audioStickerSound,
   buildReport,
   callButton,
   compressSession,
@@ -390,11 +373,13 @@ export {
   encodeFrame,
   encodeNode,
   encodeWam,
+  ensureStickerWebp,
   fetchLinkPreview,
   findUrl,
   getContentType,
   getFakeMsg,
   getStickerMetadata,
+  isAudioSticker,
   isGroupAdmin,
   isJidBroadcast,
   isJidGroup,
@@ -402,7 +387,9 @@ export {
   isJidStatusBroadcast,
   isJidUser,
   isLidUser,
+  isLottieSticker,
   isMe,
+  isWebp,
   jidDecode,
   jidEncode,
   jidNormalizedUser,
@@ -425,6 +412,8 @@ export {
   singleSelect,
   splitAnnexB,
   startXxHandshake,
+  stickerReactionParentKey,
+  toStickerWebp,
   tokenizeCode,
   urlButton,
   vcardFor,

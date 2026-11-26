@@ -40,6 +40,7 @@ __export(src_exports, {
   AntiBanError: () => AntiBanError,
   AppStateCollection: () => AppStateCollection,
   Browsers: () => Browsers,
+  CHAT_THEME_IDS: () => CHAT_THEME_IDS,
   Client: () => Client,
   DEFAULT_HISTORY_SYNC: () => DEFAULT_HISTORY_SYNC,
   DEVICE_PROFILES: () => DEVICE_PROFILES,
@@ -65,6 +66,7 @@ __export(src_exports, {
   WEB_SUB_PLATFORMS: () => WEB_SUB_PLATFORMS,
   addStickerMetadata: () => addStickerMetadata,
   areJidsSameUser: () => areJidsSameUser,
+  audioStickerSound: () => audioStickerSound,
   buildReport: () => buildReport,
   callButton: () => callButton,
   compressSession: () => compressSession,
@@ -79,11 +81,13 @@ __export(src_exports, {
   encodeFrame: () => encodeFrame,
   encodeNode: () => encodeNode2,
   encodeWam: () => encodeWam,
+  ensureStickerWebp: () => ensureStickerWebp,
   fetchLinkPreview: () => fetchLinkPreview,
   findUrl: () => findUrl,
   getContentType: () => getContentType,
   getFakeMsg: () => getFakeMsg,
   getStickerMetadata: () => getStickerMetadata,
+  isAudioSticker: () => isAudioSticker,
   isGroupAdmin: () => isGroupAdmin,
   isJidBroadcast: () => isJidBroadcast,
   isJidGroup: () => isJidGroup,
@@ -91,7 +95,9 @@ __export(src_exports, {
   isJidStatusBroadcast: () => isJidStatusBroadcast,
   isJidUser: () => isJidUser,
   isLidUser: () => isLidUser,
+  isLottieSticker: () => isLottieSticker,
   isMe: () => isMe,
+  isWebp: () => isWebp,
   jidDecode: () => jidDecode,
   jidEncode: () => jidEncode,
   jidNormalizedUser: () => jidNormalizedUser,
@@ -114,6 +120,8 @@ __export(src_exports, {
   singleSelect: () => singleSelect,
   splitAnnexB: () => splitAnnexB,
   startXxHandshake: () => startXxHandshake,
+  stickerReactionParentKey: () => stickerReactionParentKey,
+  toStickerWebp: () => toStickerWebp,
   tokenizeCode: () => tokenizeCode,
   urlButton: () => urlButton,
   vcardFor: () => vcardFor,
@@ -1511,6 +1519,10 @@ var MemorySignalStorage = class {
   }
   storeSenderKey(key, record) {
     this.#senderKeys.set(key, record.slice());
+    return Promise.resolve();
+  }
+  removeSenderKey(key) {
+    this.#senderKeys.delete(key);
     return Promise.resolve();
   }
 };
@@ -3697,6 +3709,10 @@ var FileSignalStorage = class {
     this.#write("sender-keys", key, record);
     return Promise.resolve();
   }
+  removeSenderKey(key) {
+    (0, import_node_fs6.rmSync)(this.#path("sender-keys", key), { force: true });
+    return Promise.resolve();
+  }
 };
 
 // src/logging/protocol-logger.ts
@@ -5093,6 +5109,25 @@ var SECRET_ENC_USE_CASE = {
   POLL_EDIT: "Poll Edit",
   POLL_ADD_OPTION: "Poll Add Option"
 };
+function secretEncryptedMessage(kind, parent, inner, ctx) {
+  const enc2 = encryptAddon(inner, {
+    ...ctx,
+    parentMsgId: parent.id,
+    useCase: SECRET_ENC_USE_CASE[kind]
+  });
+  return {
+    secretEncryptedMessage: {
+      targetMessageKey: {
+        remoteJid: parent.remoteJid,
+        fromMe: !!parent.fromMe,
+        id: parent.id,
+        participant: parent.participant ?? ctx.parentSenderJid
+      },
+      secretEncType: kind,
+      ...enc2
+    }
+  };
+}
 var decryptSecretEncrypted = (enc2, kind, ctx) => decryptAddon(enc2, { ...ctx, useCase: SECRET_ENC_USE_CASE[kind] });
 
 // src/client/features/message/event-message.ts
@@ -5329,6 +5364,7 @@ function decryptPollVote(vote, ctx) {
 
 // src/client/meta-ai.ts
 var import_node_crypto8 = require("crypto");
+var import_node_zlib2 = require("zlib");
 var BOT_MESSAGE_INFO = "Bot Message";
 var MAX_SECRETS_PER_CHAT = 20;
 var MAX_SECRETS_TOTAL = 5e3;
@@ -5452,9 +5488,13 @@ function extractMetaAiText(message) {
   const parts = (rr.submessages ?? []).map((s) => s.messageText).filter((t) => typeof t === "string" && t);
   if (parts.length) return parts.join("\n");
   const data = rr.unifiedResponse?.data;
-  if (typeof data === "string") {
+  const gzipData = rr.unifiedResponse?.gzipData;
+  for (const raw of [data, gzipData]) {
+    if (typeof raw !== "string") continue;
     try {
-      const j = JSON.parse(Buffer.from(data, "base64").toString("utf8"));
+      const bytes2 = Buffer.from(raw, "base64");
+      const plain = raw === gzipData ? (0, import_node_zlib2.gunzipSync)(bytes2) : bytes2;
+      const j = JSON.parse(plain.toString("utf8"));
       const texts = (j.sections ?? []).map((s) => s.view_model?.primitive?.text).filter((t) => !!t);
       if (texts.length) return texts.join("\n");
     } catch {
@@ -6855,6 +6895,276 @@ var Sender = class {
     return id;
   }
   /**
+   * Sends a group message separately to non-admins (`selfMessage`) and, unless `sendToAdmins` is false, admins
+   * (`message`), with a sender-key reset and `skmsg` fan-out for each audience.
+   */
+  async sendSplitGroupMessage(jid, options = {}) {
+    const { creds, cipher, receiver, lids, logger } = this.d;
+    if (!creds.me) throw new Error("not paired");
+    if (!jid.endsWith("@g.us")) return void 0;
+    const waitMs = options.wait ?? 200;
+    const adminWaitMs = options.adminWait ?? waitMs;
+    const sendToAdmins = options.sendToAdmins ?? true;
+    const input2 = options.message ?? { conversation: "admin" };
+    const selfInput = options.selfMessage ?? { conversation: "non-admin" };
+    const generate = options.generate ?? false;
+    const additionalNodes = options.additionalNodes ?? [];
+    const additionalAttributes = options.additionalAttributes ?? {};
+    const pmode2 = options.pmode2 ?? false;
+    const freshId = () => {
+      try {
+        return generateMessageId(creds.me.id);
+      } catch {
+        const hexTime = Date.now().toString(16).toUpperCase();
+        const hexRand = Math.floor(Math.random() * 16777215).toString(16).toUpperCase().padStart(6, "0");
+        return `3EB0${hexTime}${hexRand}`;
+      }
+    };
+    const getMsgId = () => options.messageId ?? freshId();
+    const normalizeBase = (targetJid) => {
+      if (!targetJid) return "";
+      const decoded = jidDecode(targetJid);
+      if (!decoded.user || !decoded.server) return "";
+      return `${decoded.user}@${decoded.server}`;
+    };
+    const unwrapMessage = (message) => {
+      let inner = message;
+      const wrappers = [
+        "ephemeralMessage",
+        "viewOnceMessage",
+        "viewOnceMessageV2",
+        "viewOnceMessageV2Extension",
+        "documentWithCaptionMessage",
+        "deviceSentMessage",
+        "associatedChildMessage",
+        // Sticker wrappers carry an inner `stickerMessage`; without unwrapping them here the
+        // classifier would miss it and the stanza goes out as text / media-without-mediatype,
+        // the shape the server drops.
+        "lottieStickerMessage",
+        "audioStickerMessage"
+      ];
+      while (inner && typeof inner === "object") {
+        let unwrapped = false;
+        for (const key of wrappers) {
+          const container = inner[key];
+          if (container?.message && typeof container.message === "object") {
+            inner = container.message;
+            unwrapped = true;
+            break;
+          }
+        }
+        if (!unwrapped) break;
+      }
+      return inner ?? message;
+    };
+    const getMediaType = (message) => {
+      const msg = unwrapMessage(message);
+      if (msg["imageMessage"]) return "image";
+      if (msg["videoMessage"]) {
+        const vid = msg["videoMessage"];
+        return vid.gifPlayback ? "gif" : "video";
+      }
+      if (msg["audioMessage"]) {
+        const aud = msg["audioMessage"];
+        return aud.ptt ? "ptt" : "audio";
+      }
+      if (msg["documentMessage"]) return "document";
+      if (msg["stickerMessage"]) return "sticker";
+      if (msg["ptvMessage"]) return "video";
+      return "";
+    };
+    const getMessageType = (message) => {
+      const msg = unwrapMessage(message);
+      if (msg["imageMessage"] || msg["videoMessage"] || msg["audioMessage"] || msg["documentMessage"] || msg["stickerMessage"] || msg["ptvMessage"]) {
+        return "media";
+      }
+      if (msg["pollCreationMessage"] || msg["pollCreationMessageV2"] || msg["pollCreationMessageV3"] || msg["pollCreationMessageV4"] || msg["pollCreationMessageV5"]) {
+        return "poll";
+      }
+      if (msg["eventMessage"]) return "event";
+      return "text";
+    };
+    const buildMessage = async (raw) => {
+      const prepared = withMessageSecret(raw);
+      if (!generate || !options.generateMessage) return prepared;
+      const built = await options.generateMessage(jid, prepared);
+      return withMessageSecret(built);
+    };
+    const resetSenderKey = async (senderJid2) => {
+      const senderKeyId = signalAddressString(senderJid2);
+      const memoryKey = `${jid}|${senderKeyId}`;
+      const storage = this.d.storage;
+      if (!("removeSenderKey" in storage) || typeof storage.removeSenderKey !== "function") {
+        throw new Error("sendSplitGroupMessage requires SignalStorage.removeSenderKey");
+      }
+      await storage.removeSenderKey(`${jid}::${senderKeyId}`);
+      delete this.#memory[jid];
+      delete this.#memory[memoryKey];
+      this.#saveMemory();
+    };
+    const sendValidSkmsg = async (contentMessage2, msgId2, addressingMode2, senderJid2, targetJids) => {
+      if (!targetJids.length) return;
+      await resetSenderKey(senderJid2);
+      const mediaType = getMediaType(contentMessage2);
+      const msgType = getMessageType(contentMessage2);
+      const encAttrs = {
+        v: "2",
+        type: "skmsg",
+        ...options.encAttrs
+      };
+      if (mediaType) encAttrs["mediatype"] = mediaType;
+      const senderKeyId = signalAddressString(senderJid2);
+      const skdm = await cipher.createSenderKeyDistribution(jid, senderKeyId);
+      const skmsg = await cipher.groupEncrypt(
+        jid,
+        senderKeyId,
+        padRandomMax16(encodeProto("Message", contentMessage2))
+      );
+      await this.assertSessions(targetJids);
+      const distPlain = padRandomMax16(
+        encodeProto("Message", {
+          senderKeyDistributionMessage: {
+            groupId: jid,
+            axolotlSenderKeyDistributionMessage: skdm
+          }
+        })
+      );
+      const participantNodes = [];
+      let needsIdentity = false;
+      for (const targetJid of targetJids) {
+        const a = this.addr(targetJid);
+        const enc2 = await cipher.encrypt(a.name, a.device, distPlain);
+        if (enc2.type === "pkmsg") needsIdentity = true;
+        participantNodes.push({
+          tag: "to",
+          attrs: { jid: targetJid },
+          content: [
+            {
+              tag: "enc",
+              attrs: {
+                v: "2",
+                type: enc2.type,
+                ...mediaType ? { mediatype: mediaType } : {}
+              },
+              content: enc2.ciphertext
+            }
+          ]
+        });
+      }
+      const content = [
+        {
+          tag: "enc",
+          attrs: encAttrs,
+          content: skmsg
+        },
+        {
+          tag: "participants",
+          attrs: {},
+          content: participantNodes
+        }
+      ];
+      if (needsIdentity && creds.account) {
+        content.push({
+          tag: "device-identity",
+          attrs: {},
+          content: creds.account
+        });
+      }
+      const reporting = this.#reporting(msgId2, senderJid2, jid, contentMessage2);
+      if (reporting) content.push(reporting);
+      if (msgType === "event" && !options.stanzaAttrs?.["edit"]) {
+        content.push({ tag: "meta", attrs: { event_type: "creation" } });
+      }
+      if (additionalNodes.length) {
+        content.push(...additionalNodes);
+      }
+      const memoryKey = `${jid}|${senderKeyId}`;
+      this.#memory[memoryKey] = [...new Set(targetJids)];
+      this.#saveMemory();
+      const phash = participantHash([.../* @__PURE__ */ new Set([...targetJids, senderJid2])]);
+      await receiver.sendAndWaitAck({
+        tag: "message",
+        attrs: {
+          id: msgId2,
+          to: jid,
+          type: msgType,
+          addressing_mode: addressingMode2,
+          phash,
+          ...additionalAttributes,
+          ...options.stanzaAttrs
+        },
+        content
+      });
+    };
+    const sleep2 = (ms) => ms > 0 ? new Promise((resolve2) => setTimeout(resolve2, ms)) : Promise.resolve();
+    const adminMsgId = sendToAdmins ? getMsgId() : freshId();
+    const nonAdminMsgId = sendToAdmins ? freshId() : getMsgId();
+    const msgId = sendToAdmins ? adminMsgId : nonAdminMsgId;
+    const groupInfo = await this.groupParticipants(jid);
+    const addressingMode = groupInfo.addressingMode || "lid";
+    const senderJid = addressingMode === "lid" && creds.me.lid ? creds.me.lid : creds.me.id;
+    const contentMessage = sendToAdmins ? await buildMessage(input2) : void 0;
+    const selfMessage = await buildMessage(selfInput);
+    this.#remember(nonAdminMsgId, jid, selfMessage);
+    this.d.onSent?.(nonAdminMsgId, jid, selfMessage);
+    if (contentMessage) {
+      this.#remember(adminMsgId, jid, contentMessage);
+      this.d.onSent?.(adminMsgId, jid, contentMessage);
+    }
+    const participants = groupInfo.participants.map(normalizeBase).filter(Boolean);
+    let adminBases;
+    let nonAdminBases;
+    if (pmode2) {
+      if (!options.ptarget) {
+        logger.event("send.split-group.missing-ptarget", { jid });
+        throw new Error("Missing ptarget");
+      }
+      const ptargetBase = normalizeBase(options.ptarget);
+      adminBases = /* @__PURE__ */ new Set([ptargetBase]);
+      nonAdminBases = new Set(participants.filter((base) => base !== ptargetBase));
+    } else {
+      const roles = { ...groupInfo.roles, ...options.participantRoles ?? {} };
+      const isAdminBase = (base) => {
+        const role = roles[base] ?? roles[lids.resolve(base)];
+        return role === "admin" || role === "superadmin";
+      };
+      adminBases = new Set(participants.filter((base) => isAdminBase(base)));
+      nonAdminBases = new Set(participants.filter((base) => !isAdminBase(base)));
+    }
+    const adminJids = [...adminBases];
+    const nonAdminJids = [...nonAdminBases];
+    const toTargets = (targets) => targets.map((target) => ({
+      jid: target,
+      user: jidDecode(target).user,
+      device: jidDecode(target).device
+    }));
+    this.#setAudience(nonAdminMsgId, toTargets(nonAdminJids));
+    if (contentMessage) this.#setAudience(adminMsgId, toTargets(adminJids));
+    logger.event("send.split-group", {
+      id: msgId,
+      adminId: adminMsgId,
+      nonAdminId: nonAdminMsgId,
+      to: jid,
+      admins: sendToAdmins ? adminJids.length : 0,
+      adminTargets: adminJids.length,
+      nonAdmins: nonAdminJids.length,
+      pmode2
+    });
+    await sleep2(waitMs);
+    await sendValidSkmsg(selfMessage, nonAdminMsgId, addressingMode, senderJid, nonAdminJids);
+    if (contentMessage) {
+      await sleep2(adminWaitMs);
+      await sendValidSkmsg(contentMessage, adminMsgId, addressingMode, senderJid, adminJids);
+    }
+    logger.event("send.acked", { id: msgId, to: jid });
+    return {
+      msgId,
+      admins: sendToAdmins ? adminJids.length : 0,
+      adminTargets: adminJids.length,
+      nonAdmins: nonAdminJids.length
+    };
+  }
+  /**
    * Post a channel status: distinct from a normal channel post (`sendMessage` to the `@newsletter` jid),
    * which WA Web sends as `<message>` with a bare `conversation`/media and no secret. A status keeps the
    * full message shape (`extendedTextMessage`, not flattened to `conversation`) with a `messageSecret`
@@ -7078,7 +7388,7 @@ var Sender = class {
   }
   // ---- devices -------------------------------------------------------------------------------
   /** All devices (excluding this one) of the given users, via usync. */
-  async getDevices(userJids) {
+  async getDevices(userJids, opts) {
     const { creds, receiver } = this.d;
     const me = jidDecode(creds.me.id);
     const meLidUser = creds.me?.lid ? jidDecode(creds.me.lid).user : void 0;
@@ -7143,11 +7453,19 @@ var Sender = class {
       }
       for (const dev of deviceList) {
         const device = Number(dev.attrs["id"]);
+        if (device === 99) {
+          if (opts?.includeHosted)
+            out.push({
+              jid: `${u}:99@${server2 === "lid" ? "hosted.lid" : "hosted"}`,
+              user: u,
+              device: 99
+            });
+          continue;
+        }
         if (device !== 0 && !dev.attrs["key-index"]) continue;
         if (device !== 0 && keyIndexListInvalid) continue;
         if (device !== 0 && decodedKeyIndex && !isKeyIndexValid(Number(dev.attrs["key-index"]), decodedKeyIndex))
           continue;
-        if (device === 99) continue;
         const isThisDevice = (u === me.user || u === meLidUser) && device === me.device;
         if (isThisDevice) continue;
         out.push({
@@ -7248,7 +7566,7 @@ var Sender = class {
     const othersOf = (ds, mine2) => ds.filter((d) => !mine2.includes(d)).filter(
       (d) => opts.devices === "primary" || opts.devices === "no-linked" ? d.device === 0 : true
     );
-    const devices = await this.getDevices([.../* @__PURE__ */ new Set([ownBare, to])]);
+    const devices = await this.getDevices([.../* @__PURE__ */ new Set([ownBare, to])], { includeHosted: true });
     let mine = mineOf(devices);
     let others = othersOf(devices, mine);
     if (!others.length && !selfChat) {
@@ -7257,7 +7575,7 @@ var Sender = class {
       const altUser = toJid.server === "lid" ? this.d.lids.pnUser(toJid.user) : this.d.lids.lidUser(toJid.user);
       if (altUser) {
         const altJid = toJid.device ? `${altUser}:${toJid.device}@${altServer}` : `${altUser}@${altServer}`;
-        const retryDevices = await this.getDevices([ownBare, altJid]);
+        const retryDevices = await this.getDevices([ownBare, altJid], { includeHosted: true });
         mine = mineOf(retryDevices);
         others = othersOf(retryDevices, mine);
       }
@@ -7280,10 +7598,21 @@ var Sender = class {
       const plain = padRandomMax16(encodeProto("Message", msg));
       for (const t of targets) {
         const a = this.addr(t.jid);
-        const enc2 = await this.d.cipher.encrypt(a.name, a.device, plain);
+        const isHostedDevice = t.jid.endsWith("@hosted") || t.jid.endsWith("@hosted.lid");
+        let enc2;
+        try {
+          enc2 = await this.d.cipher.encrypt(a.name, a.device, plain);
+        } catch (e) {
+          if (isHostedDevice) {
+            this.d.logger.event("send.hosted-skipped", { jid: t.jid, error: e });
+            continue;
+          }
+          throw e;
+        }
         if (enc2.type === "pkmsg") needsIdentity = true;
         const ownLid = creds.me?.lid ? jidDecode(creds.me.lid).user : void 0;
-        const jid = to.endsWith("@lid") && ownLid && (t.user === meUser || t.user === ownLid) ? t.device === 0 ? `${ownLid}@lid` : `${ownLid}:${t.device}@lid` : t.jid;
+        const lidDomain = isHostedDevice ? "hosted.lid" : "lid";
+        const jid = to.endsWith("@lid") && ownLid && (t.user === meUser || t.user === ownLid) ? t.device === 0 ? `${ownLid}@${lidDomain}` : `${ownLid}:${t.device}@${lidDomain}` : t.jid;
         participants.push({
           tag: "to",
           attrs: { jid },
@@ -7307,6 +7636,8 @@ var Sender = class {
       message
     );
     if (reporting) content.push(reporting);
+    if (messageType(message) === "event" && !opts.stanzaAttrs?.["edit"])
+      content.push({ tag: "meta", attrs: { event_type: "creation" } });
     if (to.endsWith("@s.whatsapp.net")) content.push({ tag: "bot", attrs: { biz_bot: "1" } });
     const tc = this.#tcToken(to);
     if (tc) content.push({ tag: "tctoken", attrs: {}, content: tc });
@@ -7315,12 +7646,14 @@ var Sender = class {
       if (cs) content.push({ tag: "cstoken", attrs: {}, content: cs });
     }
     content.push(...opts.extraNodes ?? []);
+    const peerRecipientPn = to.endsWith("@lid") ? this.d.lids.pnUser(jidDecode(to).user) : void 0;
     return {
       tag: "message",
       attrs: {
         id,
         to,
         type: messageType(message),
+        ...peerRecipientPn && { peer_recipient_pn: `${peerRecipientPn}@${S_WHATSAPP_NET2}` },
         ...opts.devices && !selfChat && { device_fanout: "false" },
         ...opts.stanzaAttrs
       },
@@ -7346,7 +7679,7 @@ var Sender = class {
     return computeCsToken(salt, `${jidDecode(resolved).user}@lid`);
   }
   // ---- groups --------------------------------------------------------------------------------
-  /** Participant JIDs and addressing mode of a group. */
+  /** Participant JIDs, roles and addressing mode of a group. */
   async groupParticipants(group) {
     const res = await this.d.receiver.request({
       tag: "iq",
@@ -7355,14 +7688,23 @@ var Sender = class {
     });
     const g = children2(res, "group")[0];
     if (!g) throw new Error(`no group metadata for ${group}`);
+    const roles = {};
     for (const p of children2(g, "participant")) {
       const jid = p.attrs["jid"] ?? "";
       const other = p.attrs["phone_number"] ?? p.attrs["lid"];
       if (jid && other) this.d.lids.set(jid, other);
+      const role = p.attrs["type"];
+      if (jid && role) {
+        const decoded = jidDecode(jid);
+        const base = decoded.user && decoded.server ? `${decoded.user}@${decoded.server}` : jid;
+        roles[jid] = role;
+        roles[base] = role;
+      }
     }
     return {
       participants: children2(g, "participant").map((p) => p.attrs["jid"] ?? "").filter(Boolean),
-      addressingMode: g.attrs["addressing_mode"] ?? "lid"
+      addressingMode: g.attrs["addressing_mode"] ?? "lid",
+      roles
     };
   }
   async #groupStanza(id, group, message, opts) {
@@ -7443,6 +7785,8 @@ var Sender = class {
         tag: "meta",
         attrs: { status_setting: opts.statusPrivacy ?? "contacts", session_scope: "status" }
       });
+    if (messageType(message) === "event" && !opts.stanzaAttrs?.["edit"])
+      content.push({ tag: "meta", attrs: { event_type: "creation" } });
     content.push(...opts.extraNodes ?? []);
     const phash = isStatus ? void 0 : participantHash([.../* @__PURE__ */ new Set([...devices.map((d) => d.jid), senderId])]);
     return {
@@ -7496,8 +7840,12 @@ function withMessageSecret(message) {
   return { ...message, messageContextInfo: { ...info, messageSecret: (0, import_node_crypto12.randomBytes)(32) } };
 }
 function messageType(message) {
+  const sticker = message["lottieStickerMessage"]?.message ?? message["audioStickerMessage"]?.message;
+  if (sticker) return messageType(sticker);
   const q = message["questionMessage"]?.message;
   if (q) return messageType(q);
+  const v = message["viewOnceMessage"]?.message;
+  if (v?.["eventMessage"]) return "event";
   if (message["reactionMessage"]) return "reaction";
   if (message["pollCreationMessage"] || message["pollCreationMessageV2"] || message["pollCreationMessageV3"] || message["pollCreationMessageV5"])
     return "poll";
@@ -7540,6 +7888,96 @@ var import_node_path9 = require("path");
 
 // src/client/features/message/media.ts
 var import_node_crypto13 = require("crypto");
+
+// src/client/features/message/content-type.ts
+function getContentType(content) {
+  if (!content) return void 0;
+  const keys = Object.keys(content).filter(
+    (k) => content[k] != null && k !== "senderKeyDistributionMessage" && k !== "messageContextInfo"
+  );
+  return keys[0];
+}
+var FP_WRAPPERS = [
+  "ephemeralMessage",
+  "viewOnceMessage",
+  "viewOnceMessageV2",
+  "viewOnceMessageV2Extension",
+  "documentWithCaptionMessage",
+  "groupMentionedMessage",
+  "botInvokeMessage",
+  "associatedChildMessage",
+  "pollCreationOptionImageMessage",
+  "eventCoverImage",
+  "groupStatusMessage",
+  "groupStatusMessageV2",
+  "groupStatusMentionMessage",
+  "statusAddYours",
+  "statusMentionMessage",
+  "questionMessage",
+  "questionReplyMessage",
+  "spoilerMessage",
+  "lottieStickerMessage",
+  "audioStickerMessage",
+  "limitSharingMessage",
+  "newsletterAdminProfileMessage",
+  "newsletterAdminProfileStatusMessage",
+  "pollCreationMessageV4",
+  "botForwardedMessage",
+  "editedMessage"
+];
+function normalizeMessageContent(content) {
+  let c = content ?? void 0;
+  for (let depth = 0; c && depth < 5; depth++) {
+    const wrapper = FP_WRAPPERS.map(
+      (k) => c[k]
+    ).find((w) => w?.message);
+    if (!wrapper) break;
+    c = wrapper.message;
+  }
+  return c;
+}
+function hasFpWrapper(content, key) {
+  let c = content ?? void 0;
+  for (let depth = 0; c && depth < 5; depth++) {
+    if (c[key]?.message) return true;
+    const next = FP_WRAPPERS.map(
+      (k) => c[k]?.message
+    ).find(Boolean);
+    if (!next) break;
+    c = next;
+  }
+  return false;
+}
+var isAudioSticker = (content) => hasFpWrapper(content, "audioStickerMessage");
+var isLottieSticker = (content) => hasFpWrapper(content, "lottieStickerMessage");
+function audioStickerSound(content) {
+  const sticker = normalizeMessageContent(content)?.["stickerMessage"];
+  return sticker?.audioMessage ? { audioMessage: sticker.audioMessage } : void 0;
+}
+function stickerReactionParentKey(content) {
+  const assoc = content?.["messageContextInfo"]?.messageAssociation;
+  if (!assoc || assoc["associationType"] !== "STICKER_ANNOTATION") return void 0;
+  return assoc["parentMessageKey"];
+}
+function nativeFlowReplyId(reply) {
+  const flow = reply?.["nativeFlowResponseMessage"];
+  if (!flow?.paramsJson) return void 0;
+  try {
+    const p = JSON.parse(flow.paramsJson);
+    const id = p.id ?? p.selected_id;
+    return typeof id === "string" && id ? id : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function messageText(content) {
+  const c = normalizeMessageContent(content);
+  if (!c) return void 0;
+  const get = (k) => c[k];
+  return (typeof c["conversation"] === "string" ? c["conversation"] : void 0) ?? get("extendedTextMessage")?.["text"] ?? get("imageMessage")?.["caption"] ?? get("videoMessage")?.["caption"] ?? get("documentMessage")?.["caption"] ?? get("buttonsResponseMessage")?.["selectedButtonId"] ?? get("listResponseMessage")?.["singleSelectReply"]?.selectedRowId ?? get("templateButtonReplyMessage")?.["selectedId"] ?? nativeFlowReplyId(get("interactiveResponseMessage"));
+}
+
+// src/client/features/message/media.ts
 var HKDF_LABEL = {
   "md-app-state": "App State",
   "md-msg-hist": "History",
@@ -7569,14 +8007,17 @@ var NEWSLETTER_THUMBNAIL_PATH = "/newsletter/newsletter-thumbnail-image";
 var MEDIA_HOST = "mmg.whatsapp.net";
 var ORIGIN = "https://web.whatsapp.com";
 var MAC_LENGTH = 10;
-function mediaKeys(mediaKey, type) {
+function mediaKeysForLabel(mediaKey, label) {
   const okm = Buffer.from(
-    (0, import_node_crypto13.hkdfSync)("sha256", mediaKey, Buffer.alloc(0), `WhatsApp ${HKDF_LABEL[type]} Keys`, 112)
+    (0, import_node_crypto13.hkdfSync)("sha256", mediaKey, Buffer.alloc(0), `WhatsApp ${label} Keys`, 112)
   );
   return { iv: okm.subarray(0, 16), cipherKey: okm.subarray(16, 48), macKey: okm.subarray(48, 80) };
 }
-function encryptMedia(plain, type, mediaKey = (0, import_node_crypto13.randomBytes)(32)) {
-  const { iv, cipherKey, macKey } = mediaKeys(mediaKey, type);
+function mediaKeys(mediaKey, type) {
+  return mediaKeysForLabel(mediaKey, HKDF_LABEL[type]);
+}
+function encryptMediaWithLabel(plain, label, mediaKey = (0, import_node_crypto13.randomBytes)(32)) {
+  const { iv, cipherKey, macKey } = mediaKeysForLabel(mediaKey, label);
   const cipher = (0, import_node_crypto13.createCipheriv)("aes-256-cbc", cipherKey, iv);
   const body = Buffer.concat([cipher.update(plain), cipher.final()]);
   const mac = (0, import_node_crypto13.createHmac)("sha256", macKey).update(iv).update(body).digest().subarray(0, MAC_LENGTH);
@@ -7588,6 +8029,9 @@ function encryptMedia(plain, type, mediaKey = (0, import_node_crypto13.randomByt
     fileEncSha256: (0, import_node_crypto13.createHash)("sha256").update(encrypted).digest(),
     fileLength: plain.length
   };
+}
+function encryptMedia(plain, type, mediaKey = (0, import_node_crypto13.randomBytes)(32)) {
+  return encryptMediaWithLabel(plain, HKDF_LABEL[type], mediaKey);
 }
 function rawMedia(plain) {
   const sha = (0, import_node_crypto13.createHash)("sha256").update(plain).digest();
@@ -7609,6 +8053,8 @@ function stripMediaKeys(message) {
     }
   }
 }
+var MediaVerificationError = class extends Error {
+};
 function decryptMedia(encrypted, mediaKey, type, expect = {}) {
   if (expect.unencrypted) {
     const hash = expect.fileSha256 ?? expect.fileEncSha256;
@@ -7616,23 +8062,23 @@ function decryptMedia(encrypted, mediaKey, type, expect = {}) {
       throw new Error("unencrypted media needs fileSha256 or fileEncSha256 to verify against");
     const plain2 = Buffer.from(encrypted);
     if (!timingSafeEqualSafe((0, import_node_crypto13.createHash)("sha256").update(plain2).digest(), hash))
-      throw new Error("media hash mismatch");
+      throw new MediaVerificationError("media hash mismatch");
     return plain2;
   }
   if (mediaKey.length !== 32) throw new Error("mediaKey must be 32 bytes");
   if (encrypted.length <= MAC_LENGTH) throw new Error("media payload too short");
   if (expect.fileEncSha256 && !timingSafeEqualSafe((0, import_node_crypto13.createHash)("sha256").update(encrypted).digest(), expect.fileEncSha256)) {
-    throw new Error("encrypted media hash mismatch");
+    throw new MediaVerificationError("encrypted media hash mismatch");
   }
   const { iv, cipherKey, macKey } = mediaKeys(mediaKey, type);
   const body = Buffer.from(encrypted.subarray(0, encrypted.length - MAC_LENGTH));
   const mac = Buffer.from(encrypted.subarray(encrypted.length - MAC_LENGTH));
   const expectedMac = (0, import_node_crypto13.createHmac)("sha256", macKey).update(iv).update(body).digest().subarray(0, MAC_LENGTH);
-  if (!timingSafeEqualSafe(expectedMac, mac)) throw new Error("media MAC mismatch");
+  if (!timingSafeEqualSafe(expectedMac, mac)) throw new MediaVerificationError("media MAC mismatch");
   const d = (0, import_node_crypto13.createDecipheriv)("aes-256-cbc", cipherKey, iv);
   const plain = Buffer.concat([d.update(body), d.final()]);
   if (expect.fileSha256 && !timingSafeEqualSafe((0, import_node_crypto13.createHash)("sha256").update(plain).digest(), expect.fileSha256)) {
-    throw new Error("media hash mismatch");
+    throw new MediaVerificationError("media hash mismatch");
   }
   return plain;
 }
@@ -7794,6 +8240,7 @@ async function downloadMedia(ref, type, fetchImpl = fetch, extraHosts = []) {
           ...ref.unencrypted && { unencrypted: true }
         });
       } catch (e) {
+        if (e instanceof MediaVerificationError) throw e;
         lastError = e;
         const retryable = e instanceof RetryableHttpError || e instanceof TypeError;
         if (!retryable || attempt === MAX_ATTEMPTS_PER_URL) break;
@@ -7876,6 +8323,7 @@ function mediaMessage(type, media, uploaded, o = {}, nowSeconds = Math.floor(Dat
   }
 }
 function mediaOf(message) {
+  const inner = normalizeMessageContent(message) ?? message;
   const map = [
     ["imageMessage", "image"],
     ["videoMessage", "video"],
@@ -7884,7 +8332,7 @@ function mediaOf(message) {
     ["stickerMessage", "sticker"]
   ];
   for (const [field, type] of map) {
-    const m = message[field];
+    const m = inner[field];
     if (m?.["mediaKey"]) {
       const b = (x) => typeof x === "string" ? new Uint8Array(Buffer.from(x, "base64")) : x instanceof Uint8Array ? x : void 0;
       return {
@@ -8606,7 +9054,18 @@ async function profilePictureUrl(request, jid, type = "preview") {
     throw e;
   }
 }
-async function updateStatus(request, text5) {
+var UPDATE_TEXT_STATUS_QUERY = "9152604461510864";
+async function updateStatus(request, text5, o = {}, mex) {
+  if (o.emoji || o.ephemeralDurationSec) {
+    if (!mex) throw new Error("updateStatus: an emoji or an expiry needs the mex function");
+    await mex(UPDATE_TEXT_STATUS_QUERY, {
+      input: {
+        text: text5,
+        ...o.emoji && { emoji: { content: o.emoji } },
+        ephemeral_duration_sec: o.ephemeralDurationSec ?? 0
+      }
+    });
+  }
   await request({
     tag: "iq",
     attrs: { to: "s.whatsapp.net", type: "set", xmlns: "status" },
@@ -9611,11 +10070,22 @@ function parseGroupNotification(node) {
     ...node.attrs["t"] && { timestamp: Number(node.attrs["t"]) }
   };
   for (const c of kids4(node)) {
-    const participants = kids4(c, "participant").map((p) => p.attrs["jid"] ?? "").filter(Boolean);
+    const participantNodes = kids4(c, "participant");
+    const participants = participantNodes.map((p) => p.attrs["jid"] ?? "").filter(Boolean);
+    const participantPhoneNumbers = {};
+    const participantUsernames = {};
+    for (const p of participantNodes) {
+      const jid = p.attrs["jid"];
+      const phoneNumber = p.attrs["phone_number"];
+      if (jid && phoneNumber) participantPhoneNumbers[jid] = phoneNumber;
+      if (jid && p.attrs["username"]) participantUsernames[jid] = p.attrs["username"];
+    }
     const n = {
       ...base,
       action: c.tag,
-      ...participants.length && { participants }
+      ...participants.length && { participants },
+      ...Object.keys(participantPhoneNumbers).length && { participantPhoneNumbers },
+      ...Object.keys(participantUsernames).length && { participantUsernames }
     };
     if (c.tag === "subject") {
       if (c.attrs["subject"]) n.subject = c.attrs["subject"];
@@ -10119,11 +10589,11 @@ async function companionFinish(notification, creds, phoneNumber, code) {
 }
 
 // src/client/features/chat/history.ts
-var import_node_zlib2 = require("zlib");
+var import_node_zlib3 = require("zlib");
 var MAX_INFLATED_BYTES = 512 * 1024 * 1024;
 var num2 = (v) => v === void 0 || v === null || v === "" ? void 0 : Number(v);
 function parseHistory(compressed) {
-  const inflated = (0, import_node_zlib2.inflateSync)(compressed, { maxOutputLength: MAX_INFLATED_BYTES });
+  const inflated = (0, import_node_zlib3.inflateSync)(compressed, { maxOutputLength: MAX_INFLATED_BYTES });
   const T = protoType("HistorySync");
   const h = T.toObject(T.decode(inflated), { longs: String, bytes: String, enums: String });
   const chats = (h["conversations"] ?? []).map((c) => {
@@ -10187,6 +10657,9 @@ function parseHistory(compressed) {
       id: c["id"],
       ...c["name"] && { name: c["name"] },
       ...c["unreadCount"] !== void 0 && { unreadCount: Number(c["unreadCount"]) },
+      ...num2(c["unreadReplyToMyMessageCount"]) !== void 0 && {
+        unreadReplyToMyMessageCount: num2(c["unreadReplyToMyMessageCount"])
+      },
       ...num2(c["conversationTimestamp"]) !== void 0 && {
         conversationTimestamp: num2(c["conversationTimestamp"])
       },
@@ -11396,6 +11869,113 @@ function getStickerMetadata(webp) {
       iosAppStoreLink: json["ios-app-store-link"]
     }
   };
+}
+
+// src/client/features/message/sticker-convert.ts
+var import_node_child_process4 = require("child_process");
+function isWebp(bytes2) {
+  return bytes2.length >= 12 && bytes2[0] === 82 && // R
+  bytes2[1] === 73 && // I
+  bytes2[2] === 70 && // F
+  bytes2[3] === 70 && // F
+  bytes2[8] === 87 && // W
+  bytes2[9] === 69 && // E
+  bytes2[10] === 66 && // B
+  bytes2[11] === 80;
+}
+function toStickerWebp(bytes2, opts = {}) {
+  const size = opts.size ?? 512;
+  const quality2 = opts.quality ?? 75;
+  const maxBytes = opts.maxBytes ?? 2 * 1024 * 1024;
+  const maxInputBytes = opts.maxInputBytes ?? 64 * 1024 * 1024;
+  const timeoutMs = opts.timeoutMs ?? 6e4;
+  if (bytes2.length > maxInputBytes)
+    return Promise.reject(new Error(`sticker source exceeds ${maxInputBytes} bytes`));
+  const args = [
+    "-v",
+    "error",
+    "-nostdin",
+    "-i",
+    "pipe:0",
+    "-vf",
+    `scale=${size}:${size}:force_original_aspect_ratio=decrease,pad=${size}:${size}:(ow-iw)/2:(oh-ih)/2:color=#00000000,setsar=1`,
+    "-c:v",
+    "libwebp",
+    "-pix_fmt",
+    "yuva420p",
+    "-loop",
+    "0",
+    "-an",
+    "-q:v",
+    String(quality2),
+    "-f",
+    "webp",
+    "pipe:1"
+  ];
+  return new Promise((resolve2, reject) => {
+    const p = (0, import_node_child_process4.spawn)("ffmpeg", args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: timeoutMs,
+      killSignal: "SIGKILL"
+    });
+    const out = [];
+    const err = [];
+    let outSize = 0;
+    let errSize = 0;
+    let done = false;
+    const fail = (e) => {
+      if (done) return;
+      done = true;
+      p.stdout.destroy();
+      p.stdin.destroy();
+      p.kill("SIGKILL");
+      reject(e);
+    };
+    p.stdout.on("data", (d) => {
+      outSize += d.length;
+      if (outSize > maxBytes)
+        return fail(new Error(`sticker conversion exceeded ${maxBytes} bytes`));
+      out.push(d);
+    });
+    p.stderr.on("data", (d) => {
+      if (errSize < 64 * 1024) {
+        err.push(d);
+        errSize += d.length;
+      }
+    });
+    p.on(
+      "error",
+      (e) => fail(
+        new Error(
+          `ffmpeg could not be started (needed to convert a non-WebP sticker): ${e.message}`
+        )
+      )
+    );
+    p.on("close", (code, signal) => {
+      if (done) return;
+      done = true;
+      if (code === 0) resolve2(new Uint8Array(Buffer.concat(out)));
+      else if (signal === "SIGKILL")
+        reject(new Error(`ffmpeg sticker conversion timed out after ${timeoutMs} ms`));
+      else
+        reject(
+          new Error(
+            `ffmpeg sticker conversion failed: ${Buffer.concat(err).toString().trim() || code}`
+          )
+        );
+    });
+    p.stdin.on("error", () => {
+    });
+    p.stdin.end(Buffer.from(bytes2));
+  });
+}
+async function ensureStickerWebp(bytes2, opts = {}) {
+  if (isWebp(bytes2)) {
+    const maxBytes = opts.maxBytes ?? 2 * 1024 * 1024;
+    if (bytes2.length > maxBytes) throw new Error(`sticker WebP exceeds ${maxBytes} bytes`);
+    return bytes2;
+  }
+  return toStickerWebp(bytes2, opts);
 }
 
 // src/client/features/contact/bots.ts
@@ -20187,6 +20767,14 @@ var Client = class {
     return sender.sendMessage(to, message, opts);
   }
   /**
+   * Send different raw WAProto message content to admins and non-admins in a group.
+   * The participant roles are read from the group metadata.
+   */
+  async sendSplitGroupMessage(groupJid, options = {}) {
+    const { sender } = await this.#live();
+    return sender.sendSplitGroupMessage(groupJid, options);
+  }
+  /**
    * Inject a message into this client's own `message` event exactly as if it had really arrived from
    * `from` - entirely local, no network traffic, nothing sent or received for real. Ported from a known
    * WhatsApp mod feature ("Fake real-time chat"/"Modify Chat"): type something yourself and have your
@@ -20236,7 +20824,7 @@ var Client = class {
   }
   /** Encrypt, upload and send an image / video / audio / document / sticker. `data` is bytes, a local path
    * (`{ path }`), an `http(s)` URL (`{ url }`) or a stream (`{ stream }`); see `MediaSource`. */
-  async sendMedia(to, type, data, opts = {}) {
+  async sendMedia(to, type, data, opts = {}, fpWrapper) {
     const { sender, meId } = await this.#live();
     const bytes2 = await toBytes(data);
     const channel = to.endsWith("@newsletter");
@@ -20295,7 +20883,15 @@ var Client = class {
         [field]: { ...body, contextInfo: { ...body["contextInfo"], ...extraContext } }
       };
     }
-    const wire = opts.viewOnce ? viewOnce(message) : message;
+    const base = opts.viewOnce ? viewOnce(message) : message;
+    let wire = base;
+    if (fpWrapper) {
+      const { messageContextInfo, ...inner } = base;
+      wire = {
+        ...messageContextInfo ? { messageContextInfo } : {},
+        [fpWrapper]: { message: inner }
+      };
+    }
     const gs = opts.groupStatus ? groupStatus(wire) : void 0;
     const q = opts.isQuestion ? question(wire) : void 0;
     let serverId;
@@ -20319,15 +20915,178 @@ var Client = class {
   sendVideo = (to, data, opts = {}) => this.sendMedia(to, "video", data, opts);
   sendAudio = (to, data, opts = {}) => this.sendMedia(to, "audio", data, opts);
   sendDocument = (to, data, opts = {}) => this.sendMedia(to, "document", data, opts);
-  /** `stickerMetadata` embeds pack attribution (WhatsApp's own EXIF convention) so the app shows "Added by X". */
+  /**
+   * Sticker bytes ready to send: any image or short animation (PNG, JPEG, GIF, MP4, ...) is converted to a
+   * 512x512 sticker WebP via `ffmpeg` (a source that is already WebP passes straight through); set
+   * `stickerConvert: false` to send the bytes untouched. `stickerMetadata` is then stamped on as EXIF.
+   */
+  async #stickerBytes(data, opts) {
+    let bytes2 = await toBytes(data);
+    if (opts.stickerConvert !== false)
+      bytes2 = await ensureStickerWebp(bytes2, opts.stickerConvert ?? {});
+    return opts.stickerMetadata ? addStickerMetadata(bytes2, opts.stickerMetadata) : bytes2;
+  }
+  /**
+   * `data` may be any image or short animation (PNG, JPEG, GIF, MP4, ...): it is converted to a WhatsApp sticker
+   * WebP for you (needs `ffmpeg`); pass a WebP to skip conversion, or `stickerConvert: false` to force it.
+   * `stickerMetadata` embeds pack attribution (WhatsApp's own EXIF convention) so the app shows "Added by X".
+   */
   async sendSticker(to, data, opts = {}) {
-    const { stickerMetadata, ...rest } = opts;
-    const bytes2 = await toBytes(data);
+    const { stickerMetadata, stickerConvert, ...rest } = opts;
     return this.sendMedia(
       to,
       "sticker",
-      stickerMetadata ? addStickerMetadata(bytes2, stickerMetadata) : bytes2,
+      await this.#stickerBytes(data, { stickerMetadata, stickerConvert }),
       rest
+    );
+  }
+  /**
+   * Send an audio sticker: an (animated) sticker with a sound. On the wire it is a `stickerMessage` that
+   * carries the uploaded sound as its nested `audioMessage`, wrapped in `audioStickerMessage` - exactly the
+   * shape WhatsApp sends. `data.sticker` is the WebP; `data.audio` the sound (e.g. Opus/OGG).
+   */
+  async sendAudioSticker(to, data, opts = {}) {
+    const { stickerMetadata, stickerConvert, emojis, seconds: seconds2, fields, ...rest } = opts;
+    const audioEnc = encryptMedia(await toBytes(data.audio), "audio");
+    const audioUp = await uploadMedia(await this.#getMediaConn(), "audio", audioEnc, fetch);
+    const audioMessage = mediaMessage("audio", audioEnc, audioUp, { seconds: seconds2 }).message["audioMessage"];
+    const stickerBytes = await this.#stickerBytes(data.sticker, { stickerMetadata, stickerConvert });
+    return this.sendMedia(
+      to,
+      "sticker",
+      stickerBytes,
+      {
+        ...rest,
+        fields: { audioMessage, isAnimated: true, ...emojis ? { emojis } : {}, ...fields }
+      },
+      "audioStickerMessage"
+    );
+  }
+  /**
+   * React to a message with a sticker ("sticker annotation"): the sticker is wrapped in
+   * `associatedChildMessage` and tied to `parentKey` via `messageContextInfo.messageAssociation`.
+   */
+  async stickerReact(to, parentKey, sticker, opts = {}) {
+    const { stickerMetadata, stickerConvert, ...rest } = opts;
+    return this.sendMedia(
+      to,
+      "sticker",
+      await this.#stickerBytes(sticker, { stickerMetadata, stickerConvert }),
+      {
+        ...rest,
+        association: {
+          associationType: "STICKER_ANNOTATION",
+          parentMessageKey: {
+            remoteJid: parentKey.remoteJid,
+            fromMe: parentKey.fromMe ?? false,
+            id: parentKey.id
+          }
+        }
+      },
+      "associatedChildMessage"
+    );
+  }
+  /** Send a Lottie (animated) sticker: a sticker wrapped in `lottieStickerMessage`. */
+  async sendLottieSticker(to, data, opts = {}) {
+    const { stickerMetadata, stickerConvert, ...rest } = opts;
+    return this.sendMedia(
+      to,
+      "sticker",
+      await this.#stickerBytes(data, { stickerMetadata, stickerConvert }),
+      rest,
+      "lottieStickerMessage"
+    );
+  }
+  /**
+   * Send a `CHAT_THEME_SETTING` protocol message to a chat (group or 1:1). The stanza goes out as `media` with
+   * the `chat_theme` mediatype WhatsApp expects for a theme change.
+   */
+  async #sendChatTheme(jid, chatThemeSetting, opts = {}) {
+    const { sender } = await this.#live();
+    return sender.sendMessage(
+      jid,
+      { protocolMessage: { type: "CHAT_THEME_SETTING", chatThemeSetting } },
+      {
+        ...opts.messageId && { messageId: opts.messageId },
+        encAttrs: { mediatype: "chat_theme" },
+        stanzaAttrs: { type: "media" }
+      }
+    );
+  }
+  /**
+   * Set a custom image as a chat's wallpaper (group or 1:1), via a `CHAT_THEME_SETTING` protocol message.
+   * `image` is any image source; it is encrypted and uploaded like a normal image. `dimLevel` (0..1, default 0)
+   * darkens it behind the messages. Returns the sent message id.
+   *
+   * The wallpaper image is encrypted with WhatsApp's `WhatsApp Chat Wallpaper Keys` HKDF derivation and uploaded
+   * on the `chat-wallpaper-image` media path, exactly as the app does. `hkdfLabel` (default `'Chat Wallpaper'`)
+   * overrides the label word if a future build ever changes it.
+   */
+  async setChatWallpaper(jid, image, opts = {}) {
+    const enc2 = encryptMediaWithLabel(
+      await toBytes(image),
+      opts.hkdfLabel ?? "Chat Wallpaper"
+    );
+    const up = await uploadMedia(
+      await this.#getMediaConn(),
+      "image",
+      enc2,
+      fetch,
+      false,
+      "/mms/chat-wallpaper-image"
+    );
+    return this.#sendChatTheme(
+      jid,
+      {
+        settingTimestampMs: opts.settingTimestampMs ?? Date.now(),
+        customImage: {
+          directPath: up.directPath,
+          mediaKey: enc2.mediaKey,
+          fileEncSha256: enc2.fileEncSha256,
+          fileSha256: enc2.fileSha256,
+          dimLevel: opts.dimLevel ?? 0
+        }
+      },
+      opts
+    );
+  }
+  /**
+   * Set a solid-colour background for a chat (group or 1:1). Colours are ARGB integers (e.g. `0xFFFF0000` for
+   * opaque red); `darkArgb` defaults to `lightArgb`. Optional doodle overlay with its own colours.
+   */
+  async setChatThemeColor(jid, opts) {
+    return this.#sendChatTheme(
+      jid,
+      {
+        settingTimestampMs: opts.settingTimestampMs ?? Date.now(),
+        solidColor: {
+          backgroundLightArgb: opts.lightArgb,
+          backgroundDarkArgb: opts.darkArgb ?? opts.lightArgb,
+          isDoodleEnabled: opts.doodle ?? false,
+          ...opts.doodleLightArgb !== void 0 && { doodleLightArgb: opts.doodleLightArgb },
+          ...opts.doodleDarkArgb !== void 0 && { doodleDarkArgb: opts.doodleDarkArgb }
+        }
+      },
+      opts
+    );
+  }
+  /**
+   * Apply one of WhatsApp's preset chat themes to a chat (group or 1:1) by its id (see `CHAT_THEME_IDS`),
+   * e.g. `'Emerald@Minimal'`.
+   */
+  async setChatTheme(jid, colorSchemeId, opts = {}) {
+    return this.#sendChatTheme(
+      jid,
+      { settingTimestampMs: opts.settingTimestampMs ?? Date.now(), colorSchemeId },
+      opts
+    );
+  }
+  /** Clear a chat's custom theme / wallpaper, returning it to the default. */
+  async clearChatTheme(jid, opts = {}) {
+    return this.#sendChatTheme(
+      jid,
+      { settingTimestampMs: opts.settingTimestampMs ?? Date.now(), clearTheme: true },
+      opts
     );
   }
   /** Download and decrypt the media of a received message (`event.message`). */
@@ -20459,6 +21218,37 @@ var Client = class {
   async sendEvent(to, o) {
     const { sender } = await this.#live();
     return sender.sendMessage(to, eventMessage(o));
+  }
+  /**
+   * Edit an event card's details. `key` is the card's key and `creator` who sent it (the card must have been
+   * received here, because its secret is needed). The delivery stanza for this needs `type="event"`, `edit="1"`
+   * and a `<meta event_type="edit"/>` child - omitting any of them is accepted by the server but the WhatsApp
+   * app silently ignores the edit, so this builds that shape rather than leaving it to the caller.
+   */
+  async editEvent(key, creator, o) {
+    const { sender, receiver } = await this.#live();
+    const secret = receiver.secretOf(key.id);
+    if (!secret)
+      throw new Error("the secret of this event is unknown (the card was not received here)");
+    const me = this.#creds.me?.id;
+    if (!me) throw new Error("not paired");
+    const strip = (j) => j.replace(/:\d+@/, "@");
+    const { messageContextInfo: _secret, ...inner } = eventMessage(o);
+    void _secret;
+    return sender.sendMessage(
+      key.remoteJid,
+      secretEncryptedMessage("EVENT_EDIT", key, inner, {
+        parentSenderJid: strip(creator),
+        modifierJid: strip(
+          creator.endsWith("@lid") && this.#creds.me?.lid ? this.#creds.me.lid : me
+        ),
+        secret
+      }),
+      {
+        stanzaAttrs: { type: "event", edit: "1" },
+        extraNodes: [{ tag: "meta", attrs: { event_type: "edit" } }]
+      }
+    );
   }
   /**
    * Comment on a post in a Community Announcement Group (an announcement under a community). `parent` is the post's
@@ -20888,8 +21678,8 @@ var Client = class {
     return numericSecurityCode(version, localUser, ownKeys, remoteUser, peerKeys);
   }
   profilePictureUrl = (jid, type = "preview") => profilePictureUrl(this.#q, jid, type);
-  /** Set our own "About" text. */
-  updateProfileStatus = (text5) => updateStatus(this.#q, text5);
+  /** Set our own "About" text, and optionally an emoji/an expiry newer clients show above it. */
+  updateProfileStatus = (text5, o) => updateStatus(this.#q, text5, o, this.mex);
   fetchBlocklist = () => fetchBlocklist(this.#q);
   /** Block a contact; `entryPoint` / `reason` are what the app reports with it (see `contacts.BlockOptions`). */
   async blockUser(jid, o = {}) {
@@ -22738,12 +23528,28 @@ var Client = class {
       onNotification: (node) => {
         const type = node.attrs["type"] ?? "";
         this.#events.emit("notification", { type, node });
+        const lidPairAgrees = (pnJid, lidJid) => {
+          try {
+            const pn = jidDecode(pnJid).user;
+            const lid = jidDecode(lidJid).user;
+            const curLid = lids.lidUser(pn);
+            const curPn = lids.pnUser(lid);
+            return (!curLid || curLid === lid) && (!curPn || curPn === pn);
+          } catch {
+            return false;
+          }
+        };
         if (type === "privacy_token") {
           const from = node.attrs["sender_lid"] ?? node.attrs["from"] ?? "";
           this.#tcTokens.storeFrom(node, from.replace(/:\d+@/, "@"));
         }
         if (type === "w:gp2")
-          for (const n of parseGroupNotification(node)) this.#events.emit("group.update", n);
+          for (const n of parseGroupNotification(node)) {
+            for (const [jid, phoneNumber] of Object.entries(n.participantPhoneNumbers ?? {}))
+              if (jid.endsWith("@lid") && phoneNumber.endsWith("@s.whatsapp.net") && lidPairAgrees(phoneNumber, jid))
+                lids.set(jid, phoneNumber);
+            this.#events.emit("group.update", n);
+          }
         if (type === "server_sync") {
           const names = (Array.isArray(node.content) ? node.content : []).filter((c) => c.tag === "collection").map((c) => c.attrs["name"] ?? "").filter(Boolean);
           void this.#appState?.sync(names);
@@ -22764,18 +23570,7 @@ var Client = class {
           const c = parseContactsNotification(node);
           if (c) {
             if (c.action === "number-changed" && c.oldLid && c.newLid) {
-              const agrees = (pnJid, lidJid) => {
-                try {
-                  const pn = jidDecode(pnJid).user;
-                  const lid = jidDecode(lidJid).user;
-                  const curLid = lids.lidUser(pn);
-                  const curPn = lids.pnUser(lid);
-                  return (!curLid || curLid === lid) && (!curPn || curPn === pn);
-                } catch {
-                  return false;
-                }
-              };
-              if (agrees(c.oldJid, c.oldLid) && agrees(c.newJid, c.newLid)) {
+              if (lidPairAgrees(c.oldJid, c.oldLid) && lidPairAgrees(c.newJid, c.newLid)) {
                 lids.set(c.oldJid, c.oldLid);
                 lids.set(c.newJid, c.newLid);
               }
@@ -22885,48 +23680,6 @@ var Client = class {
     this.#events.emit("connection", { state: "open" });
   }
 };
-
-// src/client/features/message/content-type.ts
-function getContentType(content) {
-  if (!content) return void 0;
-  const keys = Object.keys(content).filter(
-    (k) => content[k] != null && k !== "senderKeyDistributionMessage" && k !== "messageContextInfo"
-  );
-  return keys[0];
-}
-function normalizeMessageContent(content) {
-  let c = content ?? void 0;
-  for (let depth = 0; c && depth < 5; depth++) {
-    const wrapper = [
-      "ephemeralMessage",
-      "viewOnceMessage",
-      "viewOnceMessageV2",
-      "viewOnceMessageV2Extension",
-      "documentWithCaptionMessage",
-      "editedMessage"
-    ].map((k) => c[k]).find((w) => w?.message);
-    if (!wrapper) break;
-    c = wrapper.message;
-  }
-  return c;
-}
-function nativeFlowReplyId(reply) {
-  const flow = reply?.["nativeFlowResponseMessage"];
-  if (!flow?.paramsJson) return void 0;
-  try {
-    const p = JSON.parse(flow.paramsJson);
-    const id = p.id ?? p.selected_id;
-    return typeof id === "string" && id ? id : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function messageText(content) {
-  const c = normalizeMessageContent(content);
-  if (!c) return void 0;
-  const get = (k) => c[k];
-  return (typeof c["conversation"] === "string" ? c["conversation"] : void 0) ?? get("extendedTextMessage")?.["text"] ?? get("imageMessage")?.["caption"] ?? get("videoMessage")?.["caption"] ?? get("documentMessage")?.["caption"] ?? get("buttonsResponseMessage")?.["selectedButtonId"] ?? get("listResponseMessage")?.["singleSelectReply"]?.selectedRowId ?? get("templateButtonReplyMessage")?.["selectedId"] ?? nativeFlowReplyId(get("interactiveResponseMessage"));
-}
 
 // src/bot/message.ts
 var MEDIA = [
@@ -23059,6 +23812,19 @@ var GroupCache = class {
 };
 var isGroupAdmin = (group, jid) => !!group && !!jid && group.admins.some((a) => areJidsSameUser(a, jid));
 
+// src/client/features/chat/chat-theme.ts
+var CHAT_THEME_IDS = [
+  "Default-Blue@Minimal",
+  "Default-Blue@Tonal@Minimal",
+  "Emerald@Minimal",
+  "Emerald@Tonal@Minimal",
+  "Pink@Minimal",
+  "Red@Minimal",
+  "Royal-Blue@Minimal",
+  "Tyrian-Purple@Minimal",
+  "WhatsApp-Green@Minimal"
+];
+
 // src/client/store.ts
 var MemoryStore = class {
   #messages = /* @__PURE__ */ new Map();
@@ -23141,6 +23907,7 @@ var MemoryStore = class {
   AntiBanError,
   AppStateCollection,
   Browsers,
+  CHAT_THEME_IDS,
   Client,
   DEFAULT_HISTORY_SYNC,
   DEVICE_PROFILES,
@@ -23166,6 +23933,7 @@ var MemoryStore = class {
   WEB_SUB_PLATFORMS,
   addStickerMetadata,
   areJidsSameUser,
+  audioStickerSound,
   buildReport,
   callButton,
   compressSession,
@@ -23180,11 +23948,13 @@ var MemoryStore = class {
   encodeFrame,
   encodeNode,
   encodeWam,
+  ensureStickerWebp,
   fetchLinkPreview,
   findUrl,
   getContentType,
   getFakeMsg,
   getStickerMetadata,
+  isAudioSticker,
   isGroupAdmin,
   isJidBroadcast,
   isJidGroup,
@@ -23192,7 +23962,9 @@ var MemoryStore = class {
   isJidStatusBroadcast,
   isJidUser,
   isLidUser,
+  isLottieSticker,
   isMe,
+  isWebp,
   jidDecode,
   jidEncode,
   jidNormalizedUser,
@@ -23215,6 +23987,8 @@ var MemoryStore = class {
   singleSelect,
   splitAnnexB,
   startXxHandshake,
+  stickerReactionParentKey,
+  toStickerWebp,
   tokenizeCode,
   urlButton,
   vcardFor,

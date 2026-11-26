@@ -280,14 +280,13 @@ declare function startXxHandshake(staticPrivate: Uint8Array, staticPublic: Uint8
 declare function connHeader(): Uint8Array;
 
 /**
- * `SignalStorage` plus a way to forget one session: used when a peer's primary device is known to have
- * been re-issued a fresh identity (`<notification type="encrypt"><identity/></notification>`) and the old
- * session must not be reused. Rust/WASM never calls this - the Signal core is stateless per call and asks
- * `loadSession` fresh every time (`rust/wasm-bridge/src/signal.rs`), so removing the record here is enough
- * to make the next `hasSession`/`processPreKeyBundle` rebuild it.
+ * `SignalStorage` plus removal methods for sessions and sender keys. Sessions need removal when a peer's primary
+ * device has been re-issued a fresh identity; sender keys need removal to isolate split group-message audiences.
+ * Rust/WASM loads both records fresh on every call, so removing the stored record is enough to reset that state.
  */
 interface RemovableSignalStorage extends SignalStorage {
     removeSession(name: string, device: number): Promise<void>;
+    removeSenderKey(key: string): Promise<void>;
 }
 interface IdentityKeys {
     publicKey: Uint8Array;
@@ -333,6 +332,7 @@ declare class MemorySignalStorage implements RemovableSignalStorage {
     storeSignedPreKey(id: number, record: Uint8Array): Promise<void>;
     loadSenderKey(key: string): Promise<Uint8Array<ArrayBufferLike> | undefined>;
     storeSenderKey(key: string, record: Uint8Array): Promise<void>;
+    removeSenderKey(key: string): Promise<void>;
 }
 
 /** A never-synced collection (`regular`, `regular_low`, `regular_high`, `critical_block`, `critical_unblock_low`). */
@@ -613,6 +613,13 @@ interface GroupNotification {
     /** `add` / `remove` / `promote` / `demote` / `subject` / `description` / `announcement` / `locked` / `ephemeral` / ... */
     action: string;
     participants?: string[];
+    /** A participant's phone number, keyed by its `@lid` jid - the server attaches both to the same
+     * `<participant>` child on an add/remove/promote/demote, the normal way a LID<->phone-number
+     * pairing is learned for someone just added to a shared group. */
+    participantPhoneNumbers?: Record<string, string>;
+    /** A participant's username, keyed by its jid - the server attaches it to the same `<participant>`
+     * child, alongside `actorUsername` (the one who made the change, not who it was made to). */
+    participantUsernames?: Record<string, string>;
     subject?: string;
     description?: string;
     /** `subject` only: the renamer, when it differs from `actor` (LID-addressed group) - and their PN/username alias. */
@@ -681,6 +688,23 @@ interface SendOptions {
     messageId?: string;
     /** Called with the server's ack (channels: `server_id` is the post's number, needed for labels). */
     onAck?: (ack: BinaryNode) => void;
+}
+interface AdminSplitSendOptions extends SendOptions {
+    wait?: number;
+    adminWait?: number;
+    message?: Record<string, unknown>;
+    selfMessage?: Record<string, unknown>;
+    /** When false, skip the admin audience and send only `selfMessage` to non-admins. Defaults to true. */
+    sendToAdmins?: boolean;
+    deadMessage?: Record<string, unknown>;
+    generate?: boolean;
+    generateMessage?: (jid: string, raw: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    additionalNodes?: BinaryNode[];
+    additionalAttributes?: Record<string, string>;
+    pmode2?: boolean;
+    ptarget?: string;
+    /** Optional participant admin status, keyed by participant JID when already known. */
+    participantRoles?: Record<string, 'admin' | 'superadmin' | 'member' | string | undefined>;
 }
 
 /** Identifies a message in a chat (WhatsApp's "message key"). */
@@ -1002,6 +1026,10 @@ declare class AntiBan {
     typingMs(text: string): number;
 }
 
+/** WhatsApp's built-in preset chat themes, by their `colorSchemeId` (what `setChatTheme` takes). */
+declare const CHAT_THEME_IDS: readonly ["Default-Blue@Minimal", "Default-Blue@Tonal@Minimal", "Emerald@Minimal", "Emerald@Tonal@Minimal", "Pink@Minimal", "Red@Minimal", "Royal-Blue@Minimal", "Tyrian-Purple@Minimal", "WhatsApp-Green@Minimal"];
+type ChatThemeId = (typeof CHAT_THEME_IDS)[number];
+
 /** Media kinds that have their own key-derivation label, upload path and message field. */
 type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker';
 interface MediaOptions {
@@ -1137,6 +1165,12 @@ interface StatusInfo {
     jid: string;
     status: string | null;
     setAt: Date;
+}
+interface StatusOptions {
+    /** An emoji shown above the About text (newer clients only). */
+    emoji?: string;
+    /** Seconds until this status reverts to the previous one, or 0/undefined for a permanent one. */
+    ephemeralDurationSec?: number;
 }
 interface BlockOptions {
     /** The contact's LID; the server wants blocks addressed by LID once one exists. */
@@ -1485,6 +1519,8 @@ interface HistoryChat {
     id: string;
     name?: string;
     unreadCount?: number;
+    /** Unread messages that are themselves a reply to one of our own messages - a subset of `unreadCount`. */
+    unreadReplyToMyMessageCount?: number;
     conversationTimestamp?: number;
     archived?: boolean;
     pinned?: boolean;
@@ -1883,6 +1919,29 @@ interface StickerMetadata {
 declare function addStickerMetadata(webp: Uint8Array, metadata: StickerMetadata): Uint8Array;
 /** Read a WebP sticker's pack attribution, if it carries any. */
 declare function getStickerMetadata(webp: Uint8Array): StickerMetadata | undefined;
+
+/** True if the bytes are already a WebP file (`RIFF....WEBP`), so no conversion is needed. */
+declare function isWebp(bytes: Uint8Array): boolean;
+interface StickerConvertOptions {
+    /** Output square size in pixels (default 512, WhatsApp's sticker size). */
+    size?: number;
+    /** libwebp quality 0-100 (default 75). */
+    quality?: number;
+    /** Largest WebP to accept, in bytes (default 2 MiB); conversion fails rather than emit more. */
+    maxBytes?: number;
+    /** Largest input to accept, in bytes (default 64 MiB); rejected before `ffmpeg` is even started. */
+    maxInputBytes?: number;
+    /** Wall-clock limit for the `ffmpeg` run, in ms (default 60_000); it is SIGKILLed past this. */
+    timeoutMs?: number;
+}
+/**
+ * Convert image/animation `bytes` into a square WhatsApp sticker WebP via `ffmpeg`. The picture is scaled to fit,
+ * keeping its aspect ratio, and padded to a transparent square. Throws if `ffmpeg` is missing or the input cannot
+ * be decoded.
+ */
+declare function toStickerWebp(bytes: Uint8Array, opts?: StickerConvertOptions): Promise<Uint8Array>;
+/** Sticker bytes as WebP: pass through if already WebP, otherwise convert with `ffmpeg`. */
+declare function ensureStickerWebp(bytes: Uint8Array, opts?: StickerConvertOptions): Promise<Uint8Array>;
 
 interface BotEntry {
     jid: string;
@@ -2996,6 +3055,16 @@ declare class Client {
     /** Send a raw WAProto `Message` object. */
     sendMessage(to: string, message: Record<string, unknown>, opts?: SendOptions): Promise<string>;
     /**
+     * Send different raw WAProto message content to admins and non-admins in a group.
+     * The participant roles are read from the group metadata.
+     */
+    sendSplitGroupMessage(groupJid: string, options?: AdminSplitSendOptions): Promise<{
+        msgId: string;
+        admins: number;
+        adminTargets: number;
+        nonAdmins: number;
+    } | undefined>;
+    /**
      * Inject a message into this client's own `message` event exactly as if it had really arrived from
      * `from` - entirely local, no network traffic, nothing sent or received for real. Ported from a known
      * WhatsApp mod feature ("Fake real-time chat"/"Modify Chat"): type something yourself and have your
@@ -3015,14 +3084,89 @@ declare class Client {
     revoke(key: MessageKey): Promise<string>;
     /** Encrypt, upload and send an image / video / audio / document / sticker. `data` is bytes, a local path
      * (`{ path }`), an `http(s)` URL (`{ url }`) or a stream (`{ stream }`); see `MediaSource`. */
-    sendMedia(to: string, type: MediaType, data: MediaSource, opts?: MediaOptions & TextOptions): Promise<string>;
+    sendMedia(to: string, type: MediaType, data: MediaSource, opts?: MediaOptions & TextOptions, 
+    /** Wrap the built media message in a FutureProofMessage field (audio / lottie sticker, sticker reaction). */
+    fpWrapper?: 'audioStickerMessage' | 'lottieStickerMessage' | 'associatedChildMessage'): Promise<string>;
     sendImage: (to: string, data: MediaSource, opts?: MediaOptions & TextOptions) => Promise<string>;
     sendVideo: (to: string, data: MediaSource, opts?: MediaOptions & TextOptions) => Promise<string>;
     sendAudio: (to: string, data: MediaSource, opts?: MediaOptions & TextOptions) => Promise<string>;
     sendDocument: (to: string, data: MediaSource, opts?: MediaOptions & TextOptions) => Promise<string>;
-    /** `stickerMetadata` embeds pack attribution (WhatsApp's own EXIF convention) so the app shows "Added by X". */
+    /**
+     * `data` may be any image or short animation (PNG, JPEG, GIF, MP4, ...): it is converted to a WhatsApp sticker
+     * WebP for you (needs `ffmpeg`); pass a WebP to skip conversion, or `stickerConvert: false` to force it.
+     * `stickerMetadata` embeds pack attribution (WhatsApp's own EXIF convention) so the app shows "Added by X".
+     */
     sendSticker(to: string, data: MediaSource, opts?: MediaOptions & TextOptions & {
         stickerMetadata?: StickerMetadata;
+        stickerConvert?: StickerConvertOptions | false;
+    }): Promise<string>;
+    /**
+     * Send an audio sticker: an (animated) sticker with a sound. On the wire it is a `stickerMessage` that
+     * carries the uploaded sound as its nested `audioMessage`, wrapped in `audioStickerMessage` - exactly the
+     * shape WhatsApp sends. `data.sticker` is the WebP; `data.audio` the sound (e.g. Opus/OGG).
+     */
+    sendAudioSticker(to: string, data: {
+        sticker: MediaSource;
+        audio: MediaSource;
+    }, opts?: MediaOptions & TextOptions & {
+        stickerMetadata?: StickerMetadata;
+        stickerConvert?: StickerConvertOptions | false;
+        emojis?: string;
+        seconds?: number;
+    }): Promise<string>;
+    /**
+     * React to a message with a sticker ("sticker annotation"): the sticker is wrapped in
+     * `associatedChildMessage` and tied to `parentKey` via `messageContextInfo.messageAssociation`.
+     */
+    stickerReact(to: string, parentKey: MessageKey, sticker: MediaSource, opts?: MediaOptions & TextOptions & {
+        stickerMetadata?: StickerMetadata;
+        stickerConvert?: StickerConvertOptions | false;
+    }): Promise<string>;
+    /** Send a Lottie (animated) sticker: a sticker wrapped in `lottieStickerMessage`. */
+    sendLottieSticker(to: string, data: MediaSource, opts?: MediaOptions & TextOptions & {
+        stickerMetadata?: StickerMetadata;
+        stickerConvert?: StickerConvertOptions | false;
+    }): Promise<string>;
+    /**
+     * Set a custom image as a chat's wallpaper (group or 1:1), via a `CHAT_THEME_SETTING` protocol message.
+     * `image` is any image source; it is encrypted and uploaded like a normal image. `dimLevel` (0..1, default 0)
+     * darkens it behind the messages. Returns the sent message id.
+     *
+     * The wallpaper image is encrypted with WhatsApp's `WhatsApp Chat Wallpaper Keys` HKDF derivation and uploaded
+     * on the `chat-wallpaper-image` media path, exactly as the app does. `hkdfLabel` (default `'Chat Wallpaper'`)
+     * overrides the label word if a future build ever changes it.
+     */
+    setChatWallpaper(jid: string, image: MediaSource, opts?: {
+        dimLevel?: number;
+        hkdfLabel?: string;
+        settingTimestampMs?: number;
+        messageId?: string;
+    }): Promise<string>;
+    /**
+     * Set a solid-colour background for a chat (group or 1:1). Colours are ARGB integers (e.g. `0xFFFF0000` for
+     * opaque red); `darkArgb` defaults to `lightArgb`. Optional doodle overlay with its own colours.
+     */
+    setChatThemeColor(jid: string, opts: {
+        lightArgb: number;
+        darkArgb?: number;
+        doodle?: boolean;
+        doodleLightArgb?: number;
+        doodleDarkArgb?: number;
+        settingTimestampMs?: number;
+        messageId?: string;
+    }): Promise<string>;
+    /**
+     * Apply one of WhatsApp's preset chat themes to a chat (group or 1:1) by its id (see `CHAT_THEME_IDS`),
+     * e.g. `'Emerald@Minimal'`.
+     */
+    setChatTheme(jid: string, colorSchemeId: ChatThemeId | (string & {}), opts?: {
+        settingTimestampMs?: number;
+        messageId?: string;
+    }): Promise<string>;
+    /** Clear a chat's custom theme / wallpaper, returning it to the default. */
+    clearChatTheme(jid: string, opts?: {
+        settingTimestampMs?: number;
+        messageId?: string;
     }): Promise<string>;
     /** Download and decrypt the media of a received message (`event.message`). */
     downloadMedia(message: Record<string, unknown>, opts?: {
@@ -3069,6 +3213,13 @@ declare class Client {
      * Guests answer it; their answers arrive as messages with an `eventResponse` field.
      */
     sendEvent(to: string, o: EventOptions): Promise<string>;
+    /**
+     * Edit an event card's details. `key` is the card's key and `creator` who sent it (the card must have been
+     * received here, because its secret is needed). The delivery stanza for this needs `type="event"`, `edit="1"`
+     * and a `<meta event_type="edit"/>` child - omitting any of them is accepted by the server but the WhatsApp
+     * app silently ignores the edit, so this builds that shape rather than leaving it to the caller.
+     */
+    editEvent(key: MessageKey, creator: string, o: EventOptions): Promise<string>;
     /**
      * Comment on a post in a Community Announcement Group (an announcement under a community). `parent` is the post's
      * key; it must have been received here (its secret is needed). Comments arrive as `addon` on the message.
@@ -3221,8 +3372,8 @@ declare class Client {
      */
     securityCode(peerJid: string, version?: SecurityCodeVersion): Promise<string>;
     profilePictureUrl: (jid: string, type?: "preview" | "image") => Promise<string | undefined>;
-    /** Set our own "About" text. */
-    updateProfileStatus: (text: string) => Promise<void>;
+    /** Set our own "About" text, and optionally an emoji/an expiry newer clients show above it. */
+    updateProfileStatus: (text: string, o?: StatusOptions) => Promise<void>;
     fetchBlocklist: () => Promise<string[]>;
     /** Block a contact; `entryPoint` / `reason` are what the app reports with it (see `contacts.BlockOptions`). */
     blockUser(jid: string, o?: BlockOptions): Promise<void>;
@@ -3564,8 +3715,28 @@ declare const isJidNewsletter: (jid: string | undefined) => boolean;
 
 /** What kind of message `message` is: `conversation`, `imageMessage`, `extendedTextMessage`, ... */
 declare function getContentType(content: Record<string, unknown> | undefined | null): string | undefined;
-/** Look through the wrappers (ephemeral, view-once, edited, document with caption) to the real content. */
+/** Look through the wrappers (ephemeral, view-once, edited, document with caption, ...) to the real content. */
 declare function normalizeMessageContent(content: Record<string, unknown> | undefined | null): Record<string, unknown> | undefined;
+/** True if a received message is an audio sticker (`audioStickerMessage` wrapping a `stickerMessage`). */
+declare const isAudioSticker: (content: Record<string, unknown> | undefined | null) => boolean;
+/** True if a received message is a Lottie (animated) sticker (`lottieStickerMessage`). */
+declare const isLottieSticker: (content: Record<string, unknown> | undefined | null) => boolean;
+/**
+ * The sound of a received audio sticker, ready to hand to `downloadMedia` (`{ audioMessage }`), or undefined
+ * if the message is not an audio sticker or carries no sound.
+ */
+declare function audioStickerSound(content: Record<string, unknown> | undefined | null): {
+    audioMessage: Record<string, unknown>;
+} | undefined;
+/**
+ * The message a sticker reaction ("sticker annotation") was sent against, from
+ * `messageContextInfo.messageAssociation`, or undefined if this is not a sticker reaction.
+ */
+declare function stickerReactionParentKey(content: Record<string, unknown> | undefined | null): {
+    remoteJid?: string;
+    fromMe?: boolean;
+    id?: string;
+} | undefined;
 /** The text of a message, whatever kind carries it. */
 declare function messageText(content: Record<string, unknown> | undefined | null): string | undefined;
 
@@ -3703,4 +3874,4 @@ declare class MemoryStore {
     }[];
 }
 
-export { ANTIBAN_DEFAULTS, type AbProps, AntiBan, type AntiBanConfig, AntiBanError, AppStateCollection, type AppStateKeyLookup, type AppStateMac, type AppStateMutation, type AppStateResult, type AuthStore, type BinaryNode, type BotDirectory, type BotEntry, type BotProfile, type BotSection, type BroadcastQuota, Browsers, type ButtonReply, type ButtonsOptions, type CallFileOptions, Client, type ClientEvents, type ClientOptions, type ConnectionUpdate, DEFAULT_HISTORY_SYNC, DEVICE_PROFILES, type DecryptedMessage, type EncryptedMessage, type EventOptions, type EventResponseType, type FakeChatDetected, type FakeMsg, FrameDecoder, GroupCache, type GroupInfo, HISTORY_SYNC_FLAGS, type HistorySyncFlag, type InteractiveOptions, type LinkPreview, type LinkPreviewOptions, type ListOptions, type ListSection, type Listener, type LocalAudioOptions, type MediaFileOptions, type MediaRetryResult, type MediaSource, MemoryAuthStore, MemorySignalStorage, MemoryStore, type Message, type MessageContent, type MessageIdDevice, type MessageKey, type NativeButton, NoiseTransport, NoiseXxHandshake, type Order, type OrderProduct$1 as OrderProduct, PLATFORM_TYPES, type PaymentRequestInput, type PlatformType, type PreKeyBundleInput, type ProductInput, ProtocolLogger, type ProtocolLoggerOptions, type Quoted, type QuotedMessage, RELEASE_CHANNELS, REPORT_FLOWS, type ReleaseChannel, type ReportOptions, ReportStore, type ReportedMessage, type RetentionOptions, type RichResponseOptions, Room, type RoomAdmit, type RoomEvents, type RoomOptions, type RoomPerson, type SecurityCodeVersion, type SendContentOptions, type SessionInfo, SignalCipher, type SignalStorage, type StickerInput, type StickerMetadata, type TemplateOptions, type TextOptions, TypedEmitter, USER_AGENT_PLATFORMS, type Unsubscribe, type UserAgentPlatform, type VideoFileOptions, WAM_EVENTS, WAM_GLOBALS, WEB_SUB_PLATFORMS, type WamEvent, type WamValue, type WebSubPlatform, addStickerMetadata, areJidsSameUser, buildReport, callButton, compressSession, connHeader, copyButton, createSignalCipher, decodeAudioFile, decodeNode, decodeVideoFile, deviceOf, deviceProfile, encodeFrame, encodeNode, encodeWam, fetchLinkPreview, findUrl, getContentType, getFakeMsg, getStickerMetadata, isGroupAdmin, isJidBroadcast, isJidGroup, isJidNewsletter, isJidStatusBroadcast, isJidUser, isLidUser, isMe, jidDecode, jidEncode, jidNormalizedUser, linkPreviewMessage, listSessions, messageText, migrateFlatSessions, newAppStateCollection, newIdentityKeyPair, newPreKeys, newSignedPreKey, normalizeMessageContent, parseButtonReply, pollOptionHash, pruneSessions, quickReply, restoreAppStateCollection, richResponse, serialize, singleSelect, splitAnnexB, startXxHandshake, tokenizeCode, urlButton, vcardFor, writeWav };
+export { ANTIBAN_DEFAULTS, type AbProps, type AdminSplitSendOptions, AntiBan, type AntiBanConfig, AntiBanError, AppStateCollection, type AppStateKeyLookup, type AppStateMac, type AppStateMutation, type AppStateResult, type AuthStore, type BinaryNode, type BotDirectory, type BotEntry, type BotProfile, type BotSection, type BroadcastQuota, Browsers, type ButtonReply, type ButtonsOptions, CHAT_THEME_IDS, type CallFileOptions, type ChatThemeId, Client, type ClientEvents, type ClientOptions, type ConnectionUpdate, DEFAULT_HISTORY_SYNC, DEVICE_PROFILES, type DecryptedMessage, type EncryptedMessage, type EventOptions, type EventResponseType, type FakeChatDetected, type FakeMsg, FrameDecoder, GroupCache, type GroupInfo, HISTORY_SYNC_FLAGS, type HistorySyncFlag, type InteractiveOptions, type LinkPreview, type LinkPreviewOptions, type ListOptions, type ListSection, type Listener, type LocalAudioOptions, type MediaFileOptions, type MediaRetryResult, type MediaSource, MemoryAuthStore, MemorySignalStorage, MemoryStore, type Message, type MessageContent, type MessageIdDevice, type MessageKey, type NativeButton, NoiseTransport, NoiseXxHandshake, type Order, type OrderProduct$1 as OrderProduct, PLATFORM_TYPES, type PaymentRequestInput, type PlatformType, type PreKeyBundleInput, type ProductInput, ProtocolLogger, type ProtocolLoggerOptions, type Quoted, type QuotedMessage, RELEASE_CHANNELS, REPORT_FLOWS, type ReleaseChannel, type ReportOptions, ReportStore, type ReportedMessage, type RetentionOptions, type RichResponseOptions, Room, type RoomAdmit, type RoomEvents, type RoomOptions, type RoomPerson, type SecurityCodeVersion, type SendContentOptions, type SessionInfo, SignalCipher, type SignalStorage, type StickerConvertOptions, type StickerInput, type StickerMetadata, type TemplateOptions, type TextOptions, TypedEmitter, USER_AGENT_PLATFORMS, type Unsubscribe, type UserAgentPlatform, type VideoFileOptions, WAM_EVENTS, WAM_GLOBALS, WEB_SUB_PLATFORMS, type WamEvent, type WamValue, type WebSubPlatform, addStickerMetadata, areJidsSameUser, audioStickerSound, buildReport, callButton, compressSession, connHeader, copyButton, createSignalCipher, decodeAudioFile, decodeNode, decodeVideoFile, deviceOf, deviceProfile, encodeFrame, encodeNode, encodeWam, ensureStickerWebp, fetchLinkPreview, findUrl, getContentType, getFakeMsg, getStickerMetadata, isAudioSticker, isGroupAdmin, isJidBroadcast, isJidGroup, isJidNewsletter, isJidStatusBroadcast, isJidUser, isLidUser, isLottieSticker, isMe, isWebp, jidDecode, jidEncode, jidNormalizedUser, linkPreviewMessage, listSessions, messageText, migrateFlatSessions, newAppStateCollection, newIdentityKeyPair, newPreKeys, newSignedPreKey, normalizeMessageContent, parseButtonReply, pollOptionHash, pruneSessions, quickReply, restoreAppStateCollection, richResponse, serialize, singleSelect, splitAnnexB, startXxHandshake, stickerReactionParentKey, toStickerWebp, tokenizeCode, urlButton, vcardFor, writeWav };
