@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 1.5.0 - 2026-11-26
 - Fixed (serious): `client.sendEvent()` sent an event card's creation as a plain `type="text"` message
   with no `<meta event_type="creation"/>` child - the server accepts it, but the WhatsApp app does not
   render it as an event at all. `messageType()` now recognizes an `eventMessage` (through its
@@ -65,6 +67,35 @@
   buffer, which an empty slice does not reliably satisfy (its pointer can be a dangling sentinel,
   not necessarily inside the buffer) - a legitimate empty attribute/content value could panic. Now
   returns an empty `Bytes` for an empty slice before the pointer check runs.
+- Added: `client.setChatWallpaper(jid, image, { dimLevel? })`, `client.setChatThemeColor(jid, { lightArgb, darkArgb?, doodle? })`,
+  `client.setChatTheme(jid, colorSchemeId)` and `client.clearChatTheme(jid)` - set a chat's wallpaper or
+  theme (group or 1:1) via a `CHAT_THEME_SETTING` protocol message. The wallpaper image is encrypted with
+  WhatsApp's `WhatsApp Chat Wallpaper Keys` HKDF and uploaded on the `/mms/chat-wallpaper-image` path, exactly
+  as the app does. The preset theme ids are exported as `CHAT_THEME_IDS`. All go out as a `media` stanza with
+  the `chat_theme` mediatype. Was entirely missing.
+- Added: `client.sendAudioSticker(jid, { sticker, audio }, { emojis?, seconds? })` and
+  `client.sendLottieSticker(jid, image)` - an audio sticker is sent exactly the way WhatsApp does: a
+  `stickerMessage` carrying the uploaded sound as its nested `audioMessage`, wrapped in `audioStickerMessage`.
+  Receive helpers `isAudioSticker`, `isLottieSticker` and `audioStickerSound` (hands the nested sound to
+  `downloadMedia`) are exported, and `mediaOf` now looks through FutureProofMessage wrappers so a received
+  wrapped sticker downloads.
+- Added: `client.stickerReact(jid, parentKey, sticker)` - react to a message with a sticker ("sticker
+  annotation"): an `associatedChildMessage` tied to the message via `messageContextInfo.messageAssociation`
+  (`STICKER_ANNOTATION`). `stickerReactionParentKey` reads the reacted message's key on the receive side.
+- Added: every sticker method (`sendSticker`, `sendAudioSticker`, `sendLottieSticker`, `stickerReact`) now
+  accepts any image or short animation (PNG, JPEG, GIF, MP4, ...), not only a ready-made WebP - it is converted
+  to a 512x512 sticker WebP with `ffmpeg`. A source that is already WebP is sent untouched; `stickerConvert: false`
+  skips conversion. The converter (`toStickerWebp`/`ensureStickerWebp`/`isWebp`) is exported and bounded (input
+  cap, output cap, wall-clock timeout).
+- Added: `client.sendSplitGroupMessage(jid, { message, selfMessage, sendToAdmins?, pmode2?, ptarget?, ... })` -
+  send different content to a group's admins and non-admins in one call, with a sender-key reset and `skmsg`
+  fan-out per audience. Each audience is remembered under its own message id so a non-admin can never be served
+  the admin-only plaintext through the retry cache.
+- Added: 1:1 DMs now also fan out to a recipient's hosted (Cloud-API, `:99@hosted` / `:99@hosted.lid`) device
+  when they have one, for WhatsApp Business Coexistence. Best-effort - a hosted device that cannot be keyed is
+  skipped, never failing the send; groups and calls still leave hosted devices out.
+- Proto: refreshed `proto/WAProto.proto` to WhatsApp Web `2.3000.1056273360` (draft sync, bot-capability flags,
+  the chat-theme/wallpaper messages, peer-device binding fields).
 
 ## 1.4.0 - 2026-11-16
 - Added: `client.business.getOrderDetails(orderId, tokenBase64)` - the line items, price and catalog of
